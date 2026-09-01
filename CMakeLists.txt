@@ -59,7 +59,11 @@ function(FATAL_ERROR_MISSING_ENV)
 endfunction()
 
 execute_process(COMMAND uname -r OUTPUT_VARIABLE UNAME_R OUTPUT_STRIP_TRAILING_WHITESPACE)
-if(UNAME_R MATCHES ".*[Mm]icrosoft.*" OR UNAME_R MATCHES ".*WSL.*")
+# Running Mixxx under WSL is unsupported, but WSL is fine as a pure cross-compilation
+# host: with a toolchain file the binary targets another machine and never runs here.
+# CMAKE_CROSSCOMPILING is not set until project() reads the toolchain file below, so
+# CMAKE_TOOLCHAIN_FILE is the only signal available at this point.
+if(NOT CMAKE_TOOLCHAIN_FILE AND (UNAME_R MATCHES ".*[Mm]icrosoft.*" OR UNAME_R MATCHES ".*WSL.*"))
   message(FATAL_ERROR "Building on Windows Subsystem for Linux (WSL) is not supported.")
 endif()
 
