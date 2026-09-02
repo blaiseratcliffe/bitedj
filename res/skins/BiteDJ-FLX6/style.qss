@@ -797,13 +797,14 @@ WBeatSpinBox::up-button {
   margin-bottom: 5px;
 }
 
-/* Five tabs share the bar, so at the 480px floor each cell is ~96px. The
- * margin is a percentage (not px) and the font is small enough that the
- * longest label — SETTINGS, 8 chars of monospace — still clears its cell. */
+/* Five tabs share the bar. At 1280 each cell is ~250px, so the constraint is
+ * vertical, not horizontal: 44px is the bar's whole height and 4px margins
+ * leave a 36px button, which still clears a comfortable touch target at this
+ * panel's ~163 dpi. */
 #TabControls WPushButton {
   font-weight: bold;
-  font-size: 17px;
-  margin: 10px 3%;
+  font-size: 15px;
+  margin: 4px 3%;
   max-width: 250px;
   text-transform: uppercase;
 }
