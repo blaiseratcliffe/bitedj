@@ -150,6 +150,40 @@
                           <ConnectValueToWidget>true</ConnectValueToWidget>
                         </Connection>
                       </PushButton>
+                      <PushButton>
+                        <ObjectName>BeatFX_DeckAssign3</ObjectName>
+                        <Size>0me,44f</Size>
+                        <NumberStates>2</NumberStates>
+                        <State>
+                          <Number>0</Number>
+                          <Text>3</Text>
+                        </State>
+                        <State>
+                          <Number>1</Number>
+                          <Text>3</Text>
+                        </State>
+                        <Connection>
+                          <ConfigKey>[EffectRack1_EffectUnit1],group_[Channel3]_enable</ConfigKey>
+                          <ConnectValueToWidget>true</ConnectValueToWidget>
+                        </Connection>
+                      </PushButton>
+                      <PushButton>
+                        <ObjectName>BeatFX_DeckAssign4</ObjectName>
+                        <Size>0me,44f</Size>
+                        <NumberStates>2</NumberStates>
+                        <State>
+                          <Number>0</Number>
+                          <Text>4</Text>
+                        </State>
+                        <State>
+                          <Number>1</Number>
+                          <Text>4</Text>
+                        </State>
+                        <Connection>
+                          <ConfigKey>[EffectRack1_EffectUnit1],group_[Channel4]_enable</ConfigKey>
+                          <ConnectValueToWidget>true</ConnectValueToWidget>
+                        </Connection>
+                      </PushButton>
                     </Children>
                   </WidgetGroup>
 
@@ -323,12 +357,62 @@
             <SizePolicy>me,me</SizePolicy>
             <Children>
 
-              <Template src="skin:templates/keyfx_deck_row.xml">
-                <SetVariable name="channel">1</SetVariable>
-              </Template>
-              <Template src="skin:templates/keyfx_deck_row.xml">
-                <SetVariable name="channel">2</SetVariable>
-              </Template>
+              <WidgetGroup>
+                <ObjectName>KeyFX_DeckWrapper</ObjectName>
+                <Layout>vertical</Layout>
+                <SizePolicy>me,max</SizePolicy>
+                <Children>
+                  <Template src="skin:templates/keyfx_deck_row.xml">
+                    <SetVariable name="channel">1</SetVariable>
+                  </Template>
+                </Children>
+                <Connection>
+                  <ConfigKey>[Channel1],track_loaded</ConfigKey>
+                  <BindProperty>visible</BindProperty>
+                </Connection>
+              </WidgetGroup>
+              <WidgetGroup>
+                <ObjectName>KeyFX_DeckWrapper</ObjectName>
+                <Layout>vertical</Layout>
+                <SizePolicy>me,max</SizePolicy>
+                <Children>
+                  <Template src="skin:templates/keyfx_deck_row.xml">
+                    <SetVariable name="channel">2</SetVariable>
+                  </Template>
+                </Children>
+                <Connection>
+                  <ConfigKey>[Channel2],track_loaded</ConfigKey>
+                  <BindProperty>visible</BindProperty>
+                </Connection>
+              </WidgetGroup>
+              <WidgetGroup>
+                <ObjectName>KeyFX_DeckWrapper</ObjectName>
+                <Layout>vertical</Layout>
+                <SizePolicy>me,max</SizePolicy>
+                <Children>
+                  <Template src="skin:templates/keyfx_deck_row.xml">
+                    <SetVariable name="channel">3</SetVariable>
+                  </Template>
+                </Children>
+                <Connection>
+                  <ConfigKey>[Channel3],track_loaded</ConfigKey>
+                  <BindProperty>visible</BindProperty>
+                </Connection>
+              </WidgetGroup>
+              <WidgetGroup>
+                <ObjectName>KeyFX_DeckWrapper</ObjectName>
+                <Layout>vertical</Layout>
+                <SizePolicy>me,max</SizePolicy>
+                <Children>
+                  <Template src="skin:templates/keyfx_deck_row.xml">
+                    <SetVariable name="channel">4</SetVariable>
+                  </Template>
+                </Children>
+                <Connection>
+                  <ConfigKey>[Channel4],track_loaded</ConfigKey>
+                  <BindProperty>visible</BindProperty>
+                </Connection>
+              </WidgetGroup>
 
               <WidgetGroup>
                 <ObjectName>BeatFX_Spacer</ObjectName>

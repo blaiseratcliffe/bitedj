@@ -94,7 +94,12 @@ WPushButton[value="1"]:hover {
 
 #CuePanel {
   background-color: #151515;
-  padding: 2px;
+  /* Vertical padding removed: the drawer's 120px height cap forces Qt to
+     shrink the fixed-height pad rows to fit, so any padding taken off the
+     top/bottom comes straight out of the pads. Horizontal padding is kept
+     to inset the outermost pads from the screen edge. Do not restore the
+     vertical half. */
+  padding: 0 2px;
 }
 
 #CuePanel_Header {
