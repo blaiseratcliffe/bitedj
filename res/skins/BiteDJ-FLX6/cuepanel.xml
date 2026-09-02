@@ -4,8 +4,8 @@
 
   This is one WidgetStack whose page 0 *is* the deck strips, so "closed" is a
   page rather than a hidden widget. Tapping a deck's CUE chip writes that
-  deck's trigger ([Skin],cue_deck1 / cue_deck2), which both selects the deck
-  and opens the drawer in a single press; the drawer's X writes
+  deck's trigger ([Skin],cue_deck1 through cue_deck4), which both selects the
+  deck and opens the drawer in a single press; the drawer's X writes
   [Skin],cue_close to go back to page 0. That is the same select-only trigger
   pattern as the FX / KEY tabs, and it avoids needing a button that writes two
   controls at once.
@@ -19,7 +19,7 @@
   minimum, not a cap, which is why the band used to reserve dead space.
 
   [Skin],cue_bank selects which bank the pads address (0 hot, 1 memory) and is
-  shared by both deck pages, so the bank survives switching decks. None of
+  shared by all four deck pages, so the bank survives switching decks. None of
   these controls are persisted: the drawer opens closed, on hot cues.
 -->
 <Template>
@@ -59,6 +59,30 @@
         <Children>
           <Template src="skin:templates/cue_deck_page.xml">
             <SetVariable name="channel">2</SetVariable>
+          </Template>
+        </Children>
+      </WidgetGroup>
+
+      <WidgetGroup trigger="[Skin],cue_deck3">
+        <ObjectName>CuePanel</ObjectName>
+        <Layout>horizontal</Layout>
+        <SizePolicy>me,max</SizePolicy>
+        <MaximumSize>-1,120</MaximumSize>
+        <Children>
+          <Template src="skin:templates/cue_deck_page.xml">
+            <SetVariable name="channel">3</SetVariable>
+          </Template>
+        </Children>
+      </WidgetGroup>
+
+      <WidgetGroup trigger="[Skin],cue_deck4">
+        <ObjectName>CuePanel</ObjectName>
+        <Layout>horizontal</Layout>
+        <SizePolicy>me,max</SizePolicy>
+        <MaximumSize>-1,120</MaximumSize>
+        <Children>
+          <Template src="skin:templates/cue_deck_page.xml">
+            <SetVariable name="channel">4</SetVariable>
           </Template>
         </Children>
       </WidgetGroup>
