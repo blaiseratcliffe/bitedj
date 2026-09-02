@@ -243,16 +243,18 @@ WPushButton[value="1"]:hover {
   border-color: #c9372c;
 }
 
-/* Deck-routing toggles for [EffectRack1_EffectUnit1]. Channel colors mirror
- * the deck badges used in the sampler view so the FX panel and the deck
- * strips agree on which color means which deck. */
+/* Deck-routing toggles for [EffectRack1_EffectUnit1]. All four share one active
+ * colour: the deck strips carry no per-deck colour any more, so there is no
+ * per-deck colour system here to mirror. */
 #BeatFX_DeckRouting {
   qproperty-layoutSpacing: 4;
   padding: 4px 0;
 }
 
 #BeatFX_DeckAssign1,
-#BeatFX_DeckAssign2 {
+#BeatFX_DeckAssign2,
+#BeatFX_DeckAssign3,
+#BeatFX_DeckAssign4 {
   background-color: #1a1a1a;
   border: 1px solid #3a3a3a;
   border-radius: 3px;
@@ -261,15 +263,12 @@ WPushButton[value="1"]:hover {
   font-weight: bold;
 }
 
-#BeatFX_DeckAssign1[displayValue="1"] {
+#BeatFX_DeckAssign1[displayValue="1"],
+#BeatFX_DeckAssign2[displayValue="1"],
+#BeatFX_DeckAssign3[displayValue="1"],
+#BeatFX_DeckAssign4[displayValue="1"] {
   background-color: #855ea7;
   border-color: #855ea7;
-  color: #1a1a1a;
-}
-
-#BeatFX_DeckAssign2[displayValue="1"] {
-  background-color: #c9372c;
-  border-color: #c9372c;
   color: #1a1a1a;
 }
 
@@ -299,15 +298,11 @@ WPushButton[value="1"]:hover {
   qproperty-layoutSpacing: 4;
 }
 
-#KeyFX_DeckLabel_1 {
+#KeyFX_DeckLabel_1,
+#KeyFX_DeckLabel_2,
+#KeyFX_DeckLabel_3,
+#KeyFX_DeckLabel_4 {
   color: #855ea7;
-  font-size: 15px;
-  font-weight: bold;
-  text-transform: uppercase;
-}
-
-#KeyFX_DeckLabel_2 {
-  color: #c9372c;
   font-size: 15px;
   font-weight: bold;
   text-transform: uppercase;
@@ -406,10 +401,6 @@ WEffectSelector QAbstractItemView {
   selection-color: #e7e8e9;
 }
 
-#EffectMeter {
-  padding: 0px 1px 0px 1px;
-}
-
 /************************************************************************/
 /*     Library                                                          */
 /************************************************************************/
@@ -495,16 +486,6 @@ WLabel {
   color: #e5e6ea;
 }
 
-/* Library Search */
-#SearchBox {
-  background-color: #112f5c;
-  border-radius: 0;
-  font-size: 20px;
-  font-weight: bold;
-  padding: 4px;
-  text-transform: uppercase;
-}
-
 #LibraryBreadcrumb {
   color: lightgray;
   font-size: 18px;
@@ -521,6 +502,22 @@ WLabel {
 }
 #LibraryWrapper WTrackTableView::indicator:checked {
   image: url(skin:icons/library_checkbox_checked.svg);
+}
+
+/************************************************************************/
+/*     Library panel                                                    */
+/************************************************************************/
+
+#LibraryPanel_Sidebar {
+  border-right: 1px solid #32323c;
+}
+
+/* The Play page's band is 200px, which is about six rows plus a header. Rows
+ * any shorter stop being a touch target; any taller and the band eats the
+ * waveforms. */
+#Overview_LibraryBand {
+  border-top: 1px solid #32323c;
+  border-bottom: 1px solid #32323c;
 }
 
 /************************************************************************/

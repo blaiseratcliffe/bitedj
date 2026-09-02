@@ -11,9 +11,9 @@
         and not opted in via [Skin],beatfx_show_param{N} in mixxx.cfg —
         collapse so the list packs from the top.
 
-  KEY — one stacked block per deck (deck 1 top, deck 2 bottom) with the
-        current key, +/-2 semitone nudges, and a reset (see
-        templates/keyfx_deck_row.xml).
+  KEY — one stacked block per deck, four in all, each collapsing when its
+        deck is empty, with the current key, +/-2 semitone nudges, and a
+        reset (see templates/keyfx_deck_row.xml).
 
   [FxPanel],current selects the page; [FxPanel],fx / [FxPanel],key are
   the per-page triggers the tab buttons write. All three are created by
