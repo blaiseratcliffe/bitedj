@@ -221,7 +221,9 @@ void WLibrarySidebar::toggleSelectedItem() {
 // feature roots that own children — same gate as mousePressEvent.
 void WLibrarySidebar::activateSelectedLeaf() {
     QModelIndex idx = selectedIndex();
-    if (!idx.isValid() || idx.model()->hasChildren(idx)) {
+    // Same rule as mousePressEvent: an expanded row counts as activatable, so
+    // a folder that owns subfolders can still open its own track list.
+    if (!idx.isValid() || (idx.model()->hasChildren(idx) && !isExpanded(idx))) {
         return;
     }
     emit leafItemActivated(idx.data(Qt::DisplayRole).toString());
@@ -383,6 +385,11 @@ void WLibrarySidebar::mousePressEvent(QMouseEvent* event) {
     if (event->buttons().testFlag(Qt::RightButton)) {
         return;
     }
+    // Sample the expanded state before the base class handles the press,
+    // because that press is what expands the row.
+    const QModelIndex pressedIdx = indexAt(event->pos());
+    const bool wasExpanded = pressedIdx.isValid() && isExpanded(pressedIdx);
+
     QTreeView::mousePressEvent(event);
 
     // Touch ergonomics: tapping a leaf row collapses the sidebar so the
@@ -392,7 +399,13 @@ void WLibrarySidebar::mousePressEvent(QMouseEvent* event) {
     if (!idx.isValid()) {
         return;
     }
-    bool leaf = !idx.model()->hasChildren(idx);
+    // A folder that owns subfolders still holds tracks of its own, and gating
+    // purely on hasChildren() made those tracks unreachable: the row only ever
+    // expanded and never opened its track list. A USB stick is the common case,
+    // because a stray "System Volume Information" directory is enough to stop
+    // every track on the drive from being shown. So a row also counts once it
+    // is already expanded: the first tap expands it, a second tap opens it.
+    const bool leaf = !idx.model()->hasChildren(idx) || wasExpanded;
     if (leaf) {
         emit leafItemActivated(idx.data(Qt::DisplayRole).toString());
         ControlObject::set(ConfigKey(QStringLiteral("[Sidebar]"),
