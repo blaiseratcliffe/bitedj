@@ -794,13 +794,17 @@ WBeatSpinBox::up-button {
 
 #TabControls {
   background-color: #855ea7;
-  margin-bottom: 5px;
 }
 
 /* Five tabs share the bar. At 1280 each cell is ~250px, so the constraint is
- * vertical, not horizontal: 44px is the bar's whole height and 4px margins
- * leave a 36px button, which still clears a comfortable touch target at this
- * panel's ~163 dpi. */
+ * vertical, not horizontal: the bar is 44px tall and that whole 44px is the
+ * button's clickable target (a QSS margin insets painting, not hit
+ * geometry — WPushButton's widget rect, not its painted rect, is what
+ * receives the tap). The 4px top/bottom margin only shrinks what's painted,
+ * to a 36px button, which still clears a comfortable touch target at this
+ * panel's ~163 dpi. Do not add a margin-bottom to #TabControls itself: that
+ * steals from the layout's contents margins and shrinks the clickable
+ * height below 44px, independent of what's painted. */
 #TabControls WPushButton {
   font-weight: bold;
   font-size: 15px;
@@ -828,8 +832,10 @@ WBeatSpinBox::up-button {
  * monospace chars fill nearly the whole ~90px cell, so a badge anywhere on the
  * text's own baseline is painted over (WPushButton draws its <Text> across the
  * whole widget rect and ignores QSS padding, so the label cannot be moved out
- * of the way). The 40px-tall button leaves ~14px of clear space above the cap
- * height, which is what the dot occupies. Qt's background-position takes
+ * of the way). The button now paints at 36px with a 15px font, leaving less
+ * clear space above the cap height than the old 40px/17px pairing did, but
+ * confirmed by eye on the panel — not by calculation, which is what looked
+ * marginal — to still clear the label. Qt's background-position takes
  * alignment keywords only, so the inset lives in the image: recording_dot.svg
  * is a 14x14 canvas with the 10px dot at cx=5,cy=9, i.e. 4px of empty canvas
  * above it and to its right, and aligning that canvas top-right against the
