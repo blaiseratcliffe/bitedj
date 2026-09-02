@@ -1,101 +1,19 @@
+<!DOCTYPE template>
+<!--
+  The Browse page: the library panel at full height over the deck strips.
+
+  The [Sidebar],sidebar_visible toggle and its Back button are gone. They
+  existed because at the 480px design floor the explorer and the track table
+  could not share a row, so the page swapped between them. At 1280 both fit.
+-->
 <Template>
   <WidgetGroup>
-    <SizePolicy>me,e</SizePolicy>
+    <ObjectName>LibraryWrapper</ObjectName>
     <Layout>vertical</Layout>
+    <SizePolicy>me,me</SizePolicy>
     <Children>
-      <WidgetGroup>
-        <ObjectName>LibraryWrapper</ObjectName>
-        <Layout>vertical</Layout>
-        <Size>0me,0me</Size>
-        <Children>
-          <WidgetGroup>
-            <ObjectName>SidebarContainer</ObjectName>
-            <Layout>horizontal</Layout>
-            <Size>0me,40max</Size>
-            <Connection>
-              <ConfigKey>[Sidebar],sidebar_visible</ConfigKey>
-              <BindProperty>visible</BindProperty>
-              <Transform><Not/></Transform>
-            </Connection>
-            <Children>
-              <LibraryBreadcrumb>
-                <ObjectName>LibraryBreadcrumb</ObjectName>
-                <SizePolicy>me,me</SizePolicy>
-                <Alignment>left</Alignment>
-                <Elide>left</Elide>
-              </LibraryBreadcrumb>
-              <PushButton>
-                <ObjectName>SidebarButton</ObjectName>
-                <Size>100p,40p</Size>
-                <NumberStates>2</NumberStates>
-                <State>
-                  <Number>0</Number>
-                  <Text>Back</Text>
-                </State>
-                <Connection>
-                  <ConfigKey>[Sidebar],sidebar_visible</ConfigKey>
-                </Connection>
-                <Connection>
-                  <ConfigKey>[Sidebar],sidebar_visible</ConfigKey>
-                  <BindProperty>visible</BindProperty>
-                  <Transform><Not/></Transform>
-                </Connection>
-                <Elide>right</Elide>
-              </PushButton>
-            </Children>
-          </WidgetGroup>
-          <WidgetGroup>
-            <SizePolicy>me,me</SizePolicy>
-            <Layout>horizontal</Layout>
-            <Size>0me,0me</Size>
-            <Children>
-              <WidgetGroup>
-                <ObjectName>LibraryWrapper</ObjectName>
-                <Layout>horizontal</Layout>
-                <Children>
-                  <Library>
-                    <ObjectName>Library</ObjectName>
-                    <Size>0me,0me</Size>
-                    <BgColor>#000</BgColor>
-                    <FgColor>#75001a</FgColor>
-                    <TrackTableBackgroundColorOpacity>0.4</TrackTableBackgroundColorOpacity>
-                  </Library>
-                </Children>
-                <Connection>
-                  <ConfigKey>[Sidebar],sidebar_visible</ConfigKey>
-                  <BindProperty>visible</BindProperty>
-                  <Transform><Not/></Transform>
-                </Connection>
-              </WidgetGroup>
-              <WidgetGroup>
-                <ObjectName>SidebarWrapper</ObjectName>
-                <Layout>horizontal</Layout>
-                <Children>
-                  <LibrarySidebar>
-                    <ObjectName>LibrarySidebar</ObjectName>
-                    <Size>0me,0me</Size>
-                    <HiddenFeatures>Tracks,Auto DJ,Playlists,Crates</HiddenFeatures>
-                  </LibrarySidebar>
-                </Children>
-                <Connection>
-                  <ConfigKey>[Sidebar],sidebar_visible</ConfigKey>
-                  <BindProperty>visible</BindProperty>
-                </Connection>
-              </WidgetGroup>
-            </Children>
-          </WidgetGroup>
-        </Children>
-      </WidgetGroup>
-
-      <WidgetGroup>
-        <ObjectName>Decks</ObjectName>
-        <Layout>horizontal</Layout>
-        <SizePolicy>me,max</SizePolicy>
-        <MaximumSize>-1,120</MaximumSize>
-        <Children>
-          <Template src="skin:deckstrips.xml"></Template>
-        </Children>
-      </WidgetGroup>
+      <Template src="skin:librarypanel.xml"></Template>
+      <Template src="skin:deckstrips.xml"></Template>
     </Children>
   </WidgetGroup>
 </Template>

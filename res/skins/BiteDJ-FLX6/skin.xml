@@ -52,15 +52,25 @@
 			</Children>
 		</SingletonDefinition>
 		<SingletonDefinition>
-			<ObjectName>Overview_Singleton</ObjectName>
+			<ObjectName>TrackTable_Singleton</ObjectName>
 			<Children>
-				<Template src="skin:overview.xml"/>
+				<Library>
+					<ObjectName>Library</ObjectName>
+					<Size>0me,0me</Size>
+					<BgColor>#000</BgColor>
+					<FgColor>#75001a</FgColor>
+					<TrackTableBackgroundColorOpacity>0.4</TrackTableBackgroundColorOpacity>
+				</Library>
 			</Children>
 		</SingletonDefinition>
 		<SingletonDefinition>
-			<ObjectName>Library_Singleton</ObjectName>
+			<ObjectName>Sidebar_Singleton</ObjectName>
 			<Children>
-				<Template src="skin:library.xml"/>
+				<LibrarySidebar>
+					<ObjectName>LibrarySidebar</ObjectName>
+					<Size>0me,0me</Size>
+					<HiddenFeatures>Tracks,Auto DJ,Playlists,Crates</HiddenFeatures>
+				</LibrarySidebar>
 			</Children>
 		</SingletonDefinition>
 		<SingletonDefinition>
@@ -141,12 +151,22 @@
 						<WidgetStack currentpage="[Tab],current">
 							<ObjectName>TabStack</ObjectName>
 							<Children>
-								<SingletonContainer trigger="[Tab],overview">
-									<ObjectName>Overview_Singleton</ObjectName>
-								</SingletonContainer>
-								<SingletonContainer trigger="[Tab],library" on_hide_select="0">
-									<ObjectName>Library_Singleton</ObjectName>
-								</SingletonContainer>
+								<WidgetGroup trigger="[Tab],overview">
+									<ObjectName>OverviewPage</ObjectName>
+									<Layout>vertical</Layout>
+									<SizePolicy>me,me</SizePolicy>
+									<Children>
+										<Template src="skin:overview.xml"></Template>
+									</Children>
+								</WidgetGroup>
+								<WidgetGroup trigger="[Tab],library" on_hide_select="0">
+									<ObjectName>LibraryPage</ObjectName>
+									<Layout>vertical</Layout>
+									<SizePolicy>me,me</SizePolicy>
+									<Children>
+										<Template src="skin:library.xml"></Template>
+									</Children>
+								</WidgetGroup>
 								<SingletonContainer trigger="[Tab],samplers" on_hide_select="0">
 									<ObjectName>Samplers_Singleton</ObjectName>
 								</SingletonContainer>

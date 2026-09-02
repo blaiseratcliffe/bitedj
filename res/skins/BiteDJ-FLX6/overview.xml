@@ -1,20 +1,43 @@
+<!DOCTYPE template>
+<!--
+  The Play page, top to bottom: the 2x2 waveform grid with the FX/Key column
+  beside it, the library panel, then the deck strips or the cue drawer in their
+  place.
+
+  The library band is fixed at 200f. It is the one element here that should not
+  flex: the waveform grid above it absorbs every change in the strip band's
+  height, and a track table that resized with it would reflow its rows under
+  the reader's finger.
+-->
 <Template>
   <WidgetGroup>
     <ObjectName>Overview</ObjectName>
     <Layout>vertical</Layout>
-    <Size>0me,0me</Size>
+    <SizePolicy>me,me</SizePolicy>
     <Children>
+
       <WidgetGroup>
         <ObjectName>Waveforms_Container</ObjectName>
         <Layout>horizontal</Layout>
+        <SizePolicy>me,me</SizePolicy>
         <Children>
           <Template src="skin:waveforms.xml"></Template>
           <Template src="skin:effects.xml"></Template>
         </Children>
       </WidgetGroup>
 
+      <WidgetGroup>
+        <ObjectName>Overview_LibraryBand</ObjectName>
+        <Layout>horizontal</Layout>
+        <Size>0me,200f</Size>
+        <Children>
+          <Template src="skin:librarypanel.xml"></Template>
+        </Children>
+      </WidgetGroup>
+
       <!-- Deck strips, or the cue drawer in their place. -->
       <Template src="skin:cuepanel.xml"></Template>
+
     </Children>
   </WidgetGroup>
 </Template>

@@ -1,0 +1,43 @@
+<!DOCTYPE template>
+<!--
+  The explorer and the track table side by side, used by both the Play page and
+  the Browse page.
+
+  The two library widgets are singletons because Mixxx allows exactly one of
+  each: LegacySkinParser::parseLibrary calls Library::bindLibraryWidget, and a
+  second instance would rebind it. WSingletonContainer::showEvent reparents the
+  one instance into whichever container just became visible, and only one tab is
+  visible at a time, so Play and Browse hand the same widgets back and forth.
+  Scroll position and selection survive the switch, which is a small win.
+-->
+<Template>
+  <WidgetGroup>
+    <ObjectName>LibraryPanel</ObjectName>
+    <Layout>horizontal</Layout>
+    <SizePolicy>me,me</SizePolicy>
+    <Children>
+
+      <WidgetGroup>
+        <ObjectName>LibraryPanel_Sidebar</ObjectName>
+        <Layout>vertical</Layout>
+        <Size>260f,0me</Size>
+        <Children>
+          <LibraryBreadcrumb>
+            <ObjectName>LibraryBreadcrumb</ObjectName>
+            <Size>0me,26f</Size>
+            <Alignment>left</Alignment>
+            <Elide>left</Elide>
+          </LibraryBreadcrumb>
+          <SingletonContainer>
+            <ObjectName>Sidebar_Singleton</ObjectName>
+          </SingletonContainer>
+        </Children>
+      </WidgetGroup>
+
+      <SingletonContainer>
+        <ObjectName>TrackTable_Singleton</ObjectName>
+      </SingletonContainer>
+
+    </Children>
+  </WidgetGroup>
+</Template>
