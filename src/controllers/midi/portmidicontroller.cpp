@@ -78,9 +78,12 @@ int PortMidiController::open() {
             return -2;
         }
     }
+    // Must be set before applyMapping(): that calls updateAllOutputs(), and
+    // MidiOutputHandler drops every send while isOpen() is false, which loses
+    // the initial state of all output bindings. Diverges from upstream.
+    setOpen(true);
     startEngine();
     applyMapping();
-    setOpen(true);
     return 0;
 }
 
