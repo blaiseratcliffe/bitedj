@@ -505,19 +505,6 @@ WLabel {
   text-transform: uppercase;
 }
 
-/* Sidebar (hide/show) */
-#SidebarContainer {
-  background-color: #112f5c;
-}
-#SidebarButton {
-  background-color: rgba(0,0,0,0.2);
-  border: 2px solid lightgray;
-  border-radius: 4px;
-  color: lightgray;
-  font-size: 16px;
-  font-weight: bold;
-  margin: 4px;
-}
 #LibraryBreadcrumb {
   color: lightgray;
   font-size: 18px;

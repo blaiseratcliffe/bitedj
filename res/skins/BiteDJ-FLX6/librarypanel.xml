@@ -9,10 +9,23 @@
   one instance into whichever container just became visible, and only one tab is
   visible at a time, so Play and Browse hand the same widgets back and forth.
   Scroll position and selection survive the switch, which is a small win.
+
+  ObjectName is LibraryWrapper, not a panel-specific name: every library rule
+  in style.qss from roughly line 417 to 537 (scrollbars, the track table
+  header, qproperty-trackPlayedColor, table/text-browser backgrounds, the
+  sidebar block, the Played/BPM checkbox indicators) is scoped under the
+  #LibraryWrapper ancestor selector, and browsetablemodel.cpp's
+  TintedTextDelegate depends on #LibraryWrapper QTableView's `color` rule to
+  set Qt::ForegroundRole. Reusing the name here means this panel is a
+  #LibraryWrapper wherever it is parented, so those rules match identically on
+  Play and Browse, without unscoping any of them to a bare Qt class (which
+  would leak the library's theming onto every table/scrollbar/button
+  elsewhere in the skin). Qt object names need not be unique: on Browse this
+  nests inside library.xml's own LibraryWrapper, which is harmless.
 -->
 <Template>
   <WidgetGroup>
-    <ObjectName>LibraryPanel</ObjectName>
+    <ObjectName>LibraryWrapper</ObjectName>
     <Layout>horizontal</Layout>
     <SizePolicy>me,me</SizePolicy>
     <Children>
