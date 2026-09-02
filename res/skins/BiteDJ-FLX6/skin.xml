@@ -21,7 +21,14 @@
 
 	<ObjectName>Mixxx</ObjectName>
 	<Style src="skin:style.qss"/>
-	<MinimumSize>480,420</MinimumSize>
+	<!-- Deliberately the panel's exact resolution, not a smaller floor. Toggling
+	     Night/Day calls rebootMixxxView(), which rebuilds every widget; during that
+	     rebuild adjustSize() can collapse the window toward this minimum and win a
+	     race against Qt re-asserting fullscreen, leaving the app silently stuck at
+	     the minimum size instead of fullscreen until the process restarts. With
+	     nothing smaller to collapse to, there is nothing for adjustSize() to win.
+	     Lowering this brings that bug back. -->
+	<MinimumSize>1280,720</MinimumSize>
 	<SizePolicy>me,me</SizePolicy>
 	<Layout>vertical</Layout>
 
