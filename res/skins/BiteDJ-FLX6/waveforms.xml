@@ -1,15 +1,59 @@
+<!DOCTYPE template>
+<!--
+  The four waveforms, decks 1|2 over 3|4.
+
+  The two rows have deliberately different vertical policies, and that is what
+  makes an unused pair cost nothing. The bottom row is `max` with no <Size>,
+  so it is exactly as tall as its visible cells and collapses to nothing when
+  both are hidden. The top row is `me`, so it expands into whatever the bottom
+  row does not take. Each cell carries a 178px minimum, so:
+
+    four decks   top 178, bottom 178   an even grid
+    two decks    top 356, bottom 0     full height for the pair in use
+    deck 3 only  top 178, bottom 178   deck 3 spans the full width
+
+  Binding a row's visibility to "either of its decks is loaded" is not
+  expressible here (one Connection carries one ConfigKey, and two of them
+  fighting over `visible` breaks the case that matters), so the collapse is
+  done with size policy instead. Do not "simplify" both rows to the same
+  policy: two MinimumExpanding rows split the height evenly whether or not
+  either holds anything, which is the reserved-black bug in another costume.
+-->
 <Template>
   <WidgetGroup>
     <ObjectName>Waveforms</ObjectName>
     <Layout>vertical</Layout>
-    <Size>0me,0me</Size>
+    <SizePolicy>me,me</SizePolicy>
     <Children>
-      <Template src="skin:waveform.xml">
-        <SetVariable name="channel">1</SetVariable>
-      </Template>
-      <Template src="skin:waveform.xml">
-        <SetVariable name="channel">2</SetVariable>
-      </Template>
+
+      <WidgetGroup>
+        <ObjectName>WaveformRowTop</ObjectName>
+        <Layout>horizontal</Layout>
+        <SizePolicy>me,me</SizePolicy>
+        <Children>
+          <Template src="skin:waveform.xml">
+            <SetVariable name="channel">1</SetVariable>
+          </Template>
+          <Template src="skin:waveform.xml">
+            <SetVariable name="channel">2</SetVariable>
+          </Template>
+        </Children>
+      </WidgetGroup>
+
+      <WidgetGroup>
+        <ObjectName>WaveformRowBottom</ObjectName>
+        <Layout>horizontal</Layout>
+        <SizePolicy>me,max</SizePolicy>
+        <Children>
+          <Template src="skin:waveform.xml">
+            <SetVariable name="channel">3</SetVariable>
+          </Template>
+          <Template src="skin:waveform.xml">
+            <SetVariable name="channel">4</SetVariable>
+          </Template>
+        </Children>
+      </WidgetGroup>
+
     </Children>
   </WidgetGroup>
 </Template>
