@@ -30,6 +30,7 @@ class WTrackTableView : public WLibraryTableView {
     ~WTrackTableView() override;
 #ifdef __LINUX__
     void currentChanged(const QModelIndex& current, const QModelIndex& previous) override;
+    QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
 #endif
     void contextMenuEvent(QContextMenuEvent * event) override;
     QString columnNameOfIndex(const QModelIndex& index) const;

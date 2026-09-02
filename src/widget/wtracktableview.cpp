@@ -106,6 +106,23 @@ void WTrackTableView::currentChanged(
         setAttribute(Qt::WA_InputMethodEnabled, false);
     }
 }
+
+QVariant WTrackTableView::inputMethodQuery(Qt::InputMethodQuery query) const {
+    if (query == Qt::ImEnabled) {
+        // Resetting WA_InputMethodEnabled above is not sufficient on a Wayland
+        // touchscreen. QAbstractItemView::currentChanged() turns the attribute
+        // on before we can turn it back off, and each setAttribute() call
+        // notifies the input method while the view has focus. The transient
+        // "enabled" is enough for the compositor's on-screen keyboard to
+        // appear, which then covers the library exactly when a folder's tracks
+        // stream in. Report the view itself as never accepting input method
+        // text so that never happens. Cell editors are separate widgets with
+        // their own input method, so inline editing still raises a keyboard,
+        // and so does deliberately tapping a search field.
+        return QVariant(false);
+    }
+    return WLibraryTableView::inputMethodQuery(query);
+}
 #endif
 
 void WTrackTableView::enableCachedOnly() {
