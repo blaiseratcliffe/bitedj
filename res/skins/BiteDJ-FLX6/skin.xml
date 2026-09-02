@@ -28,12 +28,12 @@
 	<LaunchImageStyle>
       LaunchImage { background-color: #000 }
 	  QLabel {
-	    image: url(skin:/images/bitedj_logo.png);
+	    image: url(skin:/images/big_timber_logo.png);
 	    margin-bottom: 12px;
-        min-width: 522px;
-        min-height: 292px;
-        max-width: 522px;
-        max-height: 292px;
+        min-width: 800px;
+        min-height: 111px;
+        max-width: 800px;
+        max-height: 111px;
 	  }
       QProgressBar {
 	    background-color: #a7a9ac;
