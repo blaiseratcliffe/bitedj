@@ -99,7 +99,6 @@ WPushButton[value="1"]:hover {
 
 #CuePanel_Header {
   qproperty-layoutSpacing: 4;
-  margin-bottom: 4px;
 }
 
 #CuePanel_DeckLabel {

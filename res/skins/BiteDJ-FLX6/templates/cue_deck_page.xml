@@ -12,8 +12,12 @@
     would fight each other on open.
 
     The pad grid is sized so all eight pads clear the touch floor: 4 columns
-    of ~320px, 2 rows of 45px at 1280 wide; 45 still clears the 44px touch
-    floor.
+    of ~320px, 2 rows of 45px at 1280 wide. The true vertical budget is
+    header + CuePanel_Grid's 4px qproperty-layoutSpacing between the two pad
+    rows: 26 + 45 + 4 + 45 = 120 exactly. The header is 26px, not the more
+    obvious 30, because those 4px of spacing are real QLayout spacing that
+    the naive 30 + 45 + 45 sum leaves out. Do not "recover" the header's
+    apparent spare 4px; there is none.
   Variables:
     channel: deck number.
 -->
@@ -27,19 +31,19 @@
       <WidgetGroup>
         <ObjectName>CuePanel_Header</ObjectName>
         <Layout>horizontal</Layout>
-        <Size>0me,30f</Size>
+        <Size>0me,26f</Size>
         <Children>
           <Label>
             <ObjectName>CuePanel_DeckLabel</ObjectName>
             <Text>Deck <Variable name="channel"/></Text>
-            <Size>80f,30f</Size>
+            <Size>80f,26f</Size>
           </Label>
 
           <!-- Bank toggle. Labelled with the bank currently shown, matching
                BeatFX_ActiveToggle's off/active convention. -->
           <PushButton>
             <ObjectName>CuePanel_BankToggle</ObjectName>
-            <Size>0me,30f</Size>
+            <Size>0me,26f</Size>
             <NumberStates>2</NumberStates>
             <State>
               <Number>0</Number>
@@ -57,7 +61,7 @@
 
           <PushButton>
             <ObjectName>CuePanel_Close</ObjectName>
-            <Size>44f,30f</Size>
+            <Size>44f,26f</Size>
             <NumberStates>2</NumberStates>
             <State>
               <Number>0</Number>
