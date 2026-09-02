@@ -565,6 +565,14 @@ WLabel {
   font-size: 12px;
 }
 
+#WaveformHeaderQuantizeButton {
+  image: url(skin:icons/quantize.svg) no-repeat center center;
+}
+
+#WaveformHeaderKeylockButton {
+  image: url(skin:icons/keylock.svg) no-repeat center center;
+}
+
 /* A 1px gutter between the two cells in a row, so adjacent waveforms read as
  * two pictures rather than one wide one. */
 #WaveformCell1, #WaveformCell3 {
