@@ -143,16 +143,13 @@
             <PlayedOverlayColor>#40ffffff</PlayedOverlayColor>
             <!-- Time left in the track, drawn straight onto the summary as a
                  watermark: centred and translucent enough to read the signal
-                 through. Scale is a share of the height the summary is
-                 *visible* over, which here is the container's 50px and not the
-                 widget's own 100px above — the strip deliberately shows the top
-                 half of a double-height overview, so a scale against the widget
-                 would centre the digits on the cut edge and lose their bottom
-                 half. This strip is what the settings/browse/sampler pages show
-                 of a deck, so it is the one place the countdown has to be
-                 readable from — on the Play page the scrolling waveform and the
-                 big Time readout are both on screen, so the watermark is off
-                 there (bound below). -->
+                 through. Container and widget are both 0me,34f now — the
+                 strip shows the whole overview, not the top half of a
+                 double-height one the way deck.xml's did, so the scale is
+                 simply a share of the widget's own height, no crop to work
+                 around. Every page carries the same strip now, so the
+                 watermark is always on; there is no per-tab binding to turn
+                 it off on the Play page the way deck.xml had. -->
             <TimeRemainingAlign>center</TimeRemainingAlign>
             <TimeRemainingColor>#fff</TimeRemainingColor>
             <TimeRemainingOpacity>0.55</TimeRemainingOpacity>
