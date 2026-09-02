@@ -99,6 +99,15 @@ endif()
 # upstream stable release, and it is what the config-file upgrade path and the
 # Mixxx manual URLs are keyed on. Bump it when merging a new upstream release.
 project(mixxx VERSION 2.5.6)
+
+# Re-assert upstream's WSL restriction now that CMAKE_CROSSCOMPILING is known.
+# The pre-project() gate above can only test CMAKE_TOOLCHAIN_FILE, which any
+# toolchain file satisfies - including one that does not actually cross-compile.
+# A native WSL build must still be refused.
+if(NOT CMAKE_CROSSCOMPILING AND (UNAME_R MATCHES ".*[Mm]icrosoft.*" OR UNAME_R MATCHES ".*WSL.*"))
+  message(FATAL_ERROR "Building on Windows Subsystem for Linux (WSL) is not supported.")
+endif()
+
 enable_language(C CXX)
 # Work around missing version suffixes support https://gitlab.kitware.com/cmake/cmake/-/issues/16716
 set(MIXXX_VERSION_PRERELEASE "") # set to "alpha" "beta" or ""
