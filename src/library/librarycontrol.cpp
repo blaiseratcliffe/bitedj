@@ -23,16 +23,24 @@ namespace {
 const QString kAppGroup = QStringLiteral("[App]");
 
 // Bite DJ: MIDI-triggered LoadSelectedTrack* push-buttons fire globally and
-// can clobber a playing deck if the user is on Play/Sampler/Settings when a
-// controller button is pressed. Skin defines [Tab],library via the
-// <SingletonContainer trigger="[Tab],library"> wrapper — that CO is 1 only
-// while the library page is visible. Soft contract: if the CO doesn't exist
-// (stock skin), allow loads through so vanilla Mixxx behaves as before.
+// can clobber a playing deck if the user is on Sampler/Levels/Settings when a
+// controller button is pressed. The skin defines [Tab],library and
+// [Tab],overview via its tab-stack triggers; each is 1 only while its page is
+// visible, and both of those pages carry the library panel (librarypanel.xml).
+// Soft contract: if neither CO exists (stock skin), allow loads through so
+// vanilla Mixxx behaves as before.
 bool bitedj_isLibraryPageActive() {
-    ControlObject* pCo = ControlObject::getControl(
+    ControlObject* pLibrary = ControlObject::getControl(
             ConfigKey(QStringLiteral("[Tab]"), QStringLiteral("library")),
             ControlFlag::NoWarnIfMissing);
-    return !pCo || pCo->get() > 0.0;
+    ControlObject* pOverview = ControlObject::getControl(
+            ConfigKey(QStringLiteral("[Tab]"), QStringLiteral("overview")),
+            ControlFlag::NoWarnIfMissing);
+    if (!pLibrary && !pOverview) {
+        return true;
+    }
+    return (pLibrary && pLibrary->get() > 0.0) ||
+            (pOverview && pOverview->get() > 0.0);
 }
 } // namespace
 
