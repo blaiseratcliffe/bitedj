@@ -12,9 +12,11 @@
 
   Closed costs nothing but the chips in the deck headers. The drawer only ever
   covers the deck strips, which are readouts — the waveforms, which are not,
-  stay put. Every page is sized 150max like the Decks group it replaces, so
-  the waveform row above does not resize when the drawer opens
-  (WWidgetStack forwards its minimumSizeHint to the current page).
+  stay put. Every page carries the same MaximumSize of 120 as the Decks group
+  it replaces, so the waveform row above does not resize when the drawer
+  opens (WWidgetStack forwards its minimumSizeHint to the current page).
+  MaximumSize is a real cap; the old 150max was a SizePolicy suffix and set a
+  minimum, not a cap, which is why the band used to reserve dead space.
 
   [Skin],cue_bank selects which bank the pads address (0 hot, 1 memory) and is
   shared by both deck pages, so the bank survives switching decks. None of
@@ -23,27 +25,25 @@
 <Template>
   <WidgetStack currentpage="[Skin],cue_panel">
     <ObjectName>CuePanel_Stack</ObjectName>
-    <Size>0me,150max</Size>
+    <MaximumSize>-1,120</MaximumSize>
+    <SizePolicy>me,max</SizePolicy>
     <Children>
 
       <WidgetGroup trigger="[Skin],cue_close">
         <ObjectName>Decks</ObjectName>
         <Layout>horizontal</Layout>
-        <Size>0me,150max</Size>
+        <SizePolicy>me,max</SizePolicy>
+        <MaximumSize>-1,120</MaximumSize>
         <Children>
-          <Template src="skin:deck.xml">
-            <SetVariable name="channel">1</SetVariable>
-          </Template>
-          <Template src="skin:deck.xml">
-            <SetVariable name="channel">2</SetVariable>
-          </Template>
+          <Template src="skin:deckstrips.xml"></Template>
         </Children>
       </WidgetGroup>
 
       <WidgetGroup trigger="[Skin],cue_deck1">
         <ObjectName>CuePanel</ObjectName>
         <Layout>horizontal</Layout>
-        <Size>0me,150max</Size>
+        <MaximumSize>-1,120</MaximumSize>
+        <SizePolicy>me,max</SizePolicy>
         <Children>
           <Template src="skin:templates/cue_deck_page.xml">
             <SetVariable name="channel">1</SetVariable>
@@ -54,7 +54,8 @@
       <WidgetGroup trigger="[Skin],cue_deck2">
         <ObjectName>CuePanel</ObjectName>
         <Layout>horizontal</Layout>
-        <Size>0me,150max</Size>
+        <MaximumSize>-1,120</MaximumSize>
+        <SizePolicy>me,max</SizePolicy>
         <Children>
           <Template src="skin:templates/cue_deck_page.xml">
             <SetVariable name="channel">2</SetVariable>

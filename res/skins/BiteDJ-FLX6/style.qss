@@ -1206,7 +1206,7 @@ WBeatSpinBox::up-button {
 /* Deck-row identity badges — colored block at the start of each row so the
  * channel association is glanceable. Sampler wrappers use 0me width so the
  * 8 buttons reflow narrower at the 480f minimum to make room. */
-#SamplersDeckBadge1, #SamplersDeckBadge2 {
+#SamplersBankBadgeL, #SamplersBankBadgeR {
   border-radius: 2px;
   color: #1a1a1a;
   font-size: 18px;
@@ -1215,11 +1215,11 @@ WBeatSpinBox::up-button {
   qproperty-alignment: 'AlignCenter';
 }
 
-#SamplersDeckBadge1 {
+#SamplersBankBadgeL {
   background-color: #855ea7;
 }
 
-#SamplersDeckBadge2 {
+#SamplersBankBadgeR {
   background-color: #c9372c;
 }
 

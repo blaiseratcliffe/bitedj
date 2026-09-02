@@ -1,0 +1,34 @@
+<!DOCTYPE template>
+<!--
+  The four deck strips, shared by every page that shows deck state.
+
+  The size policy is the whole point of this file. <Size>W,Hmax</Size> does NOT
+  cap a height: LegacySkinParser::setupSize calls setMinimumHeight() for every
+  policy except `f`. The band this replaces was <Size>0me,150max</Size> with
+  about 96px of content, so it reserved 54px of black on the Play page and
+  about 30px on the others. A MaximumSize caps; a SizePolicy with no Size
+  plants no floor. Together they give a band that is exactly as tall as the
+  strips that are actually showing, and nothing when no deck is loaded.
+-->
+<Template>
+  <WidgetGroup>
+    <ObjectName>DeckStrips</ObjectName>
+    <Layout>horizontal</Layout>
+    <SizePolicy>me,max</SizePolicy>
+    <MaximumSize>-1,120</MaximumSize>
+    <Children>
+      <Template src="skin:deckstrip.xml">
+        <SetVariable name="channel">1</SetVariable>
+      </Template>
+      <Template src="skin:deckstrip.xml">
+        <SetVariable name="channel">2</SetVariable>
+      </Template>
+      <Template src="skin:deckstrip.xml">
+        <SetVariable name="channel">3</SetVariable>
+      </Template>
+      <Template src="skin:deckstrip.xml">
+        <SetVariable name="channel">4</SetVariable>
+      </Template>
+    </Children>
+  </WidgetGroup>
+</Template>
