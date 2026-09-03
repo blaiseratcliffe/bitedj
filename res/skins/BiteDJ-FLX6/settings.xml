@@ -92,6 +92,17 @@
                         </Children>
                       </WidgetGroup>
 
+                      <!-- Crossfader assignment, one row per deck, writing
+                           [ChannelN],orientation: A is 0 (LEFT), None is 1
+                           (CENTER), B is 2 (RIGHT), matching
+                           EngineChannel::ChannelOrientation. None is the one
+                           worth knowing: enginemixer.cpp gains the three
+                           orientation buses with setGains(left, 1.0f, right),
+                           so a CENTER deck bypasses the crossfader entirely
+                           and only its volume fader applies. Decks 3 and 4
+                           default to A and B like 1 and 2 (playermanager.cpp,
+                           deckIndex % 2), so these rows exist to reach None,
+                           not to fix a wrong default. -->
                       <WidgetGroup>
                         <ObjectName>SettingsRow</ObjectName>
                         <Layout>horizontal</Layout>
@@ -161,6 +172,80 @@
                                 <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
                                 <SetVariable name="Text">B</SetVariable>
                                 <SetVariable name="ConfigKey">[Channel2],orientation</SetVariable>
+                                <SetVariable name="Value">2</SetVariable>
+                              </Template>
+                            </Children>
+                          </WidgetGroup>
+                        </Children>
+                      </WidgetGroup>
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,52f</Size>
+                        <Children>
+                          <Label>
+                            <ObjectName>SettingsRowLabel</ObjectName>
+                            <Text>Deck 3</Text>
+                            <Size>0me,0me</Size>
+                          </Label>
+                          <WidgetGroup>
+                            <ObjectName>SettingsSegmented</ObjectName>
+                            <Layout>horizontal</Layout>
+                            <Size>138f,40f</Size>
+                            <Children>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                                <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                                <SetVariable name="Text">A</SetVariable>
+                                <SetVariable name="ConfigKey">[Channel3],orientation</SetVariable>
+                                <SetVariable name="Value">0</SetVariable>
+                              </Template>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                                <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                                <SetVariable name="Text">None</SetVariable>
+                                <SetVariable name="ConfigKey">[Channel3],orientation</SetVariable>
+                                <SetVariable name="Value">1</SetVariable>
+                              </Template>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                                <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                                <SetVariable name="Text">B</SetVariable>
+                                <SetVariable name="ConfigKey">[Channel3],orientation</SetVariable>
+                                <SetVariable name="Value">2</SetVariable>
+                              </Template>
+                            </Children>
+                          </WidgetGroup>
+                        </Children>
+                      </WidgetGroup>
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,52f</Size>
+                        <Children>
+                          <Label>
+                            <ObjectName>SettingsRowLabel</ObjectName>
+                            <Text>Deck 4</Text>
+                            <Size>0me,0me</Size>
+                          </Label>
+                          <WidgetGroup>
+                            <ObjectName>SettingsSegmented</ObjectName>
+                            <Layout>horizontal</Layout>
+                            <Size>138f,40f</Size>
+                            <Children>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                                <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                                <SetVariable name="Text">A</SetVariable>
+                                <SetVariable name="ConfigKey">[Channel4],orientation</SetVariable>
+                                <SetVariable name="Value">0</SetVariable>
+                              </Template>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                                <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                                <SetVariable name="Text">None</SetVariable>
+                                <SetVariable name="ConfigKey">[Channel4],orientation</SetVariable>
+                                <SetVariable name="Value">1</SetVariable>
+                              </Template>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                                <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                                <SetVariable name="Text">B</SetVariable>
+                                <SetVariable name="ConfigKey">[Channel4],orientation</SetVariable>
                                 <SetVariable name="Value">2</SetVariable>
                               </Template>
                             </Children>
@@ -453,13 +538,27 @@
                 </Children>
               </WidgetGroup>
 
-              <!-- Waveform renderer, full width. Five labelled segments need
-                   about 340px and a GeneralCol half-column is about 200px (see
+              <!-- Waveform renderer, full width. Six labelled segments need
+                   about 492px and a GeneralCol half-column is about 200px (see
                    the Clear row's note above), so this row spans both columns
                    instead of sitting inside one. One segmented group rather
                    than two stacked rows: each segment's IsEqual transform
                    already makes the highlight exclusive, so there is nothing
                    to coordinate across two groups.
+
+                   The five button row measured 335px on the panel, about 67px
+                   per button. Six buttons in the old 340f would be about 56px
+                   each, too tight for STACK HD, eight uppercase bold characters
+                   at 12px.
+
+                   408f was tried first and measured on the panel: 408px wide,
+                   six cells of 68px, nothing clipped. But STACK HD renders 62px
+                   of text in that 68px cell, so it had 3px a side against 10px
+                   for FILT HD and 13px for STACK. Legible, and one font metric
+                   change away from clipping. 492f gives 82px a cell, which puts
+                   STACK HD on the same 10px a side that FILT HD had at 408f.
+                   The row spans full width and is right aligned, so it grows
+                   leftwards into empty space.
 
                    Filt HD (22) and Stack HD (24) are the textured renderers.
                    They read the same SignalLow/Mid/HighColor tags from
@@ -487,7 +586,7 @@
                       <WidgetGroup>
                         <ObjectName>SettingsSegmented</ObjectName>
                         <Layout>horizontal</Layout>
-                        <Size>340f,40f</Size>
+                        <Size>492f,40f</Size>
                         <Children>
                           <Template src="skin:templates/setting_segment_button.xml">
                             <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
@@ -514,10 +613,16 @@
                             <SetVariable name="Value">25</SetVariable>
                           </Template>
                           <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
                             <SetVariable name="Text">Stack HD</SetVariable>
                             <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
                             <SetVariable name="Value">24</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="Text">3Band</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
+                            <SetVariable name="Value">26</SetVariable>
                           </Template>
                         </Children>
                       </WidgetGroup>

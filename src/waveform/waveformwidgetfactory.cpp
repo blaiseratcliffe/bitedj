@@ -28,6 +28,7 @@
 #include "waveform/widgets/allshader/filteredwaveformwidget.h"
 #include "waveform/widgets/allshader/hsvwaveformwidget.h"
 #include "waveform/widgets/allshader/lrrgbwaveformwidget.h"
+#include "waveform/widgets/allshader/rekordbox3bandwaveformwidget.h"
 #include "waveform/widgets/allshader/rgbstackedwaveformwidget.h"
 #include "waveform/widgets/allshader/rgbwaveformwidget.h"
 #include "waveform/widgets/allshader/simplewaveformwidget.h"
@@ -642,6 +643,8 @@ bool WaveformWidgetFactory::widgetTypeSupportsUntilMark() const {
         return true;
     case WaveformWidgetType::AllShaderTexturedStacked:
         return true;
+    case WaveformWidgetType::AllShaderRekordbox3BandWaveform:
+        return true;
     default:
         break;
     }
@@ -1142,6 +1145,13 @@ void WaveformWidgetFactory::evaluateWidgets() {
             setWaveformVarsByType.operator()<allshader::WaveformWidgetTexturedStacked>();
             break;
 #endif
+        case WaveformWidgetType::AllShaderRekordbox3BandWaveform:
+#ifndef MIXXX_USE_QOPENGL
+            continue;
+#else
+            setWaveformVarsByType.operator()<allshader::Rekordbox3BandWaveformWidget>();
+            break;
+#endif
         default:
             DEBUG_ASSERT(!"Unexpected WaveformWidgetType");
             continue;
@@ -1249,6 +1259,9 @@ WaveformWidgetAbstract* WaveformWidgetFactory::createWaveformWidget(
             break;
         case WaveformWidgetType::AllShaderTexturedStacked:
             widget = new allshader::WaveformWidgetTexturedStacked(viewer->getGroup(), viewer);
+            break;
+        case WaveformWidgetType::AllShaderRekordbox3BandWaveform:
+            widget = new allshader::Rekordbox3BandWaveformWidget(viewer->getGroup(), viewer);
             break;
 #else
         case WaveformWidgetType::QtSimpleWaveform:

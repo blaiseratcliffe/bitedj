@@ -21,6 +21,7 @@
 #include "library/dao/trackschema.h"
 #include "library/library.h"
 #include "library/queryutil.h"
+#include "library/rekordbox/rekordbox3bandimport.h"
 #include "library/rekordbox/rekordboxconstants.h"
 #include "library/starrating.h"
 #include "library/trackcollection.h"
@@ -1471,6 +1472,14 @@ TrackPointer RekordboxPlaylistModel::getTrack(const QModelIndex& index) const {
         mixxx::rekordbox::readAnalyze(track, sampleRate, timingOffset, false, anlzPathExt);
     } else {
         mixxx::rekordbox::readAnalyze(track, sampleRate, timingOffset, false, anlzPath);
+    }
+
+    // The CDJ-3000's three band analysis lives in a third sibling. Read it
+    // lazily here rather than caching it in the database: getTrack() runs on
+    // every fetch, so there is no blob to store and no schema to migrate.
+    if (anlzPath.endsWith(QLatin1String("DAT"), Qt::CaseInsensitive)) {
+        const QString anlz2ExPath = anlzPath.left(anlzPath.length() - 3) + QLatin1String("2EX");
+        mixxx::rekordbox::read3BandWaveform(track, anlz2ExPath);
     }
 
     // Cues stored on the drive by this unit are the DJ's own and outrank the

@@ -47,6 +47,15 @@ class WOverview : public WWidget, public TrackDropTarget {
         Filtered,
         HSV,
         RGB,
+        /// rekordbox's own PWV6 whole-track preview, drawn from the `.2EX`
+        /// analysis. Appended deliberately, so the stored values of the other
+        /// three do not move.
+        ///
+        /// This one is not offered in the preferences combo box and is never
+        /// written back to `[Waveform] WaveformOverviewType`. It is selected
+        /// implicitly, and only for as long as the scrolling waveform is set
+        /// to 3Band. See effectiveType().
+        Rekordbox3Band,
     };
     Q_ENUM(Type);
 
@@ -85,9 +94,20 @@ class WOverview : public WWidget, public TrackDropTarget {
     void slotCueMenuPopupAboutToHide();
 
     void slotTypeControlChanged(double v);
+    void slotWaveformTypeChanged(double v);
     void slotNormalizeOrVisualGainChanged();
 
   private:
+    /// The type that is actually drawn. It follows the scrolling waveform into
+    /// Type::Rekordbox3Band and is m_type otherwise, so the user's stored
+    /// overview preference is read but never overwritten.
+    Type effectiveType() const;
+
+    /// Draw the whole PWV6 preview series into m_waveformSourceImage in one
+    /// pass. Returns false, having changed nothing, when this track has no
+    /// preview series to draw; the caller then falls back to Type::RGB.
+    bool drawRekordbox3BandOverview();
+
     // Append the waveform overview pixmap according to available data
     // in waveform
     bool drawNextPixmapPart();
@@ -163,9 +183,16 @@ class WOverview : public WWidget, public TrackDropTarget {
     const QString m_group;
     UserSettingsPointer m_pConfig;
 
+    /// The user's stored overview preference, from
+    /// `[Waveform] WaveformOverviewType`. Never set to Type::Rekordbox3Band:
+    /// use effectiveType() to find out what is drawn.
     Type m_type;
     int m_actualCompletion;
     bool m_pixmapDone;
+    /// True once m_waveformSourceImage holds this track's PWV6 overview. The
+    /// series is drawn in one pass, so this also means "there is nothing left
+    /// to append". Cleared wherever m_waveformSourceImage is.
+    bool m_b3BandSourceValid;
     float m_waveformPeak;
     float m_diffGain;
     qreal m_devicePixelRatio;
@@ -214,6 +241,10 @@ class WOverview : public WWidget, public TrackDropTarget {
     PollingControlProxy m_timeRemainingControl;
     parented_ptr<ControlProxy> m_pPassthroughControl;
     parented_ptr<ControlProxy> m_pTypeControl;
+    /// `[Waveform] waveform_type`, watched only so the overview can repaint
+    /// when the scrolling waveform switches into or out of 3Band. Read only;
+    /// nothing here writes to it.
+    parented_ptr<ControlProxy> m_pWaveformTypeControl;
 
     QPointF m_timeRulerPos;
     WaveformMarkLabel m_timeRulerPositionLabel;

@@ -17,6 +17,7 @@
 #include "util/compatibility/qmutex.h"
 #include "util/fileaccess.h"
 #include "util/performancetimer.h"
+#include "waveform/rekordbox3bandwaveform.h"
 #include "waveform/waveform.h"
 
 class Track : public QObject {
@@ -286,6 +287,9 @@ class Track : public QObject {
     ConstWaveformPointer getWaveformSummary() const;
     void setWaveformSummary(ConstWaveformPointer pWaveform);
 
+    const mixxx::ConstRekordbox3BandWaveformPointer& getRekordbox3BandWaveform() const;
+    void setRekordbox3BandWaveform(mixxx::ConstRekordbox3BandWaveformPointer pWaveform);
+
     /// Get the track's main cue point
     mixxx::audio::FramePos getMainCuePosition() const;
     // Set the track's main cue point
@@ -440,6 +444,7 @@ class Track : public QObject {
 
     void waveformUpdated();
     void waveformSummaryUpdated();
+    void rekordbox3BandWaveformUpdated();
     void coverArtUpdated();
     void beatsUpdated();
     void replayGainUpdated(mixxx::ReplayGain replayGain);
@@ -576,6 +581,10 @@ class Track : public QObject {
     // Visual waveform data
     ConstWaveformPointer m_waveform;
     ConstWaveformPointer m_waveformSummary;
+    // The CDJ-3000's own three band analysis, when the track came off a
+    // rekordbox drive that carries a .2EX file. Kept beside the Mixxx
+    // waveforms rather than replacing them, so the normal renderers still work.
+    mixxx::ConstRekordbox3BandWaveformPointer m_rekordbox3BandWaveform;
 
     mixxx::BeatsImporterPointer m_pBeatsImporterPending;
     std::unique_ptr<mixxx::CueInfoImporter> m_pCueInfoImporterPending;

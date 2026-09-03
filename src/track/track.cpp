@@ -936,6 +936,15 @@ void Track::setWaveformSummary(ConstWaveformPointer pWaveform) {
     emit waveformSummaryUpdated();
 }
 
+const mixxx::ConstRekordbox3BandWaveformPointer& Track::getRekordbox3BandWaveform() const {
+    return m_rekordbox3BandWaveform;
+}
+
+void Track::setRekordbox3BandWaveform(mixxx::ConstRekordbox3BandWaveformPointer pWaveform) {
+    m_rekordbox3BandWaveform = pWaveform;
+    emit rekordbox3BandWaveformUpdated();
+}
+
 void Track::setMainCuePosition(mixxx::audio::FramePos position) {
     auto locked = lockMutex(&m_qMutex);
 

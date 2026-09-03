@@ -7,6 +7,8 @@
 #include <QPainter>
 #include <QPen>
 #include <QVBoxLayout>
+#include <algorithm>
+#include <array>
 
 #include "analyzer/analyzerprogress.h"
 #include "control/controlproxy.h"
@@ -21,6 +23,10 @@
 #include "util/math.h"
 #include "util/painterscope.h"
 #include "util/timer.h"
+#include "waveform/rekordbox3bandwaveform.h"
+// GL free by design, so a QPainter based widget can share the renderer's
+// calibration and its colour and height helpers verbatim.
+#include "waveform/renderers/allshader/rekordbox3bandcalibration.h"
 #include "waveform/waveform.h"
 #include "waveform/waveformwidgetfactory.h"
 #include "widget/controlwidgetconnection.h"
@@ -31,6 +37,20 @@ namespace {
 // Horizontal and vertical margin around the widget where we accept play pos dragging.
 constexpr int kDragOutsideLimitX = 100;
 constexpr int kDragOutsideLimitY = 50;
+
+/// Half the height of m_waveformSourceImage, in the source image's own pixels.
+/// The other overview types build a `2 * 255` tall image and rely on that
+/// everywhere downstream, most importantly in drawWaveformPixmap()'s visual
+/// gain crop, so the three band overview uses the same height.
+constexpr int kSourceImageHalfHeight = 255;
+
+/// One band's half height and which band it is, so the three can be sorted by
+/// height and still be identified afterwards. Mirrors the struct of the same
+/// name in the scrolling renderer.
+struct BandRun {
+    float height;
+    int band; // 0 low, 1 mid, 2 high
+};
 } // anonymous namespace
 
 WOverview::WOverview(
@@ -44,6 +64,7 @@ WOverview::WOverview(
           m_type(Type::RGB),
           m_actualCompletion(0),
           m_pixmapDone(false),
+          m_b3BandSourceValid(false),
           m_waveformPeak(-1.0),
           m_diffGain(0),
           m_devicePixelRatio(1.0),
@@ -105,6 +126,19 @@ WOverview::WOverview(
             this);
     m_pTypeControl->connectValueChanged(this, &WOverview::slotTypeControlChanged);
     slotTypeControlChanged(m_pTypeControl->get());
+
+    // The overview follows the scrolling waveform into 3Band, and nothing on
+    // WaveformWidgetFactory announces a widget type change, so watch its
+    // control instead. `[Waveform] waveform_type` is created in
+    // WaveformWidgetFactory::setConfig(), which MixxxMainWindow runs before it
+    // loads any skin, so this proxy is always bound by the time a WOverview
+    // exists.
+    m_pWaveformTypeControl = make_parented<ControlProxy>(
+            QStringLiteral("[Waveform]"),
+            QStringLiteral("waveform_type"),
+            this);
+    m_pWaveformTypeControl->connectValueChanged(
+            this, &WOverview::slotWaveformTypeChanged);
 
     // Update immediately when the normalize option or the visual gain have been
     // changed in the preferences.
@@ -351,6 +385,24 @@ void WOverview::slotWaveformSummaryUpdated() {
         return;
     }
     m_pWaveform = pTrack->getWaveformSummary();
+
+    if (effectiveType() == Type::Rekordbox3Band) {
+        if (m_b3BandSourceValid) {
+            // Already drawn, in one pass, from rekordbox's own preview series.
+            // Nothing about Mixxx's summary can change it, and in particular
+            // the summary going away must not clear it below.
+            return;
+        }
+        if (drawRekordbox3BandOverview()) {
+            // PWV6 is not derived from Mixxx's analysis, so the overview is
+            // drawn even for a track Mixxx has no summary for at all.
+            update();
+            return;
+        }
+        // No preview series for this track. Fall through to the existing
+        // behaviour, which draws the Type::RGB fallback.
+    }
+
     if (m_pWaveform) {
         // If the waveform is already complete, just draw it.
         if (m_pWaveform->getCompletion() == m_pWaveform->getDataSize()) {
@@ -362,6 +414,7 @@ void WOverview::slotWaveformSummaryUpdated() {
     } else {
         // Null waveform pointer means waveform was cleared.
         m_waveformSourceImage = QImage();
+        m_b3BandSourceValid = false;
         m_analyzerProgress = kAnalyzerProgressUnknown;
         m_actualCompletion = 0;
         m_waveformPeak = -1.0;
@@ -410,6 +463,10 @@ void WOverview::slotLoadingTrack(TrackPointer pNewTrack, TrackPointer pOldTrack)
     }
 
     m_waveformSourceImage = QImage();
+    // So a track with no PWV6 cannot show the previous track's overview: the
+    // image is gone, and the flag that would otherwise stop it being redrawn
+    // goes with it.
+    m_b3BandSourceValid = false;
     m_analyzerProgress = kAnalyzerProgressUnknown;
     m_actualCompletion = 0;
     m_waveformPeak = -1.0;
@@ -480,7 +537,10 @@ void WOverview::onPassthroughChange(double v) {
 }
 
 void WOverview::slotTypeControlChanged(double v) {
-    // Assert that v is in enum range to prevent UB.
+    // Assert that v is in enum range to prevent UB. Type::Rekordbox3Band is
+    // inside that range but is never written to the control: the preferences
+    // combo box does not offer it, and effectiveType() selects it without
+    // going through here.
     DEBUG_ASSERT(v >= 0 && v < QMetaEnum::fromType<Type>().keyCount());
     Type type = static_cast<Type>(static_cast<int>(v));
     if (type == m_type) {
@@ -490,6 +550,32 @@ void WOverview::slotTypeControlChanged(double v) {
     m_type = type;
     m_pWaveform.clear();
     m_waveformSourceImage = QImage();
+    m_b3BandSourceValid = false;
+    slotWaveformSummaryUpdated();
+}
+
+WOverview::Type WOverview::effectiveType() const {
+    // The overview has no selector of its own for 3Band; it follows the
+    // scrolling waveform instead, which is what "no new selector button"
+    // means. m_pTypeControl is deliberately not written here, so the user's
+    // stored overview preference in m_type is untouched and comes back
+    // unchanged the moment the waveform is set to anything else.
+    if (WaveformWidgetFactory::instance()->getType() ==
+            WaveformWidgetType::AllShaderRekordbox3BandWaveform) {
+        return Type::Rekordbox3Band;
+    }
+    return m_type;
+}
+
+void WOverview::slotWaveformTypeChanged(double v) {
+    Q_UNUSED(v);
+    // effectiveType() may have changed even though m_type did not, and nothing
+    // else would notice. Reset exactly as slotTypeControlChanged() does. This
+    // also runs for waveform type changes that do not involve 3Band at all,
+    // which costs one redraw of an overview the user just reconfigured.
+    m_pWaveform.clear();
+    m_waveformSourceImage = QImage();
+    m_b3BandSourceValid = false;
     slotWaveformSummaryUpdated();
 }
 
@@ -1431,7 +1517,191 @@ void WOverview::drawPassthroughOverlay(QPainter* pPainter) {
     }
 }
 
+bool WOverview::drawRekordbox3BandOverview() {
+    if (!m_pCurrentTrack) {
+        return false;
+    }
+
+    // Native rekordbox analysis when the importer attached some, a Mixxx
+    // derived approximation otherwise, null when neither is available yet.
+    // Building the fallback is the resolver's job, not ours.
+    const mixxx::ConstRekordbox3BandWaveformPointer pBands =
+            mixxx::resolveRekordbox3BandWaveform(m_pCurrentTrack);
+    if (pBands.isNull() || !pBands->hasPreview()) {
+        // Either no three band data at all, or the Mixxx fallback, which is
+        // detail only and carries no PWV6 series. Both leave the overview to
+        // the Type::RGB path in drawNextPixmapPart().
+        return false;
+    }
+
+    const QVector<mixxx::BandSample>& preview = pBands->preview();
+    const int entryCount = static_cast<int>(preview.size());
+    if (entryCount < 2) {
+        return false;
+    }
+
+    // Fixed in code, exactly as in the scrolling renderer, so that a skin
+    // swapping its RGB palette cannot repaint rekordbox's own analysis.
+    const mixxx::Rekordbox3BandCalibration calibration{};
+
+    // PWV6 is stored on a different and smaller scale than PWV7. A positive
+    // pwv6FullScale is a fixed divisor; the default of 0.0 means normalise to
+    // this track's own maximum, which is what fills the strip. PWV7's full
+    // scale of 127 would draw a barely visible hairline here, because a
+    // typical track's PWV6 peaks around 39.
+    float fullScale = calibration.pwv6FullScale;
+    if (fullScale <= 0.0f) {
+        uint8_t peak = 0;
+        for (const mixxx::BandSample& sample : preview) {
+            peak = std::max({peak, sample.low, sample.mid, sample.high});
+        }
+        if (peak == 0) {
+            // An all zero series. There is nothing to draw, and it would only
+            // be a division by zero, so let the fallback have it.
+            return false;
+        }
+        fullScale = static_cast<float>(peak);
+    }
+
+    // One image column per preview entry. PWV6 has its own length, unrelated
+    // to the Mixxx waveform's dataSize, so the image is sized and indexed from
+    // the series itself; drawWaveformPixmap() scales it to the widget.
+    m_waveformSourceImage = QImage(entryCount,
+            2 * kSourceImageHalfHeight,
+            QImage::Format_ARGB32_Premultiplied);
+    m_waveformSourceImage.fill(Qt::transparent);
+
+    const auto halfHeight = static_cast<float>(kSourceImageHalfHeight);
+    const auto centre = static_cast<qreal>(kSourceImageHalfHeight);
+
+    QPainter painter(&m_waveformSourceImage);
+    painter.setRenderHint(QPainter::Antialiasing, false);
+
+    for (int pos = 0; pos < entryCount; ++pos) {
+        // The whole track is on screen, so the column range spans [0,1]. With
+        // one column per entry this is one entry wide almost everywhere; the
+        // reduction is Rekordbox3BandColumnRule::MaxOverRange, the calibration
+        // default and the only rule that keeps a single entry transient at
+        // full height.
+        const mixxx::Rekordbox3BandColumnRange range =
+                mixxx::columnRangeForPixel(pos, entryCount, 0.0, 1.0, entryCount);
+        mixxx::BandSample sample{0, 0, 0};
+        for (int i = range.begin; i < range.end; ++i) {
+            sample.low = std::max(sample.low, preview[i].low);
+            sample.mid = std::max(sample.mid, preview[i].mid);
+            sample.high = std::max(sample.high, preview[i].high);
+        }
+
+        // No master gain here, unlike the scrolling renderer: the overview's
+        // visual gain is applied downstream by drawWaveformPixmap(), which
+        // crops this image vertically, and applying it twice would double it.
+        std::array<BandRun, 3> runs{{
+                {mixxx::scaleHeight(sample.low,
+                         fullScale,
+                         calibration.gamma,
+                         calibration.lowHeightScale,
+                         halfHeight,
+                         calibration.minVisibleHeightPx),
+                        0},
+                {mixxx::scaleHeight(sample.mid,
+                         fullScale,
+                         calibration.gamma,
+                         calibration.midHeightScale,
+                         halfHeight,
+                         calibration.minVisibleHeightPx),
+                        1},
+                {mixxx::scaleHeight(sample.high,
+                         fullScale,
+                         calibration.gamma,
+                         calibration.highHeightScale,
+                         halfHeight,
+                         calibration.minVisibleHeightPx),
+                        2},
+        }};
+        std::sort(runs.begin(), runs.end(), [](const BandRun& a, const BandRun& b) {
+            return a.height < b.height;
+        });
+
+        if (runs[2].height <= 0.0f) {
+            // Silence. Leave the background showing.
+            continue;
+        }
+
+        const auto x = static_cast<qreal>(pos);
+
+        // The bands are concentric about the centre line, not stacked, so each
+        // half column is at most three contiguous runs and a point at distance
+        // dy from the centre is covered by band b iff dy <= h_b.
+        float inner = 0.0f;
+        for (int i = 0; i < 3; ++i) {
+            const float outer = runs[i].height;
+            if (outer <= inner) {
+                // Two bands of equal height, so this run is empty.
+                continue;
+            }
+
+            // Everything from this run outwards is covered by the bands that
+            // reach at least this far, which after sorting are runs[i..2].
+            bool covers[3] = {false, false, false};
+            for (int j = i; j < 3; ++j) {
+                covers[runs[j].band] = true;
+            }
+            QColor colour = mixxx::colourForCoverage(
+                    calibration, covers[0], covers[1], covers[2]);
+            colour.setAlphaF(calibration.opacity);
+
+            if (inner == 0.0f) {
+                painter.fillRect(QRectF(x,
+                                         centre - static_cast<qreal>(outer),
+                                         1.0,
+                                         2.0 * static_cast<qreal>(outer)),
+                        colour);
+            } else {
+                const auto runHeight = static_cast<qreal>(outer - inner);
+                painter.fillRect(
+                        QRectF(x, centre - static_cast<qreal>(outer), 1.0, runHeight),
+                        colour);
+                painter.fillRect(
+                        QRectF(x, centre + static_cast<qreal>(inner), 1.0, runHeight),
+                        colour);
+            }
+
+            inner = outer;
+        }
+    }
+
+    painter.end();
+
+    m_waveformImageScaled = QImage();
+    m_diffGain = 0;
+    m_actualCompletion = 0;
+    // The whole series was drawn in one pass, so there is never an incremental
+    // part to append afterwards.
+    m_pixmapDone = true;
+    // Left at its "no peak seen" value on purpose. It is what drives
+    // drawWaveformPixmap()'s normalize crop, and PWV6 was already normalised
+    // per track above, so normalising it a second time would double count.
+    m_waveformPeak = -1.0f;
+    m_b3BandSourceValid = true;
+    return true;
+}
+
 bool WOverview::drawNextPixmapPart() {
+    if (effectiveType() == Type::Rekordbox3Band) {
+        if (m_b3BandSourceValid) {
+            // The whole PWV6 series is already in the source image. There is
+            // no incremental part to append, so nothing changed.
+            return false;
+        }
+        if (drawRekordbox3BandOverview()) {
+            return true;
+        }
+        // This track has no PWV6 preview series. Fall through and render it
+        // with the existing Type::RGB path, which is the chosen fallback: the
+        // dispatch below treats anything that is neither Filtered nor HSV as
+        // RGB, so Type::Rekordbox3Band lands there.
+    }
+
     ConstWaveformPointer pWaveform = getWaveform();
     if (!pWaveform) {
         return false;
@@ -1482,11 +1752,14 @@ bool WOverview::drawNextPixmapPart() {
     QPainter painter(&m_waveformSourceImage);
     painter.translate(0.0, static_cast<double>(m_waveformSourceImage.height()) / 2.0);
 
-    if (m_type == Type::Filtered) {
+    const Type type = effectiveType();
+    if (type == Type::Filtered) {
         drawNextPixmapPartLMH(&painter, pWaveform, nextCompletion);
-    } else if (m_type == Type::HSV) {
+    } else if (type == Type::HSV) {
         drawNextPixmapPartHSV(&painter, pWaveform, nextCompletion);
-    } else { // Type::RGB:
+    } else {
+        // Type::RGB, and also the fallback for Type::Rekordbox3Band on a track
+        // that has no PWV6 preview series to draw.
         drawNextPixmapPartRGB(&painter, pWaveform, nextCompletion);
     }
 

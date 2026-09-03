@@ -22,15 +22,16 @@ class WaveformWidgetType {
         QtHSVWaveform,               // 14 HSV Qt
         QtRGBWaveform,               // 15 RGB Qt
         GLSLRGBStackedWaveform,      // 16 RGB Stacked
-        AllShaderRGBWaveform,        // 17 RGB (all-shaders)
-        AllShaderLRRGBWaveform,      // 18 L/R RGB (all-shaders)
-        AllShaderFilteredWaveform,   // 19 Filtered (all-shaders)
-        AllShaderSimpleWaveform,     // 20 Simple (all-shaders)
-        AllShaderHSVWaveform,        // 21 HSV (all-shaders)
-        AllShaderTexturedFiltered,   // 22 Filtered (textured) (all-shaders)
-        AllShaderTexturedRGB,        // 23 RGB (textured) (all-shaders)
-        AllShaderTexturedStacked,    // 24 Stacked (textured) (all-shaders)
-        AllShaderRGBStackedWaveform, // 26 Stacked (all-shaders)
-        Count_WaveformwidgetType     //    Also used as invalid value
+        AllShaderRGBWaveform = 17,        // 17 RGB (all-shaders)
+        AllShaderLRRGBWaveform = 18,      // 18 L/R RGB (all-shaders)
+        AllShaderFilteredWaveform = 19,   // 19 Filtered (all-shaders)
+        AllShaderSimpleWaveform = 20,     // 20 Simple (all-shaders)
+        AllShaderHSVWaveform = 21,        // 21 HSV (all-shaders)
+        AllShaderTexturedFiltered = 22,   // 22 Filtered (textured) (all-shaders)
+        AllShaderTexturedRGB = 23,        // 23 RGB (textured) (all-shaders)
+        AllShaderTexturedStacked = 24,    // 24 Stacked (textured) (all-shaders)
+        AllShaderRGBStackedWaveform = 25, // 25 Stacked (all-shaders)
+        AllShaderRekordbox3BandWaveform = 26, // 26 3Band (all-shaders)
+        Count_WaveformwidgetType = 27     //    Also used as invalid value
     };
 };

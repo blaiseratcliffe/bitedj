@@ -686,6 +686,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/recording/dlgrecording.cpp
   src/library/recording/dlgrecording.ui
   src/library/recording/recordingfeature.cpp
+  src/library/rekordbox/rekordbox3bandimport.cpp
   src/library/rekordbox/rekordboxfeature.cpp
   src/library/rhythmbox/rhythmboxfeature.cpp
   src/library/scanner/importfilestask.cpp
@@ -931,6 +932,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/util/workerthreadscheduler.cpp
   src/util/xml.cpp
   src/waveform/guitick.cpp
+  src/waveform/rekordbox3bandwaveform.cpp
   src/waveform/renderers/deprecated/glslwaveformrenderersignal.cpp
   src/waveform/renderers/deprecated/glvsynctestrenderer.cpp
   src/waveform/renderers/deprecated/glwaveformrenderbackground.cpp
@@ -1250,6 +1252,7 @@ if(QOPENGL)
     src/waveform/renderers/allshader/waveformrendererhsv.cpp
     src/waveform/renderers/allshader/waveformrendererlrrgb.cpp
     src/waveform/renderers/allshader/waveformrendererpreroll.cpp
+    src/waveform/renderers/allshader/waveformrendererrekordbox3band.cpp
     src/waveform/renderers/allshader/waveformrendererrgb.cpp
     src/waveform/renderers/allshader/waveformrenderertextured.cpp
     src/waveform/renderers/allshader/waveformrenderersignalbase.cpp
@@ -1259,6 +1262,7 @@ if(QOPENGL)
     src/waveform/widgets/allshader/filteredwaveformwidget.cpp
     src/waveform/widgets/allshader/hsvwaveformwidget.cpp
     src/waveform/widgets/allshader/lrrgbwaveformwidget.cpp
+    src/waveform/widgets/allshader/rekordbox3bandwaveformwidget.cpp
     src/waveform/widgets/allshader/rgbwaveformwidget.cpp
     src/waveform/widgets/allshader/rgbstackedwaveformwidget.cpp
     src/waveform/widgets/allshader/simplewaveformwidget.cpp
@@ -1627,6 +1631,7 @@ if(BUILD_TESTING)
     src/test/queryutiltest.cpp
     src/test/rangelist_test.cpp
     src/test/readaheadmanager_test.cpp
+    src/test/rekordbox3band_test.cpp
     src/test/rekordboxanlz_test.cpp
     src/test/replaygaintest.cpp
     src/test/rescalertest.cpp
