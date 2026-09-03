@@ -45,8 +45,24 @@
 
 	<LaunchImageStyle>
       LaunchImage { background-color: #000 }
+	  /* margin-top is an alignment value measured on the panel, not a style
+	     choice. Plymouth and mpvpaper both centre the 964x135 mark at rows
+	     292-427. This widget centres the mark and the progress bar as a
+	     group, which with no top margin lands the mark at 280-415, so it
+	     hops up 12px for the last two seconds of the boot.
+	
+	     Measured, because the arithmetic was wrong: 19px should have given
+	     292 and gave 289, so travel is 0.474px per 1px of margin, not the
+	     0.5 the layout implies. 25px lands rows 292-427, cols 158-1121,
+	     matching the boot screen exactly. Section 4 of M4-SKIN-NOTES.md in
+	     the appliance repo is the standing warning about computing these.
+	
+	     Re-measure if the mark size, the bar height or margin-bottom change:
+	     grim a frame during the ~2s launch image and compare its bounding
+	     box against a boot-screen frame. */
 	  QLabel {
 	    image: url(skin:/images/boot_mark.png);
+	    margin-top: 25px;
 	    margin-bottom: 12px;
         min-width: 964px;
         min-height: 135px;
