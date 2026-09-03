@@ -22,6 +22,14 @@ constexpr double kMinBeatLineSpacingPx = 12.0;
 // Safety net against degenerate (near zero) beat spacings.
 constexpr int kMaxBeatLineStride = 1024;
 
+// Defaults for the CDJ style beat ticks, used when a skin declares none. A
+// fraction of 0.5 or more makes the two ticks meet in the middle and restores
+// the full height line the grid used to draw. Kept in step with the allshader
+// renderer in allshader/waveformrenderbeat.cpp.
+constexpr float kDefaultBeatTickFraction = 0.10f;
+constexpr float kDefaultBeatTickMinPx = 4.0f;
+constexpr float kDefaultBeatTickMaxPx = 14.0f;
+
 int positiveModulo(int value, int modulus) {
     return ((value % modulus) + modulus) % modulus;
 }
@@ -49,7 +57,10 @@ float droppedBeatLineOpacity(double pixelsPerBeat, int stride) {
 } // namespace
 
 WaveformRenderBeat::WaveformRenderBeat(WaveformWidgetRenderer* waveformWidgetRenderer)
-        : WaveformRendererAbstract(waveformWidgetRenderer) {
+        : WaveformRendererAbstract(waveformWidgetRenderer),
+          m_beatTickFraction(kDefaultBeatTickFraction),
+          m_beatTickMinPx(kDefaultBeatTickMinPx),
+          m_beatTickMaxPx(kDefaultBeatTickMaxPx) {
     m_beats.resize(128);
     m_fadingBeats.resize(128);
     m_downbeats.resize(128);
@@ -68,6 +79,12 @@ void WaveformRenderBeat::setup(const QDomNode& node, const SkinContext& context)
     } else {
         m_downbeatColor = QColor();
     }
+    m_beatTickFraction = context.selectFloat(
+            node, "BeatTickFraction", kDefaultBeatTickFraction);
+    m_beatTickMinPx = context.selectFloat(
+            node, "BeatTickMinPx", kDefaultBeatTickMinPx);
+    m_beatTickMaxPx = context.selectFloat(
+            node, "BeatTickMaxPx", kDefaultBeatTickMaxPx);
 }
 
 void WaveformRenderBeat::draw(QPainter* painter, QPaintEvent* /*event*/) {
@@ -184,6 +201,19 @@ void WaveformRenderBeat::draw(QPainter* painter, QPaintEvent* /*event*/) {
     const float rendererWidth = m_waveformRenderer->getWidth();
     const float rendererHeight = m_waveformRenderer->getHeight();
 
+    // Length of one CDJ style tick. The breadth is the axis the line runs
+    // along, so it is the height when horizontal and the width when vertical.
+    // The breadth/2 ceiling stops the two ticks overlapping in a very short
+    // pane; reaching it draws a full line, which is what a BeatTickFraction of
+    // 0.5 or more asks for.
+    const float rendererBreadth =
+            orientation == Qt::Horizontal ? rendererHeight : rendererWidth;
+    const float beatTickLength = std::min(
+            std::clamp(rendererBreadth * m_beatTickFraction,
+                    m_beatTickMinPx,
+                    m_beatTickMaxPx),
+            rendererBreadth / 2.f);
+
     int beatCount = 0;
     int fadingBeatCount = 0;
     int downbeatCount = 0;
@@ -216,15 +246,24 @@ void WaveformRenderBeat::draw(QPainter* painter, QPaintEvent* /*event*/) {
                 ? (isFading ? fadingDownbeatCount : downbeatCount)
                 : (isFading ? fadingBeatCount : beatCount);
 
-        // If we don't have enough space, double the size.
-        if (count >= lines.size()) {
+        // Two lines per beat now, a tick at each edge. If we don't have enough
+        // space for both, double the size.
+        if (count + 1 >= lines.size()) {
             lines.resize(lines.size() * 2);
         }
 
         if (orientation == Qt::Horizontal) {
-            lines[count++].setLine(xBeatPoint, 0.0f, xBeatPoint, rendererHeight);
+            lines[count++].setLine(xBeatPoint, 0.0f, xBeatPoint, beatTickLength);
+            lines[count++].setLine(xBeatPoint,
+                    rendererHeight - beatTickLength,
+                    xBeatPoint,
+                    rendererHeight);
         } else {
-            lines[count++].setLine(0.0f, xBeatPoint, rendererWidth, xBeatPoint);
+            lines[count++].setLine(0.0f, xBeatPoint, beatTickLength, xBeatPoint);
+            lines[count++].setLine(rendererWidth - beatTickLength,
+                    xBeatPoint,
+                    rendererWidth,
+                    xBeatPoint);
         }
     }
 

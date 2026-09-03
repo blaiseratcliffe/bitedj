@@ -92,8 +92,20 @@
         <Channel><Variable name="channel"/></Channel>
         <DisableSeek>true</DisableSeek>
         <BgColor>#000</BgColor>
+        <!-- Beat grid, CDJ-3000 style: a short tick at the top and bottom edge
+             rather than a line across the waveform, white on the beats and red
+             on the bar. The tick is a fraction of the pane's height, clamped,
+             so the short deck 3/4 cells and the tall deck 1/2 cells stay
+             comparable. Measure the rendered pixels before changing these; a
+             layout budget on paper is not the tick you get.
+
+             BeatTickFraction 0.5 or more makes the two ticks meet and restores
+             the old full height line, with no rebuild. -->
         <BeatColor>#fff</BeatColor>
-        <BeatDownbeatColor>#f15921</BeatDownbeatColor>
+        <BeatDownbeatColor>#ff3b30</BeatDownbeatColor>
+        <BeatTickFraction>0.10</BeatTickFraction>
+        <BeatTickMinPx>4</BeatTickMinPx>
+        <BeatTickMaxPx>14</BeatTickMaxPx>
         <PlayPosColor>#fff</PlayPosColor>
         <SignalColor>#32323c</SignalColor>
         <SignalLowColor>#004ee4</SignalLowColor>

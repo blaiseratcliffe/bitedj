@@ -203,6 +203,7 @@ class WaveformWidgetFactory : public QObject, public Singleton<WaveformWidgetFac
     void swapAndRender();
     void slotFrameSwapped();
     void slotSetWidgetTypeFromControl(double value);
+    void slotSetDefaultZoomFromControl(double value);
 
   private:
     void renderSelf();
@@ -231,6 +232,7 @@ class WaveformWidgetFactory : public QObject, public Singleton<WaveformWidgetFac
 
     QScopedPointer<ControlObject> m_pCOWaveformType;
     QScopedPointer<ControlObject> m_pCOApplyEqToWaveform;
+    QScopedPointer<ControlObject> m_pCODefaultZoom;
 
     bool m_skipRender;
     int m_frameRate;

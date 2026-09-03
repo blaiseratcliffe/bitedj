@@ -398,6 +398,22 @@ bool WaveformWidgetFactory::setConfig(UserSettingsPointer config) {
         m_config->set(ConfigKey("[Waveform]","DefaultZoom"), ConfigValue(m_defaultZoom));
     }
 
+    // Skin-facing control for the default zoom, so a skin can offer it without
+    // the desktop preferences dialog, which this appliance never shows. Same
+    // shape as m_pCOWaveformType below.
+    if (!m_pCODefaultZoom) {
+        m_pCODefaultZoom.reset(new ControlObject(
+                ConfigKey(QStringLiteral("[Waveform]"),
+                        QStringLiteral("waveform_default_zoom"))));
+        m_pCODefaultZoom->set(m_defaultZoom);
+        connect(m_pCODefaultZoom.data(),
+                &ControlObject::valueChanged,
+                this,
+                &WaveformWidgetFactory::slotSetDefaultZoomFromControl);
+    } else {
+        m_pCODefaultZoom->set(m_defaultZoom);
+    }
+
     bool zoomSync = m_config->getValue(ConfigKey("[Waveform]", "ZoomSynchronization"), m_zoomSync);
     setZoomSync(zoomSync);
 
@@ -723,11 +739,23 @@ bool WaveformWidgetFactory::setWidgetTypeFromHandle(int handleIndex, bool force)
     return true;
 }
 
+void WaveformWidgetFactory::slotSetDefaultZoomFromControl(double value) {
+    setDefaultZoom(value);
+}
+
 void WaveformWidgetFactory::setDefaultZoom(double zoom) {
     m_defaultZoom = math_clamp(zoom, WaveformWidgetRenderer::s_waveformMinZoom,
                                WaveformWidgetRenderer::s_waveformMaxZoom);
     if (m_config) {
         m_config->set(ConfigKey("[Waveform]","DefaultZoom"), ConfigValue(m_defaultZoom));
+    }
+
+    // Keep the skin-facing control in sync when the zoom is changed from
+    // elsewhere (the desktop preferences combobox), and write back the clamped
+    // value when the control itself was the source. Writing an equal value is a
+    // no-op, so this does not loop with the control's own valueChanged handler.
+    if (m_pCODefaultZoom) {
+        m_pCODefaultZoom->set(m_defaultZoom);
     }
 
     for (const auto& holder : std::as_const(m_waveformWidgetHolders)) {

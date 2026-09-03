@@ -21,6 +21,13 @@ constexpr double kMinBeatLineSpacingPx = 12.0;
 // Safety net against degenerate (near zero) beat spacings.
 constexpr int kMaxBeatLineStride = 1024;
 
+// Defaults for the CDJ style beat ticks, used when a skin declares none. A
+// fraction of 0.5 or more makes the two ticks meet in the middle and restores
+// the full height line the grid used to draw.
+constexpr float kDefaultBeatTickFraction = 0.10f;
+constexpr float kDefaultBeatTickMinPx = 4.0f;
+constexpr float kDefaultBeatTickMaxPx = 14.0f;
+
 int positiveModulo(int value, int modulus) {
     return ((value % modulus) + modulus) % modulus;
 }
@@ -52,6 +59,9 @@ namespace allshader {
 WaveformRenderBeat::WaveformRenderBeat(WaveformWidgetRenderer* waveformWidget,
         ::WaveformRendererAbstract::PositionSource type)
         : WaveformRenderer(waveformWidget),
+          m_beatTickFraction(kDefaultBeatTickFraction),
+          m_beatTickMinPx(kDefaultBeatTickMinPx),
+          m_beatTickMaxPx(kDefaultBeatTickMaxPx),
           m_isSlipRenderer(type == ::WaveformRendererAbstract::Slip) {
 }
 
@@ -69,6 +79,12 @@ void WaveformRenderBeat::setup(const QDomNode& node, const SkinContext& context)
     } else {
         m_downbeatColor = QColor();
     }
+    m_beatTickFraction = context.selectFloat(
+            node, "BeatTickFraction", kDefaultBeatTickFraction);
+    m_beatTickMinPx = context.selectFloat(
+            node, "BeatTickMinPx", kDefaultBeatTickMinPx);
+    m_beatTickMaxPx = context.selectFloat(
+            node, "BeatTickMaxPx", kDefaultBeatTickMaxPx);
 }
 
 void WaveformRenderBeat::paintGL() {
@@ -124,7 +140,21 @@ void WaveformRenderBeat::paintGL() {
 
     const float rendererBreadth = m_waveformRenderer->getBreadth();
 
-    const int numVerticesPerLine = 6; // 2 triangles
+    // Two rectangles per beat, a tick at each edge, so 4 triangles.
+    const int numVerticesPerLine = 12;
+
+    // The far edge of a beat line. The slip renderer occupies the top half of
+    // the pane only.
+    const float y2 = m_isSlipRenderer ? rendererBreadth / 2 : rendererBreadth;
+
+    // Length of one tick, in renderer world units. Derived from y2 rather than
+    // rendererBreadth so the slip renderer keeps its bottom tick on screen. The
+    // y2/2 ceiling stops the two ticks overlapping in a very short cell;
+    // reaching it draws a full height line, which is what a BeatTickFraction of
+    // 0.5 or more asks for.
+    const float beatTickLength = std::min(
+            std::clamp(y2 * m_beatTickFraction, m_beatTickMinPx, m_beatTickMaxPx),
+            y2 / 2.f);
 
     // Count the number of beats in the range to reserve space in the m_vertices vector.
     // Note that we could also use
@@ -207,7 +237,6 @@ void WaveformRenderBeat::paintGL() {
 
         const float x1 = static_cast<float>(xBeatPoint);
         const float x2 = x1 + 1.f;
-        const float y2 = m_isSlipRenderer ? rendererBreadth / 2 : rendererBreadth;
 
         const bool isDownbeat = paintDownbeats &&
                 positiveModulo(beatIndex, kBeatsPerBar) == 0;
@@ -215,7 +244,8 @@ void WaveformRenderBeat::paintGL() {
         VertexData& target = isDownbeat
                 ? (isFading ? m_fadingDownbeatVertices : m_downbeatVertices)
                 : (isFading ? m_fadingVertices : m_vertices);
-        target.addRectangle(x1, 0.f, x2, y2);
+        target.addRectangle(x1, 0.f, x2, beatTickLength);
+        target.addRectangle(x1, y2 - beatTickLength, x2, y2);
     }
 
     DEBUG_ASSERT(reserved >=

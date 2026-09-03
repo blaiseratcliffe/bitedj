@@ -28,6 +28,13 @@ class allshader::WaveformRenderBeat final : public allshader::WaveformRenderer {
     mixxx::UnicolorShader m_shader;
     QColor m_color;
     QColor m_downbeatColor;
+    // CDJ style tick geometry: each beat is a short mark at the top and bottom
+    // edge rather than a line across the whole waveform. Length is a fraction
+    // of the pane's breadth, clamped, so the short deck 3/4 cells and the tall
+    // deck 1/2 cells stay comparable. See setup() for the skin tags.
+    float m_beatTickFraction;
+    float m_beatTickMinPx;
+    float m_beatTickMaxPx;
     VertexData m_vertices;
     VertexData m_fadingVertices;
     VertexData m_downbeatVertices;

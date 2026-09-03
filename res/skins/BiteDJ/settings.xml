@@ -631,6 +631,94 @@
                 </Children>
               </WidgetGroup>
 
+              <!-- Waveform zoom, full width, directly under the Wave row.
+
+                   Higher is more zoomed out. Zoom is visual samples per pixel
+                   and Mixxx stores 441 visual samples a second
+                   (analyzerwaveform.cpp), so a pane shows width * zoom / 441
+                   seconds. At 128 BPM in a half width deck cell that is about
+                   2.7 bars at 4 and 21 bars at 32, with 16 landing near the ten
+                   bar view a CDJ-3000 gives. A cell is only half width once two
+                   or more decks are loaded; a single deck gets the whole band
+                   and twice the bars. Those numbers are arithmetic. Measure on
+                   the panel before trusting them, and change the six values
+                   here if they feel wrong. No rebuild is needed for that.
+
+                   Writes [Waveform],waveform_default_zoom, the control added in
+                   waveformwidgetfactory.cpp. It clamps to 1..160, persists to
+                   the [Waveform] DefaultZoom config key and pushes to every
+                   live viewer, so all four decks move together. Nothing
+                   highlights until the first tap if the stored value is not one
+                   of these six, the same way the Wave row behaves for a type it
+                   does not offer.
+
+                   492f and GeneralCol both match the Wave row above, so the two
+                   rows line up and the #GeneralCol rules in style.qss give this
+                   one the same padding, 13px label and 12px segments with no
+                   QSS edit. -->
+              <WidgetGroup>
+                <ObjectName>GeneralCol</ObjectName>
+                <Layout>vertical</Layout>
+                <SizePolicy>me,max</SizePolicy>
+                <Children>
+                  <WidgetGroup>
+                    <ObjectName>SettingsRow</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>0me,52f</Size>
+                    <Children>
+                      <Label>
+                        <ObjectName>SettingsRowLabel</ObjectName>
+                        <Text>Zoom</Text>
+                        <Size>0me,0me</Size>
+                      </Label>
+                      <WidgetGroup>
+                        <ObjectName>SettingsSegmented</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>492f,40f</Size>
+                        <Children>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                            <SetVariable name="Text">4</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">4</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">8</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">8</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">12</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">12</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">16</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">16</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">24</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">24</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="Text">32</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">32</SetVariable>
+                          </Template>
+                        </Children>
+                      </WidgetGroup>
+                    </Children>
+                  </WidgetGroup>
+                </Children>
+              </WidgetGroup>
+
               <WidgetGroup>
                 <ObjectName>SettingsSpacer</ObjectName>
                 <Size>0me,0me</Size>

@@ -17,6 +17,11 @@ class WaveformRenderBeat : public WaveformRendererAbstract {
   private:
     QColor m_beatColor;
     QColor m_downbeatColor;
+    // CDJ style tick geometry, kept in step with allshader::WaveformRenderBeat.
+    // See setup() for the skin tags.
+    float m_beatTickFraction;
+    float m_beatTickMinPx;
+    float m_beatTickMaxPx;
     QVector<QLineF> m_beats;
     QVector<QLineF> m_fadingBeats;
     QVector<QLineF> m_downbeats;
