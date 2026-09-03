@@ -814,6 +814,14 @@ void LibraryControl::slotMoveFocus(double v) {
             ControlObject::set(ConfigKey(QStringLiteral("[Sidebar]"),
                                        QStringLiteral("sidebar_visible")),
                     1);
+            // Bite DJ: the CO write above is a no-op for focus on this skin.
+            // Stock skins bind pane visibility to sidebar_visible, so the
+            // write fires QEvent::Show on the sidebar and this class's
+            // eventFilter focuses it. BiteDJ-FLX6 dropped that binding at
+            // 1280 wide, where both panes fit side by side and are always
+            // visible, so nothing ever fires that show event. Explicit
+            // fallback, same pattern as slotGoToItem's leaf-tap path above.
+            setLibraryFocus(FocusWidget::Sidebar);
             return;
         }
     }

@@ -2,6 +2,12 @@
   <WidgetGroup>
     <ObjectName>WaveformCell<Variable name="channel"/></ObjectName>
     <Layout>vertical</Layout>
+    <!-- Both lines below are required together. setupSize skips its own
+         trailing setSizePolicy() call whenever a <SizePolicy> node is
+         already present, so the "min" suffix on <Size> below contributes
+         only setMinimumHeight(178); this <SizePolicy> node is what
+         actually sets me,me. Removing either half breaks the 2x2 grid's
+         collapse behaviour (docs/M4-SKIN-NOTES.md section 5, other repo). -->
     <SizePolicy>me,me</SizePolicy>
     <Size>0me,178min</Size>
     <Children>
@@ -46,6 +52,12 @@
             <Value>[Channel<Variable name="channel"/>],beatloop_size</Value>
             <ReadOnly>true</ReadOnly>
           </BeatSpinBox>
+          <!-- Deliberately empty: never carries a <Text>. Its name reads
+               like a dead readout that tidying would delete, but M4 made it
+               the header row's only expanding child (SizePolicy me,f), so
+               it is what right-aligns the quantize and keylock toggles that
+               follow. Delete it and both toggles slide left against the
+               beatloop spin box instead. -->
           <Label>
             <ObjectName>WaveformHeaderBars</ObjectName>
             <SizePolicy>me,f</SizePolicy>
