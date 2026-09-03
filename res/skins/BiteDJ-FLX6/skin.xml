@@ -46,12 +46,12 @@
 	<LaunchImageStyle>
       LaunchImage { background-color: #000 }
 	  QLabel {
-	    image: url(skin:/images/big_timber_logo.png);
+	    image: url(skin:/images/boot_mark.png);
 	    margin-bottom: 12px;
-        min-width: 800px;
-        min-height: 111px;
-        max-width: 800px;
-        max-height: 111px;
+        min-width: 964px;
+        min-height: 135px;
+        max-width: 964px;
+        max-height: 135px;
 	  }
       QProgressBar {
 	    background-color: #a7a9ac;
