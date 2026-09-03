@@ -1548,6 +1548,41 @@ WBeatSpinBox::up-button {
   font-size: 12px;
 }
 
+/* Eject at rest: the Cue chip's outline, so the pair reads as one row of
+ * chips and neither shouts. The armed state carries all the weight. */
+#DeckStripEjectChip {
+  border: 1px solid #855ea7;
+  border-radius: 2px;
+  color: #e7e8e9;
+  font-size: 12px;
+}
+
+#DeckStripEjectChip:pressed {
+  background-color: #2d6488;
+  color: #e5e6ea;
+}
+
+/* Armed: the USB eject button's danger red, deliberately. It is the same
+ * arm-then-confirm gesture in the same colour the user already met on the
+ * Settings page, and the only filled chip in the strip.
+ *
+ * 11px against the Cue chip's 12 because EJECT is five characters inside 44px
+ * less two borders. Measure it on the panel; if it still clips, widen both
+ * chips to 48f rather than shrinking the type again. */
+#DeckStripEjectChipArmed {
+  background-color: #7a2622;
+  border: 1px solid #c2453d;
+  border-radius: 2px;
+  color: #f0d5d2;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+#DeckStripEjectChipArmed:pressed {
+  background-color: #97302a;
+  color: #ffffff;
+}
+
 #DeckStripTitle {
   color: #e7e8e9;
   font-size: 15px;

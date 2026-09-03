@@ -1,8 +1,12 @@
 <!DOCTYPE template>
 <!--
   One deck's strip: what the FLX6 cannot show. Deck badge, key, BPM, title and
-  artist, elapsed time, the summary overview, and the chip that opens the cue
-  drawer on this deck.
+  artist, elapsed time, the summary overview, the chip that opens the cue
+  drawer on this deck, and the two-tap eject chip beside it.
+
+  That eject chip is the only deck eject on the appliance. The FLX6 binds
+  eject on a sampler pad's shift-press and nowhere else, so until it existed a
+  loaded deck could only be cleared by loading over it or restarting the app.
 
   The whole strip is bound to track_loaded, so an empty deck takes no width.
   Four loaded decks give each strip ~320px of the 1280; two give each ~640.
@@ -88,6 +92,97 @@
             <Connection>
               <ConfigKey>[Skin],cue_deck<Variable name="channel"/></ConfigKey>
               <EmitOnDownPress>true</EmitOnDownPress>
+            </Connection>
+          </PushButton>
+
+          <!-- Eject, two-tap. Two buttons share one slot and swap on
+               [Skin],eject_arm<channel>: exactly one is ever visible, and a
+               hidden widget takes no width, so the header does not shift when
+               it arms. The first tap only sets that control; nothing reaches
+               the engine until the second tap on the red one.
+
+               Why not a WidgetStack, which is what sampler.xml uses for the
+               same gesture: its page control lives in a currentpage=
+               attribute, and SkinContext does not expand <Variable> inside
+               attributes (skincontext.h, selectAttributeString reads
+               element.attribute() raw). A per-deck template cannot name a
+               per-deck control there. The visible swap is the same idiom
+               templates/cue_deck_page.xml uses for its two cue banks.
+
+               The armed page fires stop before eject, in document order,
+               because BaseTrackPlayerImpl::slotEjectTrack returns early while
+               [ChannelN],play is 1 and never stops the deck itself. Drop the
+               stop and ejecting a playing deck does nothing at all, with no
+               warning and no log line. Same pattern and same reason as
+               sampler.xml's UNLOAD button.
+
+               No enabled/track_loaded guard is needed here, unlike the
+               sampler's: the whole strip is bound to track_loaded at the foot
+               of this file, so an empty deck has no chip to tap and cannot
+               reach Mixxx's eject-on-empty "reload the last ejected track"
+               gesture.
+
+               There is no timeout. Skin XML has no timer, and a Connection
+               can only write widget properties, never controls, so nothing in
+               a skin can disarm this on a track load either. An armed chip
+               stays red until it is tapped. That is a state you can see,
+               rather than a hidden one. -->
+          <PushButton>
+            <ObjectName>DeckStripEjectChip</ObjectName>
+            <Size>44f,24f</Size>
+            <NumberStates>1</NumberStates>
+            <State>
+              <Number>0</Number>
+              <Text>EJ</Text>
+            </State>
+            <Connection>
+              <ConfigKey>[Skin],eject_arm<Variable name="channel"/></ConfigKey>
+              <ConnectValueToWidget>false</ConnectValueToWidget>
+              <EmitOnDownPress>true</EmitOnDownPress>
+              <Transform>
+                <IsEqual>1</IsEqual>
+              </Transform>
+            </Connection>
+            <Connection>
+              <ConnectValueFromWidget>false</ConnectValueFromWidget>
+              <ConfigKey>[Skin],eject_arm<Variable name="channel"/></ConfigKey>
+              <BindProperty>visible</BindProperty>
+              <Transform>
+                <Not/>
+              </Transform>
+            </Connection>
+          </PushButton>
+
+          <PushButton>
+            <ObjectName>DeckStripEjectChipArmed</ObjectName>
+            <Size>44f,24f</Size>
+            <NumberStates>1</NumberStates>
+            <State>
+              <Number>0</Number>
+              <Text>EJECT</Text>
+            </State>
+            <Connection>
+              <ConfigKey>[Channel<Variable name="channel"/>],stop</ConfigKey>
+              <ConnectValueToWidget>false</ConnectValueToWidget>
+              <EmitOnDownPress>true</EmitOnDownPress>
+            </Connection>
+            <Connection>
+              <ConfigKey>[Channel<Variable name="channel"/>],eject</ConfigKey>
+              <ConnectValueToWidget>false</ConnectValueToWidget>
+              <EmitOnDownPress>true</EmitOnDownPress>
+            </Connection>
+            <Connection>
+              <ConfigKey>[Skin],eject_arm<Variable name="channel"/></ConfigKey>
+              <ConnectValueToWidget>false</ConnectValueToWidget>
+              <EmitOnDownPress>true</EmitOnDownPress>
+              <Transform>
+                <IsEqual>0</IsEqual>
+              </Transform>
+            </Connection>
+            <Connection>
+              <ConnectValueFromWidget>false</ConnectValueFromWidget>
+              <ConfigKey>[Skin],eject_arm<Variable name="channel"/></ConfigKey>
+              <BindProperty>visible</BindProperty>
             </Connection>
           </PushButton>
         </Children>
