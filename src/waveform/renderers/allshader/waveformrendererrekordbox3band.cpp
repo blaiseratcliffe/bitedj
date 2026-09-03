@@ -7,6 +7,7 @@
 #include "waveform/rekordbox3bandwaveform.h"
 #include "waveform/renderers/allshader/matrixforwidgetgeometry.h"
 #include "waveform/renderers/waveformwidgetrenderer.h"
+#include "waveform/waveformwidgetfactory.h"
 
 namespace allshader {
 
@@ -96,11 +97,23 @@ void WaveformRendererRekordbox3Band::paintGL() {
         return;
     }
 
-    // Only the master gain. The three band pointers are deliberately null: the
-    // EQ knobs must not change the height of rekordbox's stored analysis, which
-    // is a recording of the track rather than of the mixer.
-    float allGain(1.0f);
-    getGains(&allGain, false, nullptr, nullptr, nullptr);
+    // The skin and preferences visual gain, and nothing from the mixer.
+    // getGains() would fold in WaveformWidgetRenderer::getGain(), which is the
+    // deck's total_gain: the pregain potmeter times EnginePregain's ReplayGain
+    // correction. PWV7 is already loudness normalised by rekordbox, so applying
+    // ReplayGain to it normalises the same thing twice, and because that
+    // correction fades in over EnginePregain's kFadeSeconds the picture visibly
+    // shrank about a second after every load. Measured before this changed: the
+    // drawn signal was 0.243 of what value/127 * halfBreadth predicts, and it
+    // stepped down by 1.77x one second in.
+    //
+    // Same reason the three band pointers below are null. This is a recording
+    // of the track, not of the mixer, and the pregain knob is the mixer just as
+    // much as the EQ knobs are. VisualGain is kept because it is the user's own
+    // waveform amplitude preference, a display setting rather than a mixer one.
+    const float allGain = static_cast<float>(
+            WaveformWidgetFactory::instance()->getVisualGain(
+                    WaveformWidgetFactory::All));
 
     const float breadth = static_cast<float>(m_waveformRenderer->getBreadth()) * devicePixelRatio;
     const float halfBreadth = breadth / 2.0f;
