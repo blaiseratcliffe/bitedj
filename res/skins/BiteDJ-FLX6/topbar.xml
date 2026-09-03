@@ -25,6 +25,17 @@
             <SetVariable name="tab_name">Levels</SetVariable>
             <SetVariable name="config_key">levels</SetVariable>
           </Template>
+          <!-- Fifth in the bar, but the LAST child of skin.xml's TabStack.
+               That mismatch is deliberate: button order and page order are
+               independent (a tab button only writes [Tab],<config_key>, and
+               WidgetStack matches on the trigger, not on position), and
+               appending the page keeps Settings at stack index 4, where
+               ControllerSettings' kSettingsTabIndex expects it. Moving this
+               template does nothing to the stack; do not "align" the two. -->
+          <Template src="skin:tab.xml">
+            <SetVariable name="tab_name">FX</SetVariable>
+            <SetVariable name="config_key">fx</SetVariable>
+          </Template>
           <Template src="skin:tab.xml">
             <SetVariable name="tab_name">Settings</SetVariable>
             <SetVariable name="config_key">settings</SetVariable>

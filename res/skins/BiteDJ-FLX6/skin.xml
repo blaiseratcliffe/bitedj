@@ -207,13 +207,29 @@
 								<!-- Child order is load-bearing: ControllerSettings
 								     navigates to Settings by index (overview=0,
 								     library=1, samplers=2, levels=3, settings=4).
-								     Reorder here and that constant must move too. -->
+								     Reorder here and that constant must move too.
+
+								     That is why FX is appended last, at index 5,
+								     even though its button sits fifth in the bar
+								     between LEVELS and SETTINGS. Button order and
+								     page order are independent, and inserting the
+								     page in bar order would push settings to 5 and
+								     silently send an unconfigured startup to the FX
+								     page instead of Settings -> Devices. -->
 								<SingletonContainer trigger="[Tab],levels" on_hide_select="0">
 									<ObjectName>Levels_Singleton</ObjectName>
 								</SingletonContainer>
 								<SingletonContainer trigger="[Tab],settings" on_hide_select="0">
 									<ObjectName>Settings_Singleton</ObjectName>
 								</SingletonContainer>
+								<WidgetGroup trigger="[Tab],fx" on_hide_select="0">
+									<ObjectName>FxPage</ObjectName>
+									<Layout>vertical</Layout>
+									<SizePolicy>me,me</SizePolicy>
+									<Children>
+										<Template src="skin:effects.xml"></Template>
+									</Children>
+								</WidgetGroup>
 							</Children>
 						</WidgetStack>
 					</Children>

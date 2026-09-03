@@ -1,8 +1,13 @@
 <!DOCTYPE template>
 <!--
-  The Play page, top to bottom: the 2x2 waveform grid with the FX/Key column
-  beside it, the library panel, then the deck strips or the cue drawer in their
-  place.
+  The Play page, top to bottom: the 2x2 waveform grid, the library panel, then
+  the deck strips or the cue drawer in their place.
+
+  The FX/Key panel used to sit in a 180px column beside the grid. It has its
+  own top-level tab now (effects.xml, mounted from skin.xml's TabStack), so the
+  waveforms have the full 1280 and the panel has a whole page instead of a
+  strip. Waveforms_Container is left in place with its one remaining child
+  because it is what gives the grid its me,me policy under Overview.
 
   The library band is fixed at 200f. It is the one element here that should not
   flex: the waveform grid above it absorbs every change in the strip band's
@@ -22,7 +27,6 @@
         <SizePolicy>me,me</SizePolicy>
         <Children>
           <Template src="skin:waveforms.xml"></Template>
-          <Template src="skin:effects.xml"></Template>
         </Children>
       </WidgetGroup>
 

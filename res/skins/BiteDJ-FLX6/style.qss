@@ -53,20 +53,63 @@ WPushButton[value="1"]:hover {
 /*     BeatFX                                                           */
 /************************************************************************/
 
+/* layoutSpacing, not a margin on the tab bar. A QSS margin on a plain widget
+ * in a layout is not reliably honoured here, and the 12px one on
+ * #FxPanel_TabBar measured as no gap at all, leaving the active purple sub-tab
+ * touching the active purple route button below it and reading as one shape.
+ * qproperty-layoutSpacing is a real WWidgetGroup property and does work. */
 #BeatFX_Container {
   padding: 8px;
-  qproperty-layoutAlignment: 'AlignCenter | AlignTop';
+  qproperty-layoutSpacing: 16;
 }
 
-#BeatFX_Header {
-  qproperty-layoutAlignment: 'AlignHCenter | AlignVCenter';
+/* The FX page: one column per effect slot, with the per-unit routing and mix
+ * rows above and below them.
+ *
+ * None of these carry a qproperty-layoutAlignment, deliberately. That property
+ * does nothing in this skin — WWidgetGroup::setLayoutAlignment calls the
+ * one-argument QLayout::setAlignment, which sets the layout's own alignment as
+ * an item in a parent layout, and every group here owns its layout outright.
+ * The trailing BeatFX_Spacer in each column is what actually packs its
+ * children to the top. The AlignVCenter #BeatFX_Header used to carry was inert
+ * as well; it only looked like it worked because that group had a fixed 140f
+ * height and so had no slack to misplace. */
+#BeatFX_SlotRow {
+  qproperty-layoutSpacing: 16;
 }
 
-/* FX / KEY page tabs. Same select-only bar as the Settings sub-tabs, sized
- * down to fit the 180px panel. */
-#FxPanel_TabBar {
-  margin: 0 0 6px 0;
+/* 4, not 8. The worst case is Graphic EQ: eight continuous parameters, so
+ * eight knob rows in one column. At a 44px knob and 4px spacing that is 384px
+ * against the ~450px a column has under the Active toggle. At 56 and 8 the
+ * eighth knob ran off the bottom of the screen. */
+#BeatFX_SlotColumn {
   qproperty-layoutSpacing: 4;
+}
+
+#BeatFX_UnitRow {
+  qproperty-layoutSpacing: 8;
+}
+
+/* Separates the route/mix row from the four slot columns below it. Again a
+ * layoutSpacing rather than a margin, for the reason given on the container. */
+#FxPanel_Page {
+  qproperty-layoutSpacing: 16;
+}
+
+#BeatFX_UnitLabel {
+  color: #a7a9ac;
+  font-size: 14px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+/* FX / KEY page tabs. Same select-only bar as the Settings sub-tabs. The group
+ * carries a fixed width in effects.xml rather than filling the row, because
+ * two buttons stretched across the whole 1280 tab would be absurd. The gap
+ * below it comes from #BeatFX_Container's layoutSpacing, not from a margin
+ * here; the margin this rule used to carry measured as no gap at all. */
+#FxPanel_TabBar {
+  qproperty-layoutSpacing: 8;
 }
 
 #FxPanel_TabBar WPushButton {
@@ -84,9 +127,10 @@ WPushButton[value="1"]:hover {
   color: #e7e8e9;
 }
 
-#FxPanel_Page {
-  qproperty-layoutAlignment: 'AlignTop';
-}
+/* The AlignTop this rule used to carry was inert (see the note above
+ * #BeatFX_SlotRow); the FX page's own row policies do the packing, and the
+ * KEY page's blocks are held up by their me,max wrappers. The one live
+ * property for this selector is the layoutSpacing set further up. */
 
 /************************************************************************/
 /*     Cue drawer                                                       */
@@ -245,11 +289,10 @@ WPushButton[value="1"]:hover {
 
 /* Deck-routing toggles for [EffectRack1_EffectUnit1]. All four share one active
  * colour: the deck strips carry no per-deck colour any more, so there is no
- * per-deck colour system here to mirror. */
-#BeatFX_DeckRouting {
-  qproperty-layoutSpacing: 4;
-  padding: 4px 0;
-}
+ * per-deck colour system here to mirror. The group that held them was called
+ * BeatFX_DeckRouting while it was a row inside the old narrow header; it is
+ * BeatFX_UnitRow now and also carries the mix readout, so its rule lives with
+ * the other FX page rules further up. */
 
 #BeatFX_DeckAssign1,
 #BeatFX_DeckAssign2,
@@ -289,8 +332,10 @@ WPushButton[value="1"]:hover {
 }
 
 /* KEY page: one stacked block per deck, +/-2 semitone nudges and reset. */
+/* Four blocks share the KEY page's row, so the padding is now a gutter
+ * between columns rather than a gap between stacked rows. */
 #KeyFX_DeckBlock {
-  padding: 0 0 10px 0;
+  padding: 0 12px;
 }
 
 #KeyFX_DeckHeader {
@@ -330,12 +375,12 @@ WPushButton[value="1"]:hover {
   border: 1px solid #3a3a3a;
   border-radius: 3px;
   color: #a7a9ac;
-  font-size: 16px;
+  font-size: 22px;
   font-weight: bold;
 }
 
 #KeyFX_Reset {
-  font-size: 13px;
+  font-size: 16px;
   text-transform: uppercase;
 }
 
@@ -572,10 +617,28 @@ WLabel {
   image: url(skin:icons/keylock.svg) no-repeat center center;
 }
 
-/* A 1px gutter between the two cells in a row, so adjacent waveforms read as
- * two pictures rather than one wide one. */
-#WaveformCell1, #WaveformCell3 {
-  margin-right: 1px;
+/* The gutter between the two cells in a row, so adjacent waveforms read as two
+ * pictures rather than one wide one. At 1px they did not: both panes draw on
+ * #000 and butt together, and two loaded decks looked like one continuous
+ * waveform. 6px was measured on the panel and judged still too tight.
+ *
+ * The margin comes out of the right-hand cell's own share, so the panes are
+ * not equal: measured at 6px, deck 1 got 640 and deck 2 got 634. Splitting it
+ * 5px a side would even that up at the cost of a stray stripe against the
+ * panel edge whenever one cell of a row is hidden, which is the common case.
+ *
+ * It hangs off the right-hand cell, not the left one, because a hidden widget
+ * contributes no margin. Deck 1 alone and the three-deck case (deck 3 spanning
+ * the whole bottom row) both hide the cell that carries it, so neither gets a
+ * stray stripe against the panel edge. Deck 2 or deck 4 loaded alone still
+ * does, on its left; that is the rarer way to load and the cheaper wart.
+ *
+ * Transparent on purpose, so it shows #Mixxx's black. Do not paint it by
+ * giving #WaveformRowTop or #WaveformRowBottom a background: with no decks
+ * loaded both cells are hidden and the top row still expands to the whole
+ * 355px band, which would put a 1280x355 slab of that colour on the screen. */
+#WaveformCell2, #WaveformCell4 {
+  margin-left: 10px;
 }
 
 WBeatSpinBox {
@@ -603,8 +666,9 @@ WBeatSpinBox::up-button {
   background-color: #855ea7;
 }
 
-/* Five tabs share the bar. At 1280 each cell is ~250px, so the constraint is
- * vertical, not horizontal: the bar is 44px tall and that whole 44px is the
+/* Six tabs share the bar. At 1280 each cell is ~213px, still clear of the
+ * 250px cap below, so the constraint is vertical, not horizontal: the bar is
+ * 44px tall and that whole 44px is the
  * button's clickable target (a QSS margin insets painting, not hit
  * geometry — WPushButton's widget rect, not its painted rect, is what
  * receives the tap). The 4px top/bottom margin only shrinks what's painted,

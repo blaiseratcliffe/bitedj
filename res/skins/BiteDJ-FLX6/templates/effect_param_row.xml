@@ -1,19 +1,13 @@
 <!--
-  One parameter row in the BeatFX column. Visibility binds to
-  parameter{N}_loaded so the row collapses when an effect doesn't expose
-  this slot.
+  One parameter row in an effect slot column on the FX tab. Visibility binds
+  to parameter{N}_loaded so the row collapses when an effect doesn't expose
+  this slot. Slot index N is positional within the loaded effect, not tied to
+  a named parameter.
 
-  Only Beats-typed parameters (parameter{N}_units == 1) render by
-  default; their bucket picker is the whole control surface. Continuous
-  knobs ate too much vertical space at 800x480 and collided with deck
-  select, so non-Beats slots collapse unless opted back in per slot via
-  mixxx.cfg:
-
-    [Skin]
-    beatfx_show_param3 1
-
-  (persisted CO, defaults to 0 — slot index N is positional within the
-  loaded effect, not tied to a named parameter).
+  Both kinds of parameter render. Beats-typed ones (parameter{N}_units == 1)
+  get the bucket picker below; everything else gets a continuous knob. The
+  knob used to be hidden behind a [Skin],beatfx_show_param{N} opt-in, for
+  reasons that expired when this panel became a tab: see branch B.
 
   Bucket mapping: labels read as period in beats (⅛, ¼, ½, 1, 2, 4),
   and the written value is rate in cycles per beat (1/period). Matches
@@ -34,7 +28,13 @@
   <WidgetGroup>
     <ObjectName>BeatFX_ParamRow</ObjectName>
     <Layout>vertical</Layout>
-    <SizePolicy>me,min</SizePolicy>
+    <!-- max, not min. QSizePolicy::Minimum carries the grow flag, so with
+         min these rows expanded and split the column's slack with the
+         trailing BeatFX_Spacer: a single-parameter effect drew its one knob
+         centred halfway down the column instead of under the Active toggle.
+         Maximum can only shrink, so the row hugs its content and the spacer
+         takes the rest. -->
+    <SizePolicy>me,max</SizePolicy>
     <Children>
 
       <!--
@@ -124,8 +124,17 @@
       </WidgetGroup>
 
       <!--
-        Branch B (non-Beats parameters): label + continuous knob.
-        Hidden unless [Skin],beatfx_show_param{N} is set in mixxx.cfg.
+        Branch B (non-Beats parameters): label + continuous knob. Shown
+        whenever the slot is loaded and its parameter is not Beats-typed.
+
+        It used to be hidden behind a persisted [Skin],beatfx_show_param{N}
+        opt-in, because at 800x480 in a 180px side column the knobs ate the
+        vertical space the deck select needed. That column is gone: this is a
+        whole 1280x676 tab now, four slot columns of about 300px each, and the
+        room the opt-in was rationing does not need rationing. Leaving it in
+        made the page actively wrong: Loudness and Graphic EQ expose only
+        continuous parameters, so loading either one filled its column with
+        nothing at all.
       -->
       <WidgetGroup>
         <Layout>horizontal</Layout>
@@ -149,7 +158,7 @@
 
               <EffectParameterKnobComposed>
                 <ObjectName>BeatFX_ParamKnob</ObjectName>
-                <Size>40f,40f</Size>
+                <Size>44f,44f</Size>
                 <Knob scalemode="STRETCH_ASPECT">icons/knob.svg</Knob>
                 <MinAngle>-230</MinAngle>
                 <MaxAngle>50</MaxAngle>
@@ -173,10 +182,6 @@
             </Connection>
           </WidgetGroup>
         </Children>
-        <Connection>
-          <ConfigKey persist="true">[Skin],beatfx_show_param<Variable name="param"/></ConfigKey>
-          <BindProperty>visible</BindProperty>
-        </Connection>
       </WidgetGroup>
 
     </Children>

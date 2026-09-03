@@ -1,0 +1,120 @@
+<!--
+  One effect slot's column on the FX page. Four of these sit side by side,
+  because a unit has four slots: StandardEffectChain's constructor
+  (chains/standardeffectchain.cpp:14-16) adds kNumEffectsPerUnit of them, and
+  that constant is 4 (effects/defs.h:41). The skin only ever exposed slot 1
+  while this panel was a 180px column; there was no room for the rest.
+
+  What is per-slot and what is not matters here. `enabled` and the effect
+  selector are per-slot, so they live in this file. Deck routing
+  (group_[ChannelN]_enable) and `mix` are per-UNIT and stay in effects.xml as
+  single full-width rows above and below the four columns. Wiring routing per
+  column would write the same four controls from four places.
+
+  Eight parameter rows, not the sixteen a single column used to carry. Slot
+  index is positional within the loaded effect, so the count is a ceiling on
+  which slots can ever show, and the busiest bundled effects declare seven
+  parameters (Tremolo, Phaser and Compressor, counted in
+  effects/backends/builtin). Eight clears all of them with one to spare, and
+  four columns of eight is half the widget count four columns of sixteen would
+  have built. Raise it only if a real effect turns out to put a Beats-typed
+  parameter in slot 9 or beyond.
+
+  Variables:
+    rack, unit, effect: the slot's coordinates, e.g. 1, 1, 3
+-->
+<Template>
+  <WidgetGroup>
+    <ObjectName>BeatFX_SlotColumn</ObjectName>
+    <Layout>vertical</Layout>
+    <SizePolicy>me,me</SizePolicy>
+    <Children>
+
+      <EffectSelector>
+        <ObjectName>EffectSelector</ObjectName>
+        <EffectRack><Variable name="rack"/></EffectRack>
+        <EffectUnit><Variable name="unit"/></EffectUnit>
+        <Effect><Variable name="effect"/></Effect>
+        <Elide>right</Elide>
+        <Size>0me,48f</Size>
+      </EffectSelector>
+
+      <PushButton>
+        <ObjectName>BeatFX_ActiveToggle</ObjectName>
+        <Size>0me,52f</Size>
+        <NumberStates>2</NumberStates>
+        <State>
+          <Number>0</Number>
+          <Text>Off</Text>
+        </State>
+        <State>
+          <Number>1</Number>
+          <Text>Active</Text>
+        </State>
+        <Connection>
+          <ConfigKey>[EffectRack<Variable name="rack"/>_EffectUnit<Variable name="unit"/>_Effect<Variable name="effect"/>],enabled</ConfigKey>
+          <ConnectValueToWidget>true</ConnectValueToWidget>
+        </Connection>
+      </PushButton>
+
+      <Template src="skin:templates/effect_param_row.xml">
+        <SetVariable name="rack"><Variable name="rack"/></SetVariable>
+        <SetVariable name="unit"><Variable name="unit"/></SetVariable>
+        <SetVariable name="effect"><Variable name="effect"/></SetVariable>
+        <SetVariable name="param">1</SetVariable>
+      </Template>
+      <Template src="skin:templates/effect_param_row.xml">
+        <SetVariable name="rack"><Variable name="rack"/></SetVariable>
+        <SetVariable name="unit"><Variable name="unit"/></SetVariable>
+        <SetVariable name="effect"><Variable name="effect"/></SetVariable>
+        <SetVariable name="param">2</SetVariable>
+      </Template>
+      <Template src="skin:templates/effect_param_row.xml">
+        <SetVariable name="rack"><Variable name="rack"/></SetVariable>
+        <SetVariable name="unit"><Variable name="unit"/></SetVariable>
+        <SetVariable name="effect"><Variable name="effect"/></SetVariable>
+        <SetVariable name="param">3</SetVariable>
+      </Template>
+      <Template src="skin:templates/effect_param_row.xml">
+        <SetVariable name="rack"><Variable name="rack"/></SetVariable>
+        <SetVariable name="unit"><Variable name="unit"/></SetVariable>
+        <SetVariable name="effect"><Variable name="effect"/></SetVariable>
+        <SetVariable name="param">4</SetVariable>
+      </Template>
+      <Template src="skin:templates/effect_param_row.xml">
+        <SetVariable name="rack"><Variable name="rack"/></SetVariable>
+        <SetVariable name="unit"><Variable name="unit"/></SetVariable>
+        <SetVariable name="effect"><Variable name="effect"/></SetVariable>
+        <SetVariable name="param">5</SetVariable>
+      </Template>
+      <Template src="skin:templates/effect_param_row.xml">
+        <SetVariable name="rack"><Variable name="rack"/></SetVariable>
+        <SetVariable name="unit"><Variable name="unit"/></SetVariable>
+        <SetVariable name="effect"><Variable name="effect"/></SetVariable>
+        <SetVariable name="param">6</SetVariable>
+      </Template>
+      <Template src="skin:templates/effect_param_row.xml">
+        <SetVariable name="rack"><Variable name="rack"/></SetVariable>
+        <SetVariable name="unit"><Variable name="unit"/></SetVariable>
+        <SetVariable name="effect"><Variable name="effect"/></SetVariable>
+        <SetVariable name="param">7</SetVariable>
+      </Template>
+      <Template src="skin:templates/effect_param_row.xml">
+        <SetVariable name="rack"><Variable name="rack"/></SetVariable>
+        <SetVariable name="unit"><Variable name="unit"/></SetVariable>
+        <SetVariable name="effect"><Variable name="effect"/></SetVariable>
+        <SetVariable name="param">8</SetVariable>
+      </Template>
+
+      <!-- Packs the rows to the top of the column. Nothing above it can
+           absorb slack: the selector and the toggle are fixed heights and a
+           parameter row is me,min. qproperty-layoutAlignment does not do this
+           job in this skin (see effects.xml). -->
+      <WidgetGroup>
+        <ObjectName>BeatFX_Spacer</ObjectName>
+        <Size>0me,0me</Size>
+      </WidgetGroup>
+
+    </Children>
+  </WidgetGroup>
+</Template>
