@@ -187,9 +187,16 @@ void WaveformRendererTextured::createGeometry() {
 
 void WaveformRendererTextured::createFrameBuffers() {
     const float devicePixelRatio = m_waveformRenderer->getDevicePixelRatio();
-    // We create a frame buffer that is 4x the size of the renderer itself to
+    // We create a frame buffer larger than the renderer itself to
     // "oversample" the texture relative to the surface we're drawing on.
-    constexpr int oversamplingFactor = 4;
+    //
+    // BiteDJ delta: upstream uses 4. On the Pi 5's V3D GPU that asks for a
+    // buffer of roughly 4400x1424 at this panel's waveform size, which is
+    // over the maximum renderbuffer dimension, so the FBO comes back invalid
+    // and both textured waveforms (Filt HD, Stack HD) paint a white pane.
+    // The only symptom is a createFrameBuffer warning in the log. 2 keeps the
+    // oversampling well inside the limit at 1280x720.
+    constexpr int oversamplingFactor = 2;
     const auto bufferWidth = oversamplingFactor *
             static_cast<int>(m_waveformRenderer->getWidth() * devicePixelRatio);
     const auto bufferHeight = oversamplingFactor *
