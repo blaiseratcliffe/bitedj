@@ -16,6 +16,17 @@
 			<attribute persist="true" config_key="[Skin],show_preview_decks">0</attribute>
 			<attribute persist="true" config_key="[Skin],show_library_coverart">0</attribute>
 			<attribute config_key="[Sidebar],sidebar_visible">1</attribute>
+			<!-- The Play page waveform grid's per-row cell floor, in pixels.
+			     No C++ owns these keys, so this manifest creates them: a
+			     persisted ControlPushButton whose TOGGLE mode only affects
+			     MIDI, leaving setParameter/getParameter identity, so it holds
+			     a pixel count perfectly well. waveform.xml binds each cell's
+			     minimumHeight to one of them; the bottom one is what the
+			     Settings General page's Split row writes. persist="true" seeds
+			     mixxx.cfg only when the key is absent, so a user's choice
+			     wins over the default on every later launch. -->
+			<attribute persist="true" config_key="[BiteDJ],waveform_min_top">178</attribute>
+			<attribute persist="true" config_key="[BiteDJ],waveform_min_bottom">142</attribute>
 		</attributes>
 	</manifest>
 

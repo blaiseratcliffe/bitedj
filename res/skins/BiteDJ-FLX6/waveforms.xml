@@ -6,11 +6,31 @@
   makes an unused pair cost nothing. The bottom row is `max` with no <Size>,
   so it is exactly as tall as its visible cells and collapses to nothing when
   both are hidden. The top row is `me`, so it expands into whatever the bottom
-  row does not take. Each cell carries a 178px minimum, so:
+  row does not take.
 
-    four decks   top 178, bottom 178   an even grid
-    two decks    top 356, bottom 0     full height for the pair in use
-    deck 3 only  top 178, bottom 178   deck 3 spans the full width
+  That is also the whole mechanism behind the 60/40 split. There is no stretch
+  factor in this skin system at all: WWidgetGroup::addWidget calls
+  QLayout::addWidget with no stretch argument, and setupSize parses only Size,
+  SizePolicy, MinimumSize and MaximumSize. So the one number that decides how
+  the two rows divide the band is the bottom cells' minimum height, and the top
+  row takes whatever is left. Each row's cells bind minimumHeight to their own
+  control (below), seeded by skin.xml's manifest and, for the bottom row,
+  written by the Split row on Settings -> General.
+
+  Measured on the panel at 1280x720, the band is 355px: y=45 to y=399, under
+  the topbar and over the library band's top border. At the shipped default of
+  top 178, bottom 142:
+
+    four decks   top 213, bottom 142   the 60/40 split
+    two decks    top 355, bottom 0     full height for the pair in use
+    three decks  top 213, bottom 142   deck 3 spans the full width
+
+  The other three Split settings measure top 177/195/230 against bottom
+  178/160/125, all within 0.2 points of the ratio on their label.
+
+  Deck 3 alone in the bottom row gets the 40% height, not half the band. There
+  is no way to condition a height on how many decks are loaded, for the same
+  reason the next paragraph gives about visibility.
 
   Binding a row's visibility to "either of its decks is loaded" is not
   expressible here (one Connection carries one ConfigKey, and two of them
@@ -33,9 +53,11 @@
         <Children>
           <Template src="skin:waveform.xml">
             <SetVariable name="channel">1</SetVariable>
+            <SetVariable name="minHeightKey">[BiteDJ],waveform_min_top</SetVariable>
           </Template>
           <Template src="skin:waveform.xml">
             <SetVariable name="channel">2</SetVariable>
+            <SetVariable name="minHeightKey">[BiteDJ],waveform_min_top</SetVariable>
           </Template>
         </Children>
       </WidgetGroup>
@@ -47,9 +69,11 @@
         <Children>
           <Template src="skin:waveform.xml">
             <SetVariable name="channel">3</SetVariable>
+            <SetVariable name="minHeightKey">[BiteDJ],waveform_min_bottom</SetVariable>
           </Template>
           <Template src="skin:waveform.xml">
             <SetVariable name="channel">4</SetVariable>
+            <SetVariable name="minHeightKey">[BiteDJ],waveform_min_bottom</SetVariable>
           </Template>
         </Children>
       </WidgetGroup>

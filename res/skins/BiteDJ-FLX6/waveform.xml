@@ -7,7 +7,14 @@
          already present, so the "min" suffix on <Size> below contributes
          only setMinimumHeight(178); this <SizePolicy> node is what
          actually sets me,me. Removing either half breaks the 2x2 grid's
-         collapse behaviour (docs/M4-SKIN-NOTES.md section 5, other repo). -->
+         collapse behaviour (docs/M4-SKIN-NOTES.md section 5, other repo).
+
+         The 178 is now only a parse-time fallback. The minHeightKey
+         connection at the foot of this file overwrites it in its own
+         constructor, so the live floor is whatever that control holds. It
+         still matters that the suffix is "min" and not "f": a bare f gets
+         setFixedHeight, which pins the maximum too, and a bound minimum
+         above a fixed maximum lays out wrong. -->
     <SizePolicy>me,me</SizePolicy>
     <Size>0me,178min</Size>
     <Children>
@@ -252,6 +259,17 @@
     <Connection>
       <ConfigKey>[Channel<Variable name="channel"/>],track_loaded</ConfigKey>
       <BindProperty>visible</BindProperty>
+    </Connection>
+    <!-- The cell's live height floor, set by waveforms.xml per row. The
+         property name has to be exactly minimumHeight: it is a real QWidget
+         Q_PROPERTY, so the write lands on setMinimumHeight() and Qt
+         invalidates the layout itself. Misspell it and there is no warning
+         and no crash. ControlWidgetPropertyConnection falls back to setting
+         a dynamic property of that name, which repolishes the style and
+         resizes nothing at all. -->
+    <Connection>
+      <ConfigKey><Variable name="minHeightKey"/></ConfigKey>
+      <BindProperty>minimumHeight</BindProperty>
     </Connection>
   </WidgetGroup>
 </Template>

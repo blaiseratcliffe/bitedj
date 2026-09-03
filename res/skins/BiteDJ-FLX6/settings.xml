@@ -631,6 +631,72 @@
                 </Children>
               </WidgetGroup>
 
+              <!-- How the Play page splits its waveform band between the deck
+                   1|2 row and the deck 3|4 row. The number written is the
+                   bottom row's cell floor in pixels, because that floor is the
+                   only lever this skin system has: there is no stretch factor,
+                   so the bottom row takes its cells' minimum and the top row
+                   takes the rest. waveforms.xml carries the arithmetic.
+
+                   The labels are the ratio, the values are pixels against a
+                   band measured at 355. Re-measure the band before changing
+                   them; do not recompute from a layout budget on paper.
+
+                   Four buttons at the Wave row's 82px a cell is 328f. Same
+                   GeneralCol name as its neighbour above, so the #GeneralCol
+                   rules in style.qss give it the same padding, 13px label and
+                   12px segments with no QSS edit. -->
+              <WidgetGroup>
+                <ObjectName>GeneralCol</ObjectName>
+                <Layout>vertical</Layout>
+                <SizePolicy>me,max</SizePolicy>
+                <Children>
+                  <WidgetGroup>
+                    <ObjectName>SettingsRow</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>0me,52f</Size>
+                    <Children>
+                      <Label>
+                        <ObjectName>SettingsRowLabel</ObjectName>
+                        <Text>Split</Text>
+                        <Size>0me,0me</Size>
+                      </Label>
+                      <WidgetGroup>
+                        <ObjectName>SettingsSegmented</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>328f,40f</Size>
+                        <Children>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                            <SetVariable name="Text">50/50</SetVariable>
+                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
+                            <SetVariable name="Value">178</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">55/45</SetVariable>
+                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
+                            <SetVariable name="Value">160</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">60/40</SetVariable>
+                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
+                            <SetVariable name="Value">142</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="Text">65/35</SetVariable>
+                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
+                            <SetVariable name="Value">125</SetVariable>
+                          </Template>
+                        </Children>
+                      </WidgetGroup>
+                    </Children>
+                  </WidgetGroup>
+                </Children>
+              </WidgetGroup>
+
               <WidgetGroup>
                 <ObjectName>SettingsSpacer</ObjectName>
                 <Size>0me,0me</Size>
