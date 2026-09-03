@@ -438,8 +438,19 @@ WEffectSelector QAbstractItemView {
   background-color: #32323c;
   color: #e5e6ea;
   font-weight: bold;
-  font-size: 18px;
-  margin: 2px;
+  font-size: 12px;
+  /* Measured: the section's own sizeHint is floored by the table's config
+   * font (22px metrics), not by font-size above, so dropping 18px to 12px
+   * took the cell from only 28px to 26px and left the slack sitting below
+   * the text (4px above, 13px below). height pins the cell; the vertical
+   * margin was 4px more of the same slack. Keep the horizontal 2px, which
+   * is what separates one column heading from the next.
+   * Measured result: a 13px cell with the 9px text balanced 2px above and
+   * 2px below, against 26px and 4/13 before. The sort indicator still
+   * draws. Reach for height here, not font-size. */
+  margin: 0px 2px;
+  padding: 0px;
+  height: 14px;
   text-transform: uppercase;
 }
 
@@ -458,7 +469,7 @@ WEffectSelector QAbstractItemView {
   selection-background-color: #e5e6ea;
   color: white;
   selection-color: black;
-  font-size: 18px;
+  font-size: 14px;
   padding-top: 5px;
   padding-bottom: 5px;
 }
@@ -469,7 +480,7 @@ WEffectSelector QAbstractItemView {
   border-left: 4px solid gray;
   color: #e5e6ea;
   font-weight: bold;
-  font-size: 24px;
+  font-size: 15px;
   selection-color: black;
   text-transform: uppercase;
 }

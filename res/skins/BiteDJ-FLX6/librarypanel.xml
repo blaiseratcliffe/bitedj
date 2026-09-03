@@ -33,7 +33,7 @@
       <WidgetGroup>
         <ObjectName>LibraryPanel_Sidebar</ObjectName>
         <Layout>vertical</Layout>
-        <Size>260f,0me</Size>
+        <Size>180f,0me</Size>
         <Children>
           <LibraryBreadcrumb>
             <ObjectName>LibraryBreadcrumb</ObjectName>
