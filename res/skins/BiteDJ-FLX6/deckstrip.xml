@@ -47,6 +47,13 @@
               <ConfigKey>[Channel<Variable name="channel"/>],sync_leader</ConfigKey>
               <BindProperty>master</BindProperty>
             </Connection>
+            <!-- The assumed reference when nobody has taken the leader role:
+                 EngineSync picks the playing deck. Styled dimmer than master, so
+                 the chip says whether the deck was chosen or merely inferred. -->
+            <Connection>
+              <ConfigKey>[Channel<Variable name="channel"/>],sync_reference</ConfigKey>
+              <BindProperty>reference</BindProperty>
+            </Connection>
           </Label>
           <Key>
             <ObjectName>DeckStripKey</ObjectName>

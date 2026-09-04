@@ -1605,6 +1605,16 @@ WBeatSpinBox::up-button {
   color: #f15921;
 }
 
+/* The assumed reference: no deck has taken the leader role, so EngineSync fell
+ * back to the playing deck and syncreference.cpp published it. Muted, because
+ * this is an inference rather than something the user asked for. Must come
+ * before the master rules: the leader is always also the reference, both
+ * properties are 1 on that deck, and equal specificity means last wins. */
+#DeckStripBadge[reference="1"] {
+  background-color: #241b30;
+  border-color: #55446b;
+}
+
 /* Sync leader. Set border and fill only, never color, so playing and master
  * compose: an orange DECK1 inside a purple chip is both at once. States 1 and
  * 2 are soft and explicit leader; explicit is unreachable today because

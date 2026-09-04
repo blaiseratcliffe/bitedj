@@ -7,6 +7,7 @@
 #include "effects/effectsmanager.h"
 #include "engine/channels/enginedeck.h"
 #include "engine/enginemixer.h"
+#include "engine/sync/syncreference.h"
 #include "library/library.h"
 #include "library/trackcollectionmanager.h"
 #include "mixer/auxiliary.h"
@@ -138,6 +139,11 @@ PlayerManager::PlayerManager(UserSettingsPointer pConfig,
 
     // This is parented to the PlayerManager so does not need to be deleted
     m_pSamplerBank = new SamplerBank(m_pConfig, this);
+
+    // Bite DJ fork: republishes EngineSync's sync target as a control. Built
+    // here rather than in the init list so it does not constrain member order,
+    // and it is empty until addDeckInner registers each deck.
+    m_pSyncReference = std::make_unique<SyncReference>(m_pEngine->getEngineSync(), this);
 
     m_cloneTimer.start();
 }
@@ -387,6 +393,10 @@ void PlayerManager::addDeckInner() {
 
     m_players[handleGroup.handle()] = pDeck;
     m_decks.append(pDeck);
+
+    // Bite DJ fork: give the deck its sync_reference control and start
+    // watching it. After the append so the deck is fully registered.
+    m_pSyncReference->addDeck(handleGroup.name());
 
     // Register the deck output with SoundManager.
     m_pSoundManager->registerOutput(

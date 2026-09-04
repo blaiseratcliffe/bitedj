@@ -25,6 +25,7 @@ class Microphone;
 class PreviewDeck;
 class Sampler;
 class SamplerBank;
+class SyncReference;
 class SoundManager;
 class ControlProxy;
 
@@ -283,6 +284,10 @@ class PlayerManager : public PlayerManagerInterface {
     std::unique_ptr<ControlObject> m_pCONumMicrophones;
     std::unique_ptr<ControlObject> m_pCONumAuxiliaries;
     parented_ptr<ControlProxy> m_pAutoDjEnabled;
+
+    // Bite DJ fork: publishes [ChannelN],sync_reference. Constructed in the
+    // ctor body, not the init list, so it does not care where it sits here.
+    std::unique_ptr<SyncReference> m_pSyncReference;
 
     TrackAnalysisScheduler::Pointer m_pTrackAnalysisScheduler;
 

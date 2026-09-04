@@ -599,6 +599,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/engine/sidechain/networkoutputstreamworker.cpp
   src/engine/sync/enginesync.cpp
   src/engine/sync/internalclock.cpp
+  src/engine/sync/syncreference.cpp
   src/engine/sync/synccontrol.cpp
   src/errordialoghandler.cpp
   src/library/analysis/analysisfeature.cpp
