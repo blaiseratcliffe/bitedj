@@ -27,6 +27,7 @@
 // GL free by design, so a QPainter based widget can share the renderer's
 // calibration and its colour and height helpers verbatim.
 #include "waveform/renderers/allshader/rekordbox3bandcalibration.h"
+#include "waveform/renderers/allshader/rekordbox3bandcalibrationio.h"
 #include "waveform/waveform.h"
 #include "waveform/waveformwidgetfactory.h"
 #include "widget/controlwidgetconnection.h"
@@ -1540,9 +1541,13 @@ bool WOverview::drawRekordbox3BandOverview() {
         return false;
     }
 
-    // Fixed in code, exactly as in the scrolling renderer, so that a skin
-    // swapping its RGB palette cannot repaint rekordbox's own analysis.
-    const mixxx::Rekordbox3BandCalibration calibration{};
+    // Never read from the skin, so that a skin swapping its RGB palette cannot
+    // repaint rekordbox's own analysis. Shared with the scrolling renderer
+    // rather than default-constructed here: both draw the same track with the
+    // same rules, and a calibration file in the settings directory has to reach
+    // both or the strip and the waveform above it stop agreeing.
+    const mixxx::Rekordbox3BandCalibration& calibration =
+            mixxx::rekordbox3BandCalibration();
 
     // PWV6 is stored on a different and smaller scale than PWV7. A positive
     // pwv6FullScale is a fixed divisor; the default of 0.0 means normalise to

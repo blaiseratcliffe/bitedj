@@ -941,6 +941,24 @@ WBeatSpinBox::up-button {
   min-width: 60px;
 }
 
+/* The General page's ZOOM row carries seven segments in the same fixed 492f
+ * container the six-segment WAVE row above it uses, so that the two rows line
+ * up. Seven at the shared 80px min-width would need 560px and overflow. 68px
+ * gives 476px, which both fits and stays within four pixels of the WAVE row's
+ * 480px, so the two still read as one block. The labels are one or two digits
+ * at 14px, far short of what 68px holds. Measure it on the panel rather than
+ * trusting this arithmetic; section 4 of docs/M4-SKIN-NOTES.md exists because
+ * an omitted QSS term is exactly how these budgets go wrong. */
+#ZoomSegmented {
+  qproperty-layoutAlignment: 'AlignRight | AlignVCenter';
+}
+
+#ZoomSegmented #SettingsSegmentLeft,
+#ZoomSegmented #SettingsSegmentMid,
+#ZoomSegmented #SettingsSegmentRight {
+  min-width: 68px;
+}
+
 #SettingsSegmentLeft {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;

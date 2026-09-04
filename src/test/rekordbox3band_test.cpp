@@ -27,6 +27,7 @@
 #include "test/mixxxtest.h"
 #include "track/track.h"
 #include "waveform/renderers/allshader/rekordbox3bandcalibration.h"
+#include "waveform/renderers/allshader/rekordbox3bandcalibrationio.h"
 #include "waveform/waveform.h"
 #include "waveform/widgets/waveformwidgettype.h"
 
@@ -584,6 +585,168 @@ TEST(Rekordbox3BandCalibrationTest, ScaleHeightClampsToTheHalfHeight) {
                     static_cast<uint8_t>(255), 127.0f, 1.0f, 1.0f, 100.0f, 1.0f));
 }
 
+namespace {
+
+QJsonObject jsonFrom(const char* text) {
+    QJsonParseError error{};
+    const QJsonDocument document = QJsonDocument::fromJson(QByteArray(text), &error);
+    EXPECT_EQ(QJsonParseError::NoError, error.error) << error.errorString().toStdString();
+    return document.object();
+}
+
+} // namespace
+
+TEST(Rekordbox3BandCalibrationIoTest, AnEmptyObjectKeepsEveryDefault) {
+    const mixxx::Rekordbox3BandCalibration defaults;
+    QStringList warnings;
+    const mixxx::Rekordbox3BandCalibration cal =
+            mixxx::rekordbox3BandCalibrationFromJson(jsonFrom("{}"), defaults, &warnings);
+    EXPECT_TRUE(warnings.isEmpty()) << warnings.join("; ").toStdString();
+    EXPECT_FLOAT_EQ(defaults.lowHeightScale, cal.lowHeightScale);
+    EXPECT_FLOAT_EQ(defaults.midHeightScale, cal.midHeightScale);
+    EXPECT_FLOAT_EQ(defaults.highHeightScale, cal.highHeightScale);
+    EXPECT_EQ(defaults.columnRule, cal.columnRule);
+    EXPECT_EQ(defaults.lowMidHigh.rgb(), cal.lowMidHigh.rgb());
+}
+
+TEST(Rekordbox3BandCalibrationIoTest, APartialFileChangesOnlyWhatItNames) {
+    // The reason the overlay exists: re-tuning the balance on the device should
+    // be three lines, not a copy of every field.
+    const mixxx::Rekordbox3BandCalibration defaults;
+    QStringList warnings;
+    const mixxx::Rekordbox3BandCalibration cal = mixxx::rekordbox3BandCalibrationFromJson(
+            jsonFrom(R"({"midHeightScale": 0.4, "highHeightScale": 0.2})"),
+            defaults,
+            &warnings);
+    EXPECT_TRUE(warnings.isEmpty()) << warnings.join("; ").toStdString();
+    EXPECT_FLOAT_EQ(0.4f, cal.midHeightScale);
+    EXPECT_FLOAT_EQ(0.2f, cal.highHeightScale);
+    // Untouched.
+    EXPECT_FLOAT_EQ(defaults.lowHeightScale, cal.lowHeightScale);
+    EXPECT_FLOAT_EQ(defaults.highColumnPunch, cal.highColumnPunch);
+}
+
+TEST(Rekordbox3BandCalibrationIoTest, BadValuesWarnAndChangeNothing) {
+    // A hand-edited file must never be able to blank the waveform. Every one of
+    // these leaves the field alone and says why.
+    const mixxx::Rekordbox3BandCalibration defaults;
+
+    struct Case {
+        const char* json;
+        const char* what;
+    };
+    const Case cases[] = {
+            {R"({"lowHeightScale": "big"})", "not a number"},
+            {R"({"highColumnPunch": 5.0})", "out of range"},
+            {R"({"highColumnPunch": -1.0})", "out of range"},
+            {R"({"columnRule": "Loudest"})", "not a rule"},
+            {R"({"columnRule": 7})", "rule is not a string"},
+            {R"({"low": "not-a-colour"})", "not a colour"},
+            {R"({"lowHeightscale": 0.1})", "misspelled key"},
+    };
+
+    for (const Case& testCase : cases) {
+        QStringList warnings;
+        const mixxx::Rekordbox3BandCalibration cal =
+                mixxx::rekordbox3BandCalibrationFromJson(
+                        jsonFrom(testCase.json), defaults, &warnings);
+        EXPECT_EQ(1, warnings.size()) << testCase.what << ": " << testCase.json;
+        EXPECT_FLOAT_EQ(defaults.lowHeightScale, cal.lowHeightScale) << testCase.what;
+        EXPECT_FLOAT_EQ(defaults.highColumnPunch, cal.highColumnPunch) << testCase.what;
+        EXPECT_EQ(defaults.columnRule, cal.columnRule) << testCase.what;
+        EXPECT_EQ(defaults.low.rgb(), cal.low.rgb()) << testCase.what;
+    }
+}
+
+TEST(Rekordbox3BandCalibrationIoTest, UnderscoreKeysAreCommentsAndDoNotWarn) {
+    // The mirrored JSON in toolchain/waveform carries _comment keys, and
+    // copying it to the device as a starting point must not produce noise.
+    const mixxx::Rekordbox3BandCalibration defaults;
+    QStringList warnings;
+    mixxx::rekordbox3BandCalibrationFromJson(
+            jsonFrom(R"({"_comment": "hello", "_x": 1})"), defaults, &warnings);
+    EXPECT_TRUE(warnings.isEmpty()) << warnings.join("; ").toStdString();
+}
+
+TEST(Rekordbox3BandCalibrationIoTest, EveryColumnRuleNameRoundTrips) {
+    mixxx::Rekordbox3BandColumnRule rule = mixxx::Rekordbox3BandColumnRule::Nearest;
+    EXPECT_TRUE(mixxx::rekordbox3BandColumnRuleFromString(QStringLiteral("Nearest"), &rule));
+    EXPECT_EQ(mixxx::Rekordbox3BandColumnRule::Nearest, rule);
+    EXPECT_TRUE(mixxx::rekordbox3BandColumnRuleFromString(
+            QStringLiteral("MaxOverRange"), &rule));
+    EXPECT_EQ(mixxx::Rekordbox3BandColumnRule::MaxOverRange, rule);
+    EXPECT_TRUE(mixxx::rekordbox3BandColumnRuleFromString(
+            QStringLiteral("MeanOverRange"), &rule));
+    EXPECT_EQ(mixxx::Rekordbox3BandColumnRule::MeanOverRange, rule);
+    EXPECT_TRUE(mixxx::rekordbox3BandColumnRuleFromString(
+            QStringLiteral("PunchBlend"), &rule));
+    EXPECT_EQ(mixxx::Rekordbox3BandColumnRule::PunchBlend, rule);
+
+    // Unknown leaves the caller's value alone rather than defaulting it.
+    mixxx::Rekordbox3BandColumnRule untouched = mixxx::Rekordbox3BandColumnRule::PunchBlend;
+    EXPECT_FALSE(mixxx::rekordbox3BandColumnRuleFromString(
+            QStringLiteral("Nonsense"), &untouched));
+    EXPECT_EQ(mixxx::Rekordbox3BandColumnRule::PunchBlend, untouched);
+}
+
+TEST(Rekordbox3BandCalibrationTest, PunchAtOneIsThePeakExactly) {
+    // The whole point of the early return. A PunchBlend calibration with every
+    // punch at 1 has to draw exactly what MaxOverRange draws, and "exactly"
+    // cannot rest on a blend of doubles landing back on an integer.
+    for (int peak = 0; peak <= 255; ++peak) {
+        const uint8_t value = static_cast<uint8_t>(peak);
+        EXPECT_EQ(value, mixxx::rekordbox3BandPunch(value, 0.0, 1.0f)) << peak;
+        EXPECT_EQ(value, mixxx::rekordbox3BandPunch(value, peak / 3.0, 1.0f)) << peak;
+        // Anything above 1 is still the peak rather than an extrapolation.
+        EXPECT_EQ(value, mixxx::rekordbox3BandPunch(value, 0.0, 2.0f)) << peak;
+    }
+}
+
+TEST(Rekordbox3BandCalibrationTest, PunchAtZeroIsTheRoundedMean) {
+    // Deliberately a rounded mean, not MeanOverRange's truncated one.
+    EXPECT_EQ(10, mixxx::rekordbox3BandPunch(100, 10.0, 0.0f));
+    // Round half up: the boundary is at exactly .5 and nowhere near it.
+    EXPECT_EQ(11, mixxx::rekordbox3BandPunch(100, 10.5, 0.0f));
+    EXPECT_EQ(10, mixxx::rekordbox3BandPunch(100, 10.4999, 0.0f));
+    EXPECT_EQ(11, mixxx::rekordbox3BandPunch(100, 10.5001, 0.0f));
+    EXPECT_EQ(10, mixxx::rekordbox3BandPunch(100, 10.4, 0.0f));
+    // Negative punch cannot pull the value below the mean.
+    EXPECT_EQ(10, mixxx::rekordbox3BandPunch(100, 10.0, -1.0f));
+}
+
+TEST(Rekordbox3BandCalibrationTest, PunchInterpolatesAndStaysInRange) {
+    // Halfway between a mean of 20 and a peak of 100.
+    EXPECT_EQ(60, mixxx::rekordbox3BandPunch(100, 20.0, 0.5f));
+    // A quarter of the way, 20 + 0.25 * 80 = 40.
+    EXPECT_EQ(40, mixxx::rekordbox3BandPunch(100, 20.0, 0.25f));
+    // Monotonic in punch, and never outside [mean, peak].
+    uint8_t previous = 0;
+    for (int step = 0; step <= 100; ++step) {
+        const uint8_t value = mixxx::rekordbox3BandPunch(
+                200, 50.0, static_cast<float>(step) / 100.0f);
+        EXPECT_GE(value, 50);
+        EXPECT_LE(value, 200);
+        EXPECT_GE(value, previous);
+        previous = value;
+    }
+}
+
+TEST(Rekordbox3BandCalibrationTest, TheDefaultBalanceIsNotUniform) {
+    // The balance is the whole fix for the high band swamping the picture, and
+    // a well meaning "tidy up" that re-equalises these three would undo it
+    // silently: nothing crashes, nothing warns, the waveform just goes white
+    // again. Only the ratios matter, so that is what this pins.
+    const mixxx::Rekordbox3BandCalibration cal;
+    EXPECT_GT(cal.lowHeightScale, cal.midHeightScale);
+    EXPECT_GT(cal.midHeightScale, cal.highHeightScale);
+    EXPECT_LT(cal.highHeightScale, cal.lowHeightScale / 3.0f);
+    // Likewise the punch: the sustained band keeps its peak, the spiky ones
+    // give some back.
+    EXPECT_FLOAT_EQ(1.0f, cal.lowColumnPunch);
+    EXPECT_LT(cal.midColumnPunch, cal.lowColumnPunch);
+    EXPECT_LT(cal.highColumnPunch, cal.midColumnPunch);
+}
+
 TEST(Rekordbox3BandCalibrationTest, ColumnRangeCoversStartMiddleAndEnd) {
     // The whole of a 100 entry series across 10 pixels: ten slices of the 0..99
     // index range, each widened to whole entries so no entry is skipped.
@@ -1033,6 +1196,9 @@ TEST_F(Rekordbox3BandTest, CalibrationJsonMatchesTheCppDefaults) {
     expectJsonFloat(json, QStringLiteral("lowHeightScale"), cal.lowHeightScale);
     expectJsonFloat(json, QStringLiteral("midHeightScale"), cal.midHeightScale);
     expectJsonFloat(json, QStringLiteral("highHeightScale"), cal.highHeightScale);
+    expectJsonFloat(json, QStringLiteral("lowColumnPunch"), cal.lowColumnPunch);
+    expectJsonFloat(json, QStringLiteral("midColumnPunch"), cal.midColumnPunch);
+    expectJsonFloat(json, QStringLiteral("highColumnPunch"), cal.highColumnPunch);
     expectJsonFloat(json, QStringLiteral("pwv7FullScale"), cal.pwv7FullScale);
     expectJsonFloat(json, QStringLiteral("pwv6FullScale"), cal.pwv6FullScale);
     expectJsonFloat(json, QStringLiteral("minVisibleHeightPx"), cal.minVisibleHeightPx);
@@ -1048,9 +1214,12 @@ TEST_F(Rekordbox3BandTest, CalibrationJsonMatchesTheCppDefaults) {
         parsedRule = mixxx::Rekordbox3BandColumnRule::MaxOverRange;
     } else if (rule == QLatin1String("MeanOverRange")) {
         parsedRule = mixxx::Rekordbox3BandColumnRule::MeanOverRange;
+    } else if (rule == QLatin1String("PunchBlend")) {
+        parsedRule = mixxx::Rekordbox3BandColumnRule::PunchBlend;
     } else {
         FAIL() << "columnRule is " << rule.toStdString()
-               << ", which is not one of Nearest, MaxOverRange, MeanOverRange";
+               << ", which is not one of Nearest, MaxOverRange, MeanOverRange, "
+                  "PunchBlend";
     }
     EXPECT_EQ(cal.columnRule, parsedRule);
 
@@ -1072,6 +1241,9 @@ TEST_F(Rekordbox3BandTest, CalibrationJsonMatchesTheCppDefaults) {
             QStringLiteral("lowHeightScale"),
             QStringLiteral("midHeightScale"),
             QStringLiteral("highHeightScale"),
+            QStringLiteral("lowColumnPunch"),
+            QStringLiteral("midColumnPunch"),
+            QStringLiteral("highColumnPunch"),
             QStringLiteral("pwv7FullScale"),
             QStringLiteral("pwv6FullScale"),
             QStringLiteral("minVisibleHeightPx"),
@@ -1100,11 +1272,33 @@ namespace {
 
 /// Column reduction, the same rule the GPU renderer applies. Its own copy lives
 /// in an anonymous namespace inside waveformrendererrekordbox3band.cpp and is
-/// not reachable from here; if one changes, change both.
+/// not reachable from here; if one changes, change both. The arithmetic of the
+/// PunchBlend case is not duplicated: both call mixxx::rekordbox3BandPunch() in
+/// the shared header, so only the loop that gathers the peak and the sum is
+/// written twice.
 mixxx::BandSample reduceColumn(const QVector<mixxx::BandSample>& samples,
         const mixxx::Rekordbox3BandColumnRange& range,
-        mixxx::Rekordbox3BandColumnRule rule) {
-    switch (rule) {
+        const mixxx::Rekordbox3BandCalibration& cal) {
+    switch (cal.columnRule) {
+    case mixxx::Rekordbox3BandColumnRule::PunchBlend: {
+        unsigned int sumLow = 0;
+        unsigned int sumMid = 0;
+        unsigned int sumHigh = 0;
+        mixxx::BandSample peak{0, 0, 0};
+        for (int i = range.begin; i < range.end; ++i) {
+            sumLow += samples[i].low;
+            sumMid += samples[i].mid;
+            sumHigh += samples[i].high;
+            peak.low = std::max(peak.low, samples[i].low);
+            peak.mid = std::max(peak.mid, samples[i].mid);
+            peak.high = std::max(peak.high, samples[i].high);
+        }
+        const double count = static_cast<double>(range.end - range.begin);
+        return {mixxx::rekordbox3BandPunch(peak.low, sumLow / count, cal.lowColumnPunch),
+                mixxx::rekordbox3BandPunch(peak.mid, sumMid / count, cal.midColumnPunch),
+                mixxx::rekordbox3BandPunch(
+                        peak.high, sumHigh / count, cal.highColumnPunch)};
+    }
     case mixxx::Rekordbox3BandColumnRule::Nearest:
         return samples[range.begin + (range.end - range.begin - 1) / 2];
     case mixxx::Rekordbox3BandColumnRule::MeanOverRange: {
@@ -1162,7 +1356,7 @@ QImage rasterize(const QVector<mixxx::BandSample>& samples,
         if (range.end <= range.begin) {
             continue;
         }
-        const mixxx::BandSample sample = reduceColumn(samples, range, cal.columnRule);
+        const mixxx::BandSample sample = reduceColumn(samples, range, cal);
         const uint8_t values[3] = {sample.low, sample.mid, sample.high};
 
         float heights[3] = {0.0f, 0.0f, 0.0f};

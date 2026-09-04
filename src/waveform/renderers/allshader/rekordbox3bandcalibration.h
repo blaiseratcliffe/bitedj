@@ -9,13 +9,24 @@ namespace mixxx {
 
 /// How the entries falling under one pixel column are reduced to one value.
 ///
-/// `MaxOverRange` is the default and the only one that matches a CDJ zoomed
-/// out: a transient that occupies a single entry stays a full height spike
-/// instead of being averaged into the floor around it.
+/// `PunchBlend` is the default. A pure peak-hold does not reduce every band
+/// equally: it inflates a spiky band far more than a sustained one, because a
+/// sustained band is already near its own peak everywhere. Measured on real
+/// drum and bass PWV7 at Zoom 12's 4.05 entries per pixel, the mean column
+/// against the mean of the same columns reduced by mean came out at 1.085 for
+/// low, 1.152 for mid and 1.263 for high: the sub-bass barely moves while the
+/// hats and snares get dragged up onto a continuous white run. `PunchBlend`
+/// gives each band its own place between the mean and the peak, so the
+/// transient bands stop being over-reported without flattening the low one.
+///
+/// The other three are kept, unchanged and byte for byte, because the reference
+/// rasterizers and their cross-validation are written against them.
+/// `MaxOverRange` is what shipped before this rule existed.
 enum class Rekordbox3BandColumnRule {
     Nearest,
     MaxOverRange,
     MeanOverRange,
+    PunchBlend,
 };
 
 /// Everything the three band renderer needs that is not the sample data.
@@ -52,22 +63,54 @@ struct Rekordbox3BandCalibration {
     float lowBleed = 0.0285f;
     // Height scaling.
     //
-    // The three band scales are equal on purpose: they are the documented
-    // place to fold in a master gain (see scaleHeight below), and this
-    // renderer wants one number rather than a per band balance. 0.55 is
-    // headroom, judged on the panel against a CDJ-3000 capture. At 1.0 a
-    // loud master reaches the pane edge and a drop draws as a slab with no
-    // black in it; rekordbox leaves room above its peaks.
+    // The three scales are deliberately NOT equal, and this is the setting
+    // that decides the picture's colour. An earlier version of this comment
+    // argued for one number on the grounds that the renderer wants a single
+    // master gain. That was a design preference, never a measurement, and it
+    // was wrong.
     //
-    // This is not a substitute for the zoom. Section 20.1 of
-    // docs/M4-SKIN-NOTES.md records that most of what reads as "too dense"
-    // is entries per pixel, not height: at DefaultZoom 12 the full width
-    // band showed 34.5s against the ten a CDJ gives, and MaxOverRange turns
-    // that into a wall whatever this number says. Fix the zoom first.
+    // The bands are concentric, so the colour at any height is decided by
+    // which band reaches that far, and only the RATIOS between these three
+    // matter. Scaling all three together changes the amplitude and moves no
+    // colour at all. 0.55 on the low band is the headroom judged on the panel;
+    // the other two are the balance.
+    //
+    // Why they have to differ. In stored PWV7 the high band is not the quiet
+    // one: measured across three real drum and bass tracks its p95 is the
+    // largest of the three (97 against 95 low and 91 mid) while its median is
+    // the smallest (36 against 62 and 47), which is what "spiky" looks like in
+    // numbers. Equal scales therefore put white outside blue on the loud
+    // passages that fill most of the picture, and because the high band is
+    // also the *innermost* band on 44% to 75% of columns, its height is what
+    // sets the radius of the cream all-three core. At equal scales that core
+    // was 58% of everything drawn.
+    //
+    // Where 0.28 and 0.13 come from: two CDJ-3000 photographs, classified by
+    // colour family and compared against renders of real PWV7 through the same
+    // classifier. The reference measures blue 49-57% of drawn ink, amber
+    // 21-29%, light 15-20%, with light divided by blue between 0.27 and 0.41.
+    // Equal scales measured 7.20 on that last figure. These scales, with the
+    // punch below, measure 0.32, with all four quantities inside the reference
+    // band and three of them near its middle, and hold between 0.29 and 0.31
+    // across Zoom 3, 4, 8 and 12 rather than being tuned to one span.
+    //
+    // Gamma is not a substitute for any of this. It is monotonic, so it cannot
+    // reorder two bands: where the high band's bytes exceed the low band's it
+    // stays outside whatever gamma does. A global gamma of 4 moved that 7.20
+    // only as far as 4.03. Scale reorders; gamma only reshapes.
     float gamma = 1.0f;
     float lowHeightScale = 0.55f;
-    float midHeightScale = 0.55f;
-    float highHeightScale = 0.55f;
+    float midHeightScale = 0.28f;
+    float highHeightScale = 0.13f;
+    // How much of the peak-hold each band keeps when several entries fall under
+    // one column, in 0..1. 1 is `MaxOverRange` exactly and 0 a rounded mean.
+    // Only read when `columnRule` is `PunchBlend`. The low band keeps its full
+    // peak because sub-bass is sustained and a peak-hold barely changes it; the
+    // spiky bands give some back, which is what stops the hats forming a
+    // continuous run at Zoom 12. See the enum above for the measured ratios.
+    float lowColumnPunch = 1.0f;
+    float midColumnPunch = 0.7f;
+    float highColumnPunch = 0.35f;
     float pwv7FullScale = 127.0f;
     /// PWV6 is stored on a different, smaller scale than PWV7. Normalising it
     /// by 127 renders the overview as a thin line: a typical track's PWV6
@@ -89,8 +132,38 @@ struct Rekordbox3BandCalibration {
     /// restores hard edges exactly.
     float antialiasWidthPx = 1.0f;
     float opacity = 1.0f;
-    Rekordbox3BandColumnRule columnRule = Rekordbox3BandColumnRule::MaxOverRange;
+    Rekordbox3BandColumnRule columnRule = Rekordbox3BandColumnRule::PunchBlend;
 };
+
+/// One band's value for a column, blending its peak-hold with its mean.
+///
+/// Lives here rather than in the renderer because the GPU renderer, the C++
+/// reference rasterizer and the Python one all have to agree on it to the byte,
+/// the same reason `scaleHeight()` and `rekordbox3BandSpans()` are here.
+///
+/// Both endpoints are early returns so they are exact by construction rather
+/// than by floating point luck: at punch 1 this is the peak, unchanged, and a
+/// `PunchBlend` calibration with every punch at 1 draws exactly what
+/// `MaxOverRange` draws.
+///
+/// At punch 0 it is a **rounded** mean, which is deliberately not
+/// `MeanOverRange`. That rule truncates, because it sums into an `unsigned int`
+/// and integer-divides, and truncation is a downward bias on every band of
+/// every column. A new rule should not inherit it. The two therefore differ by
+/// up to one count, and no test should assert they are equal.
+inline uint8_t rekordbox3BandPunch(uint8_t peak, double mean, float punch) {
+    if (punch >= 1.0f) {
+        return peak;
+    }
+    const double peakValue = static_cast<double>(peak);
+    const double value = punch <= 0.0f
+            ? mean
+            : mean + static_cast<double>(punch) * (peakValue - mean);
+    // The rounding is written out rather than left to a cast, so the Python
+    // transcription has nothing to guess at.
+    const double rounded = std::floor(value + 0.5);
+    return static_cast<uint8_t>(std::clamp(rounded, 0.0, 255.0));
+}
 
 /// A half open range `[begin, end)` of entry indices. Empty only when the
 /// series itself is.

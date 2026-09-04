@@ -934,6 +934,10 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/util/xml.cpp
   src/waveform/guitick.cpp
   src/waveform/rekordbox3bandwaveform.cpp
+  # Lives under renderers/allshader/ by convention but pulls in no GL at all,
+  # and WOverview needs it whether or not QOPENGL is on, so it is listed here
+  # rather than inside the if(QOPENGL) block below.
+  src/waveform/renderers/allshader/rekordbox3bandcalibrationio.cpp
   src/waveform/renderers/deprecated/glslwaveformrenderersignal.cpp
   src/waveform/renderers/deprecated/glvsynctestrenderer.cpp
   src/waveform/renderers/deprecated/glwaveformrenderbackground.cpp

@@ -34,7 +34,9 @@ class allshader::WaveformRendererRekordbox3Band final
     VertexData m_vertices;
     RGBAData m_colors;
 
-    mixxx::Rekordbox3BandCalibration m_calibration;
+    // A reference to the process-wide calibration, not a copy, so this and
+    // WOverview's 3Band path cannot end up drawing to different numbers.
+    const mixxx::Rekordbox3BandCalibration& m_calibration;
 
     DISALLOW_COPY_AND_ASSIGN(WaveformRendererRekordbox3Band);
 };

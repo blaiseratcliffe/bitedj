@@ -6,6 +6,7 @@
 #include "util/assert.h"
 #include "waveform/rekordbox3bandwaveform.h"
 #include "waveform/renderers/allshader/matrixforwidgetgeometry.h"
+#include "waveform/renderers/allshader/rekordbox3bandcalibrationio.h"
 #include "waveform/renderers/waveformwidgetrenderer.h"
 #include "waveform/waveformwidgetfactory.h"
 
@@ -15,8 +16,30 @@ namespace {
 
 mixxx::BandSample reduceColumn(const QVector<mixxx::BandSample>& samples,
         const mixxx::Rekordbox3BandColumnRange& range,
-        mixxx::Rekordbox3BandColumnRule rule) {
+        const mixxx::Rekordbox3BandCalibration& calibration) {
+    const mixxx::Rekordbox3BandColumnRule rule = calibration.columnRule;
     switch (rule) {
+    case mixxx::Rekordbox3BandColumnRule::PunchBlend: {
+        // Both reductions in one pass, then blended per band by
+        // rekordbox3BandPunch(), which is shared with the rasterizers.
+        unsigned int sumLow = 0, sumMid = 0, sumHigh = 0;
+        mixxx::BandSample peak{0, 0, 0};
+        for (int i = range.begin; i < range.end; ++i) {
+            sumLow += samples[i].low;
+            sumMid += samples[i].mid;
+            sumHigh += samples[i].high;
+            peak.low = std::max(peak.low, samples[i].low);
+            peak.mid = std::max(peak.mid, samples[i].mid);
+            peak.high = std::max(peak.high, samples[i].high);
+        }
+        const double count = static_cast<double>(range.end - range.begin);
+        return {mixxx::rekordbox3BandPunch(
+                        peak.low, sumLow / count, calibration.lowColumnPunch),
+                mixxx::rekordbox3BandPunch(
+                        peak.mid, sumMid / count, calibration.midColumnPunch),
+                mixxx::rekordbox3BandPunch(
+                        peak.high, sumHigh / count, calibration.highColumnPunch)};
+    }
     case mixxx::Rekordbox3BandColumnRule::Nearest:
         return samples[range.begin + (range.end - range.begin - 1) / 2];
     case mixxx::Rekordbox3BandColumnRule::MeanOverRange: {
@@ -48,7 +71,8 @@ mixxx::BandSample reduceColumn(const QVector<mixxx::BandSample>& samples,
 
 WaveformRendererRekordbox3Band::WaveformRendererRekordbox3Band(
         WaveformWidgetRenderer* waveformWidget)
-        : WaveformRendererSignalBase(waveformWidget) {
+        : WaveformRendererSignalBase(waveformWidget),
+          m_calibration(mixxx::rekordbox3BandCalibration()) {
 }
 
 void WaveformRendererRekordbox3Band::onSetup(const QDomNode& node) {
@@ -136,8 +160,7 @@ void WaveformRendererRekordbox3Band::paintGL() {
     for (int pos = 0; pos < length; ++pos) {
         const mixxx::Rekordbox3BandColumnRange range = mixxx::columnRangeForPixel(
                 pos, length, firstPosition, lastPosition, entryCount);
-        const mixxx::BandSample sample =
-                reduceColumn(detail, range, m_calibration.columnRule);
+        const mixxx::BandSample sample = reduceColumn(detail, range, m_calibration);
 
         const float heights[3] = {
                 mixxx::scaleHeight(sample.low,
