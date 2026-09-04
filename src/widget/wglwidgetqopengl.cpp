@@ -20,6 +20,14 @@ WGLWidget::WGLWidget(QWidget* pParent)
 
 WGLWidget::~WGLWidget() {
     ToolTipQOpenGL::singleton().stop();
+    // The context is released here, at the end of the destruction chain,
+    // rather than in a derived destructor. WGLWidget is the last base to
+    // destruct and it owns the window the context belongs to, so anything
+    // above it that frees GL resources on the way down still has a context
+    // to free them with. See allshader::WaveformWidget::~WaveformWidget,
+    // which used to call doneCurrent() at the end of its own body and
+    // leaked every texture a base freed afterwards.
+    doneCurrent();
     if (m_pOpenGLWindow) {
         m_pOpenGLWindow->widgetDestroyed();
     }

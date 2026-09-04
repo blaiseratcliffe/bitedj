@@ -19,7 +19,19 @@ WaveformWidget::~WaveformWidget() {
         delete pRenderer;
     }
     m_rendererStack.clear();
-    doneCurrent();
+    // No doneCurrent() here. The renderers above are not the only GL
+    // resources this object owns: base destructors run after this body and
+    // free textures of their own, and releasing the context here left them
+    // with none. Qt then logs "QOpenGLTexturePrivate::destroy() called
+    // without a current context / Texture has not been destroyed" and the
+    // texture leaks. Measured on a waveform type change, which deletes
+    // every deck's widget: two leaked textures per loaded deck, so eight
+    // with four decks up, and none of them from the loop above (each of
+    // its seven deletes was verified to run with a context current).
+    //
+    // ~WGLWidget releases it instead. It is the last base to destruct and
+    // it owns the window the context belongs to, so the context stays
+    // current for the whole chain and is dropped once, at the end.
 }
 
 mixxx::Duration WaveformWidget::render() {
