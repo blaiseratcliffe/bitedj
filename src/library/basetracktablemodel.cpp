@@ -146,16 +146,7 @@ BaseTrackTableModel::BaseTrackTableModel(
             ConfigKey(QStringLiteral("[App]"), QStringLiteral("sync_reference_key")),
             this);
     pReferenceKeyProxy->connectValueChanged(this, [this](double value) {
-        // Recomputed here, not per row: getCompatibleKeys() returns six of the
-        // twenty-four keys, and data() then only has to do a set lookup.
-        m_compatibleKeys.clear();
-        const auto referenceKey = KeyUtils::keyFromNumericValue(value);
-        if (referenceKey != mixxx::track::io::key::INVALID) {
-            const auto compatible = KeyUtils::getCompatibleKeys(referenceKey);
-            for (const auto key : compatible) {
-                m_compatibleKeys.insert(static_cast<int>(key));
-            }
-        }
+        setCompatibleKeys(value);
         const int keyCol = fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_KEY);
         const int rows = rowCount();
         if (keyCol < 0 || rows <= 0) {
@@ -163,6 +154,31 @@ BaseTrackTableModel::BaseTrackTableModel(
         }
         emit dataChanged(index(0, keyCol), index(rows - 1, keyCol));
     });
+    // ControlProxy does not emit on connect, so a model built after the
+    // reference key was last set would stay untinted until it next changed.
+    // Every model happens to be constructed at startup today, when the key is
+    // still 0, so this is insurance rather than a live bug -- but it is the
+    // same reason ControlWidgetPropertyConnection seeds itself in its ctor.
+    //
+    // Only the set is seeded, never the repaint: fieldIndex() and rowCount()
+    // are virtual, and calling them from this base constructor would dispatch
+    // to the base rather than the subclass. There are no rows to repaint yet
+    // anyway.
+    setCompatibleKeys(pReferenceKeyProxy->get());
+}
+
+void BaseTrackTableModel::setCompatibleKeys(double referenceKeyValue) {
+    // Recomputed on change, not per row: getCompatibleKeys() returns six of the
+    // twenty-four keys, and data() then only has to do a set lookup.
+    m_compatibleKeys.clear();
+    const auto referenceKey = KeyUtils::keyFromNumericValue(referenceKeyValue);
+    if (referenceKey == mixxx::track::io::key::INVALID) {
+        return;
+    }
+    const auto compatible = KeyUtils::getCompatibleKeys(referenceKey);
+    for (const auto key : compatible) {
+        m_compatibleKeys.insert(static_cast<int>(key));
+    }
 }
 
 int BaseTrackTableModel::keyForRow(const QModelIndex& index) const {

@@ -302,6 +302,10 @@ class BaseTrackTableModel : public QAbstractTableModel, public TrackModel {
     /// protobuf include; it is pulled into a great many translation units.
     int keyForRow(const QModelIndex& index) const;
 
+    /// Rebuild m_compatibleKeys from a ChromaticKey numeric value. Safe to call
+    /// from the constructor: it touches no virtual member.
+    void setCompatibleKeys(double referenceKeyValue);
+
     // File locations found missing when the DJ tried to load them (e.g. the USB
     // drive was pulled). Drives the 'missing' text colour in data() and blocks
     // re-loading in verifyTrackFileExists() even when the database's fs_deleted
