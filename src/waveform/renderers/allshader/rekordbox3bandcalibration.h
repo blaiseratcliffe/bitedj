@@ -51,10 +51,23 @@ struct Rekordbox3BandCalibration {
     float midAlpha = 0.682f;
     float lowBleed = 0.0285f;
     // Height scaling.
+    //
+    // The three band scales are equal on purpose: they are the documented
+    // place to fold in a master gain (see scaleHeight below), and this
+    // renderer wants one number rather than a per band balance. 0.55 is
+    // headroom, judged on the panel against a CDJ-3000 capture. At 1.0 a
+    // loud master reaches the pane edge and a drop draws as a slab with no
+    // black in it; rekordbox leaves room above its peaks.
+    //
+    // This is not a substitute for the zoom. Section 20.1 of
+    // docs/M4-SKIN-NOTES.md records that most of what reads as "too dense"
+    // is entries per pixel, not height: at DefaultZoom 12 the full width
+    // band showed 34.5s against the ten a CDJ gives, and MaxOverRange turns
+    // that into a wall whatever this number says. Fix the zoom first.
     float gamma = 1.0f;
-    float lowHeightScale = 1.0f;
-    float midHeightScale = 1.0f;
-    float highHeightScale = 1.0f;
+    float lowHeightScale = 0.55f;
+    float midHeightScale = 0.55f;
+    float highHeightScale = 0.55f;
     float pwv7FullScale = 127.0f;
     /// PWV6 is stored on a different, smaller scale than PWV7. Normalising it
     /// by 127 renders the overview as a thin line: a typical track's PWV6
