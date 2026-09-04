@@ -42,6 +42,11 @@ void SyncReference::addDeck(const QString& group) {
     // Recomputing on any deck's key is cheaper than tracking which one is
     // current, and the guarded write below absorbs the rest.
     pDeck->pKey = watch("key");
+    // Every fallback candidate in pickNonSyncSyncTarget needs a valid BPM, and
+    // during a load there briefly isn't one, so the reference is dropped. This
+    // is what brings it back when the beatgrid lands. See the header for why
+    // it is local_bpm and not bpm.
+    pDeck->pLocalBpm = watch("local_bpm");
 
     m_decks.push_back(std::move(pDeck));
 

@@ -50,9 +50,18 @@ class SyncReference : public QObject {
     /// covers load and eject, and main_mix covers a deck leaving the mix,
     /// which pickNonSyncSyncTarget also tests for.
     ///
-    /// Not watched, on purpose: bpm. Its validity can decide the fallback, but
-    /// it changes on every pitch move, and a deck that gains a beatgrid after
-    /// load is rare next to the churn that watching it would cost.
+    /// local_bpm is watched because every fallback candidate in
+    /// pickNonSyncSyncTarget is gated on a valid BPM. During a load the BPM is
+    /// briefly invalid, the picker returns nullptr, and the reference is
+    /// dropped; without this the update never re-ran once the beatgrid landed,
+    /// so the reference stayed lost until some other event happened to fire.
+    /// The leader branch returns before that BPM check, which is why enabling
+    /// sync used to hide the bug entirely.
+    ///
+    /// local_bpm rather than bpm: bpm carries the rate, so it moves on every
+    /// pitch nudge. local_bpm comes from the beatgrid, and its only movement is
+    /// drift across a variable-BPM track, which the guarded writes in update()
+    /// absorb without repainting anything.
     struct Deck {
         QString group;
         std::unique_ptr<ControlObject> pReference;
@@ -63,6 +72,7 @@ class SyncReference : public QObject {
         /// The deck's *playing* key, so a key nudge on the FX tab or an
         /// unlocked pitch move is followed. Not file_key.
         std::unique_ptr<ControlProxy> pKey;
+        std::unique_ptr<ControlProxy> pLocalBpm;
     };
 
     EngineSync* const m_pEngineSync;
