@@ -53,6 +53,7 @@ WTrackTableView::WTrackTableView(QWidget* pParent,
           m_focusBorderColor(Qt::white),
           m_trackPlayedColor(QColor(kDefaultTrackPlayedColor)),
           m_trackMissingColor(QColor(kDefaultTrackMissingColor)),
+          m_keyCompatibleColor(QColor(kDefaultKeyCompatibleColor)),
           m_sorting(false),
           m_selectionChangedSinceLastGuiTick(true),
           m_loadCachedOnly(false) {

@@ -4,9 +4,15 @@
 #include "engine/sync/syncable.h"
 #include "moc_syncreference.cpp"
 
+namespace {
+const QString kAppGroup = QStringLiteral("[App]");
+} // namespace
+
 SyncReference::SyncReference(EngineSync* pEngineSync, QObject* pParent)
         : QObject(pParent),
-          m_pEngineSync(pEngineSync) {
+          m_pEngineSync(pEngineSync),
+          m_pReferenceKey(std::make_unique<ControlObject>(
+                  ConfigKey(kAppGroup, QStringLiteral("sync_reference_key")))) {
 }
 
 SyncReference::~SyncReference() = default;
@@ -32,6 +38,10 @@ void SyncReference::addDeck(const QString& group) {
     pDeck->pSyncLeader = watch("sync_leader");
     pDeck->pTrackLoaded = watch("track_loaded");
     pDeck->pMainMix = watch("main_mix");
+    // Watched so the published key follows a nudge on the reference deck.
+    // Recomputing on any deck's key is cheaper than tracking which one is
+    // current, and the guarded write below absorbs the rest.
+    pDeck->pKey = watch("key");
 
     m_decks.push_back(std::move(pDeck));
 
@@ -45,12 +55,24 @@ void SyncReference::update() {
     const Syncable* pTarget = m_pEngineSync->pickNonSyncSyncTarget(nullptr);
     const QString targetGroup = pTarget ? pTarget->getGroup() : QString();
 
+    double referenceKey = 0.0;
     for (const auto& pDeck : m_decks) {
-        const double value = (!targetGroup.isEmpty() && pDeck->group == targetGroup) ? 1.0 : 0.0;
+        const bool isReference = !targetGroup.isEmpty() && pDeck->group == targetGroup;
+        const double value = isReference ? 1.0 : 0.0;
         // Guarded because every write repolishes any widget bound to it, and
         // these events arrive in bursts when a deck starts or stops.
         if (pDeck->pReference->get() != value) {
             pDeck->pReference->set(value);
         }
+        if (isReference) {
+            referenceKey = pDeck->pKey->get();
+        }
+    }
+
+    // Guarded for the same reason, and more sharply: this one repaints a
+    // library column, so an unguarded write on every key change would repaint
+    // the table continuously while the pitch fader moves.
+    if (m_pReferenceKey->get() != referenceKey) {
+        m_pReferenceKey->set(referenceKey);
     }
 }

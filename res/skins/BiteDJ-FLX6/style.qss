@@ -503,8 +503,14 @@ WEffectSelector QAbstractItemView {
    Cleared by Settings -> General -> Played -> Reset. Keep in sync with
    kPlayedTrackColor in browsetablemodel.cpp, which tints the Computer/USB
    file browser (a QStandardItemModel with no styleable view property). */
+/* keyCompatibleColor tints the Key cell of tracks that mix harmonically with
+ * the sync reference deck (the chip on the deck strip says which that is).
+ * Set here rather than left at the C++ default so tuning it is a skin deploy
+ * rather than a 524MB rebuild. Green reads against both the #111 and #222
+ * alternating rows below, and against the blue played colour. */
 #LibraryWrapper WTrackTableView {
   qproperty-trackPlayedColor: #4aa3e0;
+  qproperty-keyCompatibleColor: #5fbf6a;
 }
 
 #LibraryWrapper QTableView,

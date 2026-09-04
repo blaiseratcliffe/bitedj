@@ -21,6 +21,7 @@
 #include "mixer/playerinfo.h"
 #include "mixer/playermanager.h"
 #include "moc_basetracktablemodel.cpp"
+#include "track/keyutils.h"
 #include "track/track.h"
 #include "util/assert.h"
 #include "util/clipboard.h"
@@ -101,7 +102,8 @@ BaseTrackTableModel::BaseTrackTableModel(
           m_previewDeckGroup(PlayerManager::groupForPreviewDeck(0)),
           m_backgroundColorOpacity(WLibrary::kDefaultTrackTableBackgroundColorOpacity),
           m_trackPlayedColor(QColor(WTrackTableView::kDefaultTrackPlayedColor)),
-          m_trackMissingColor(QColor(WTrackTableView::kDefaultTrackMissingColor)) {
+          m_trackMissingColor(QColor(WTrackTableView::kDefaultTrackMissingColor)),
+          m_keyCompatibleColor(QColor(WTrackTableView::kDefaultKeyCompatibleColor)) {
     connect(&pTrackCollectionManager->internalCollection()->getTrackDAO(),
             &TrackDAO::tracksRemoved,
             this,
@@ -135,6 +137,49 @@ BaseTrackTableModel::BaseTrackTableModel(
         }
         emit dataChanged(index(0, keyCol), index(rows - 1, keyCol));
     });
+
+    // Bite DJ: harmonic highlighting. syncreference.cpp publishes the sync
+    // reference deck's playing key here, so this model never has to work out
+    // which deck that is. Same repaint shape as the notation proxy above, and
+    // the same fieldIndex() caveat applies.
+    auto* pReferenceKeyProxy = new ControlProxy(
+            ConfigKey(QStringLiteral("[App]"), QStringLiteral("sync_reference_key")),
+            this);
+    pReferenceKeyProxy->connectValueChanged(this, [this](double value) {
+        // Recomputed here, not per row: getCompatibleKeys() returns six of the
+        // twenty-four keys, and data() then only has to do a set lookup.
+        m_compatibleKeys.clear();
+        const auto referenceKey = KeyUtils::keyFromNumericValue(value);
+        if (referenceKey != mixxx::track::io::key::INVALID) {
+            const auto compatible = KeyUtils::getCompatibleKeys(referenceKey);
+            for (const auto key : compatible) {
+                m_compatibleKeys.insert(static_cast<int>(key));
+            }
+        }
+        const int keyCol = fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_KEY);
+        const int rows = rowCount();
+        if (keyCol < 0 || rows <= 0) {
+            return;
+        }
+        emit dataChanged(index(0, keyCol), index(rows - 1, keyCol));
+    });
+}
+
+int BaseTrackTableModel::keyForRow(const QModelIndex& index) const {
+    const auto keyId = rawSiblingValue(index, ColumnCache::COLUMN_LIBRARYTABLE_KEY_ID);
+    const auto fromId = KeyUtils::keyFromNumericValue(keyId.toDouble());
+    if (fromId != mixxx::track::io::key::INVALID) {
+        return static_cast<int>(fromId);
+    }
+    // Tracks imported from Rekordbox, Serato and friends carry only the text
+    // key and no chromatic id, so matching on key_id alone would silently skip
+    // most of an imported library. Same fallback the KEY column's display path
+    // uses in roleValue().
+    const auto keyText = rawSiblingValue(index, ColumnCache::COLUMN_LIBRARYTABLE_KEY);
+    if (keyText.metaType().id() == QMetaType::QString) {
+        return static_cast<int>(KeyUtils::guessKeyFromText(keyText.toString()));
+    }
+    return static_cast<int>(mixxx::track::io::key::INVALID);
 }
 
 void BaseTrackTableModel::initTableColumnsAndHeaderProperties(
@@ -342,6 +387,14 @@ QAbstractItemDelegate* BaseTrackTableModel::delegateForColumn(
             [this](QColor col) {
                 m_trackMissingColor = col;
             });
+    // Bite DJ: and the harmonic highlight colour.
+    m_keyCompatibleColor = pTableView->getKeyCompatibleColor();
+    connect(pTableView,
+            &WTrackTableView::keyCompatibleColorChanged,
+            this,
+            [this](QColor col) {
+                m_keyCompatibleColor = col;
+            });
     if (index == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_RATING)) {
         return new StarDelegate(pTableView);
     } else if (index == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BPM)) {
@@ -427,6 +480,17 @@ QVariant BaseTrackTableModel::data(
         bgColor.setAlphaF(static_cast<float>(m_backgroundColorOpacity));
         return QBrush(bgColor);
     } else if (role == Qt::ForegroundRole) {
+        // Bite DJ: harmonic highlight, Key column only. Checked before the
+        // missing/played colours below on purpose: those apply to the whole
+        // row, so letting them win would mean the Key column stops answering
+        // "will this mix?" for exactly the tracks you are scanning past.
+        // ForegroundRole rather than BackgroundRole because BackgroundRole is
+        // already taken by the user's track colour, row-wide, above.
+        if (!m_compatibleKeys.isEmpty() &&
+                mapColumn(index.column()) == ColumnCache::COLUMN_LIBRARYTABLE_KEY &&
+                m_compatibleKeys.contains(keyForRow(index))) {
+            return QVariant::fromValue(m_keyCompatibleColor);
+        }
         // Custom text color for missing tracks
         // Visible in playlists, crates and Missing feature.
         // Check this first so played, missing tracks (unlikely case, but possible)

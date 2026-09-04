@@ -290,6 +290,18 @@ class BaseTrackTableModel : public QAbstractTableModel, public TrackModel {
     QColor m_trackPlayedColor;
     QColor m_trackMissingColor;
 
+    // Bite DJ fork: harmonic highlighting of the Key column against the sync
+    // reference deck. m_compatibleKeys is the six-key set from
+    // KeyUtils::getCompatibleKeys(), recomputed only when
+    // [App],sync_reference_key changes, so data() stays a set lookup.
+    QColor m_keyCompatibleColor;
+    QSet<int> m_compatibleKeys;
+
+    /// Resolve a row's key as a ChromaticKey numeric value, 0 for INVALID.
+    /// Returns int rather than the enum so this header stays free of the
+    /// protobuf include; it is pulled into a great many translation units.
+    int keyForRow(const QModelIndex& index) const;
+
     // File locations found missing when the DJ tried to load them (e.g. the USB
     // drive was pulled). Drives the 'missing' text colour in data() and blocks
     // re-loading in verifyTrackFileExists() even when the database's fs_deleted

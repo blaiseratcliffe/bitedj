@@ -100,12 +100,24 @@ class WTrackTableView : public WLibraryTableView {
     QColor getTrackMissingColor() const {
         return m_trackMissingColor;
     }
+    // Bite DJ fork: Key column text colour for tracks that mix harmonically
+    // with the sync reference deck. Skin-settable like the colours above:
+    //   WTrackTableView { qproperty-keyCompatibleColor: #xxx; }
+    static constexpr const char* kDefaultKeyCompatibleColor = "#5fbf6a";
+    Q_PROPERTY(QColor keyCompatibleColor
+                    MEMBER m_keyCompatibleColor
+                            NOTIFY keyCompatibleColorChanged
+                                    DESIGNABLE true);
+    QColor getKeyCompatibleColor() const {
+        return m_keyCompatibleColor;
+    }
 
   signals:
     void trackMenuVisible(bool visible);
     void focusBorderColorChanged(QColor col);
     void trackPlayedColorChanged(QColor col);
     void trackMissingColorChanged(QColor col);
+    void keyCompatibleColorChanged(QColor col);
 
   public slots:
     void loadTrackModel(QAbstractItemModel* model, bool restoreState = false);
@@ -173,6 +185,7 @@ class WTrackTableView : public WLibraryTableView {
     QColor m_focusBorderColor;
     QColor m_trackPlayedColor;
     QColor m_trackMissingColor;
+    QColor m_keyCompatibleColor;
     bool m_sorting;
 
     // Control the delay to load a cover art.

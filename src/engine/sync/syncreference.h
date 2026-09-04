@@ -60,8 +60,21 @@ class SyncReference : public QObject {
         std::unique_ptr<ControlProxy> pSyncLeader;
         std::unique_ptr<ControlProxy> pTrackLoaded;
         std::unique_ptr<ControlProxy> pMainMix;
+        /// The deck's *playing* key, so a key nudge on the FX tab or an
+        /// unlocked pitch move is followed. Not file_key.
+        std::unique_ptr<ControlProxy> pKey;
     };
 
     EngineSync* const m_pEngineSync;
     std::vector<std::unique_ptr<Deck>> m_decks;
+
+    /// `[App],sync_reference_key`: the reference deck's playing key as a
+    /// ChromaticKey numeric value, 0 when there is no reference or its track
+    /// has no key.
+    ///
+    /// Published as one control rather than making readers find the reference
+    /// deck and then read its key. The library models need exactly this and
+    /// nothing else, so one proxy each is enough and no consumer has to
+    /// enumerate decks or know the fallback rule.
+    std::unique_ptr<ControlObject> m_pReferenceKey;
 };
