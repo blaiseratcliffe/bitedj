@@ -41,6 +41,12 @@
               <ConfigKey>[Channel<Variable name="channel"/>],play</ConfigKey>
               <BindProperty>highlight</BindProperty>
             </Connection>
+            <!-- Sync leader: 0 off, 1 soft, 2 explicit. Plain SYNC can promote a
+                 deck to soft leader too, so this is real leader state, not a button. -->
+            <Connection>
+              <ConfigKey>[Channel<Variable name="channel"/>],sync_leader</ConfigKey>
+              <BindProperty>master</BindProperty>
+            </Connection>
           </Label>
           <Key>
             <ObjectName>DeckStripKey</ObjectName>

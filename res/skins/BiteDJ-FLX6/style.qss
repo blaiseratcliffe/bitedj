@@ -1589,7 +1589,13 @@ WBeatSpinBox::up-button {
   qproperty-layoutAlignment: 'AlignLeft | AlignVCenter';
 }
 
+/* The transparent border is load-bearing: it reserves the 1px the master
+ * state paints, so the badge's content box is identical in both states and
+ * DECK1 cannot shift or clip when a deck takes the leader role. Same trick
+ * #DeckStrip uses above. */
 #DeckStripBadge {
+  border: 1px solid transparent;
+  border-radius: 2px;
   color: #a7a9ac;
   font-size: 13px;
   font-weight: bold;
@@ -1597,6 +1603,17 @@ WBeatSpinBox::up-button {
 
 #DeckStripBadge[highlight="1"] {
   color: #f15921;
+}
+
+/* Sync leader. Set border and fill only, never color, so playing and master
+ * compose: an orange DECK1 inside a purple chip is both at once. States 1 and
+ * 2 are soft and explicit leader; explicit is unreachable today because
+ * SyncControl only ever requests soft, but styling it costs one selector.
+ * Placed after the highlight rule because equal specificity means last wins. */
+#DeckStripBadge[master="1"],
+#DeckStripBadge[master="2"] {
+  background-color: #3d2d52;
+  border-color: #855ea7;
 }
 
 #DeckStripKey {
