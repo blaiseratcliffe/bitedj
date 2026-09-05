@@ -596,10 +596,17 @@
 
                            Every signal renderer multiplies this in, so it
                            applies to all six waveform types rather than to
-                           3Band alone. 1.0 leaves the shipped 3Band calibration
-                           exactly as measured against the CDJ-3000 reference;
-                           above about 1.15 the loudest columns start flattening
-                           against the pane edge. -->
+                           3Band alone.
+
+                           1.0 is the top of the row on purpose. It leaves the
+                           shipped 3Band calibration exactly as measured against
+                           the CDJ-3000 reference, and it is also the largest
+                           gain that cannot clip: scaleHeight() clamps to the
+                           half height and pwv7FullScale is 127, so a low band
+                           byte of 127 lands on the pane edge. Values above it
+                           only flatten the loudest columns, which is not a
+                           trade worth offering when turning the gain down gives
+                           the same headroom with the shape intact. -->
                       <WidgetGroup>
                         <ObjectName>SettingsRow</ObjectName>
                         <Layout>horizontal</Layout>
@@ -616,29 +623,23 @@
                             <SizePolicy>max,f</SizePolicy>
                             <Size>0me,40f</Size>
                             <Children>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
-                            <SetVariable name="Text">0.75</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
-                            <SetVariable name="Value">0.75</SetVariable>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                                <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                                <SetVariable name="Text">0.5</SetVariable>
+                                <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
+                                <SetVariable name="Value">0.5</SetVariable>
                               </Template>
                               <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">1.0</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
-                            <SetVariable name="Value">1.0</SetVariable>
+                                <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                                <SetVariable name="Text">0.75</SetVariable>
+                                <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
+                                <SetVariable name="Value">0.75</SetVariable>
                               </Template>
                               <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">1.5</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
-                            <SetVariable name="Value">1.5</SetVariable>
-                              </Template>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
-                            <SetVariable name="Text">2.0</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
-                            <SetVariable name="Value">2.0</SetVariable>
+                                <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                                <SetVariable name="Text">1.0</SetVariable>
+                                <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
+                                <SetVariable name="Value">1.0</SetVariable>
                               </Template>
                             </Children>
                           </WidgetGroup>
