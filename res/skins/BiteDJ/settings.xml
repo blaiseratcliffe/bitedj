@@ -527,6 +527,124 @@
                         </Children>
                       </WidgetGroup>
 
+                      <!-- The overview strip's renderer, independent of the
+                           scrolling waveform above it. Writes
+                           [Waveform],waveform_overview_type, the writable
+                           control added in waveformwidgetfactory.cpp.
+
+                           NOT [Waveform],WaveformOverviewType. DlgPrefWaveform
+                           owns a ControlPushButton on that key and calls
+                           setReadOnly() on it, so a skin binding there renders,
+                           accepts the tap and does nothing at all.
+
+                           Values are WOverview::Type: 0 Filtered, 1 HSV, 2 RGB,
+                           3 the rekordbox PWV6 preview. Choosing 3Band for a
+                           track rekordbox never analysed costs nothing; that
+                           path returns false and falls through to RGB per
+                           track. -->
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,52f</Size>
+                        <Children>
+                          <Label>
+                            <ObjectName>SettingsRowLabel</ObjectName>
+                            <Text>Overview</Text>
+                            <Size>0me,0me</Size>
+                          </Label>
+                          <WidgetGroup>
+                            <ObjectName>OverviewSegmented</ObjectName>
+                            <Layout>horizontal</Layout>
+                            <SizePolicy>max,f</SizePolicy>
+                            <Size>0me,40f</Size>
+                            <Children>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                            <SetVariable name="Text">Filt</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
+                            <SetVariable name="Value">0</SetVariable>
+                              </Template>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">HSV</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
+                            <SetVariable name="Value">1</SetVariable>
+                              </Template>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">RGB</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
+                            <SetVariable name="Value">2</SetVariable>
+                              </Template>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="Text">3Band</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
+                            <SetVariable name="Value">3</SetVariable>
+                              </Template>
+                            </Children>
+                          </WidgetGroup>
+                        </Children>
+                      </WidgetGroup>
+
+                      <!-- Overall waveform amplitude, not the pane's share
+                           of the screen; that is the Split row. Writes
+                           [Waveform],waveform_visual_gain, which persists to
+                           VisualGain_0 and is clamped to 0.1..4.0 in the slot,
+                           because 0 makes the waveform vanish with no other
+                           symptom.
+
+                           Every signal renderer multiplies this in, so it
+                           applies to all six waveform types rather than to
+                           3Band alone. 1.0 leaves the shipped 3Band calibration
+                           exactly as measured against the CDJ-3000 reference;
+                           above about 1.15 the loudest columns start flattening
+                           against the pane edge. -->
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,52f</Size>
+                        <Children>
+                          <Label>
+                            <ObjectName>SettingsRowLabel</ObjectName>
+                            <Text>Height</Text>
+                            <Size>0me,0me</Size>
+                          </Label>
+                          <WidgetGroup>
+                            <ObjectName>HeightSegmented</ObjectName>
+                            <Layout>horizontal</Layout>
+                            <SizePolicy>max,f</SizePolicy>
+                            <Size>0me,40f</Size>
+                            <Children>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                            <SetVariable name="Text">0.75</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
+                            <SetVariable name="Value">0.75</SetVariable>
+                              </Template>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">1.0</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
+                            <SetVariable name="Value">1.0</SetVariable>
+                              </Template>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">1.5</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
+                            <SetVariable name="Value">1.5</SetVariable>
+                              </Template>
+                              <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="Text">2.0</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
+                            <SetVariable name="Value">2.0</SetVariable>
+                              </Template>
+                            </Children>
+                          </WidgetGroup>
+                        </Children>
+                      </WidgetGroup>
+
                       <WidgetGroup>
                         <ObjectName>SettingsSpacer</ObjectName>
                         <Size>0me,0me</Size>

@@ -126,20 +126,23 @@ WOverview::WOverview(
             QStringLiteral("WaveformOverviewType"),
             this);
     m_pTypeControl->connectValueChanged(this, &WOverview::slotTypeControlChanged);
-    slotTypeControlChanged(m_pTypeControl->get());
 
-    // The overview follows the scrolling waveform into 3Band, and nothing on
-    // WaveformWidgetFactory announces a widget type change, so watch its
-    // control instead. `[Waveform] waveform_type` is created in
-    // WaveformWidgetFactory::setConfig(), which MixxxMainWindow runs before it
-    // loads any skin, so this proxy is always bound by the time a WOverview
-    // exists.
-    m_pWaveformTypeControl = make_parented<ControlProxy>(
+    // The writable counterpart of the above. DlgPrefWaveform owns the
+    // WaveformOverviewType control and calls setReadOnly() on it, so a skin
+    // cannot drive it: the tap registers and nothing happens. This one is
+    // created by WaveformWidgetFactory::setConfig(), which runs before any skin
+    // loads, and is what the Settings page writes. Both are connected to the
+    // same handler, so the desktop dialog and the panel stay interchangeable.
+    m_pOverviewTypeControl = make_parented<ControlProxy>(
             QStringLiteral("[Waveform]"),
-            QStringLiteral("waveform_type"),
+            QStringLiteral("waveform_overview_type"),
             this);
-    m_pWaveformTypeControl->connectValueChanged(
-            this, &WOverview::slotWaveformTypeChanged);
+    m_pOverviewTypeControl->connectValueChanged(
+            this, &WOverview::slotTypeControlChanged);
+    // Seeded from the writable one, because that is the one initialised from
+    // the config key; the read-only one is not set until the preferences page
+    // first applies it.
+    slotTypeControlChanged(m_pOverviewTypeControl->get());
 
     // Update immediately when the normalize option or the visual gain have been
     // changed in the preferences.
@@ -556,28 +559,17 @@ void WOverview::slotTypeControlChanged(double v) {
 }
 
 WOverview::Type WOverview::effectiveType() const {
-    // The overview has no selector of its own for 3Band; it follows the
-    // scrolling waveform instead, which is what "no new selector button"
-    // means. m_pTypeControl is deliberately not written here, so the user's
-    // stored overview preference in m_type is untouched and comes back
-    // unchanged the moment the waveform is set to anything else.
-    if (WaveformWidgetFactory::instance()->getType() ==
-            WaveformWidgetType::AllShaderRekordbox3BandWaveform) {
-        return Type::Rekordbox3Band;
-    }
+    // Whatever was chosen, with no override.
+    //
+    // This used to force Type::Rekordbox3Band whenever the scrolling waveform
+    // was set to 3Band, because the overview had no selector of its own. It has
+    // one now, on Settings -> General, so an override would make that row a
+    // control that silently loses arguments with the waveform type next to it.
+    //
+    // Choosing 3Band for a track with no PWV6 costs nothing: the drawing path
+    // returns false and falls through to Type::RGB per track, which is the same
+    // thing that already happens for anything rekordbox never analysed.
     return m_type;
-}
-
-void WOverview::slotWaveformTypeChanged(double v) {
-    Q_UNUSED(v);
-    // effectiveType() may have changed even though m_type did not, and nothing
-    // else would notice. Reset exactly as slotTypeControlChanged() does. This
-    // also runs for waveform type changes that do not involve 3Band at all,
-    // which costs one redraw of an overview the user just reconfigured.
-    m_pWaveform.clear();
-    m_waveformSourceImage = QImage();
-    m_b3BandSourceValid = false;
-    slotWaveformSummaryUpdated();
 }
 
 void WOverview::slotNormalizeOrVisualGainChanged() {

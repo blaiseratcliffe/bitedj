@@ -51,10 +51,11 @@ class WOverview : public WWidget, public TrackDropTarget {
         /// analysis. Appended deliberately, so the stored values of the other
         /// three do not move.
         ///
-        /// This one is not offered in the preferences combo box and is never
-        /// written back to `[Waveform] WaveformOverviewType`. It is selected
-        /// implicitly, and only for as long as the scrolling waveform is set
-        /// to 3Band. See effectiveType().
+        /// The desktop preferences combo box does not offer it, but the
+        /// appliance's Settings -> General page does, through the writable
+        /// `[Waveform] waveform_overview_type` control, and it is written back
+        /// to `[Waveform] WaveformOverviewType` like any other value. A track
+        /// with no PWV6 falls through to RGB by itself.
         Rekordbox3Band,
     };
     Q_ENUM(Type);
@@ -94,7 +95,6 @@ class WOverview : public WWidget, public TrackDropTarget {
     void slotCueMenuPopupAboutToHide();
 
     void slotTypeControlChanged(double v);
-    void slotWaveformTypeChanged(double v);
     void slotNormalizeOrVisualGainChanged();
 
   private:
@@ -184,8 +184,9 @@ class WOverview : public WWidget, public TrackDropTarget {
     UserSettingsPointer m_pConfig;
 
     /// The user's stored overview preference, from
-    /// `[Waveform] WaveformOverviewType`. Never set to Type::Rekordbox3Band:
-    /// use effectiveType() to find out what is drawn.
+    /// `[Waveform] WaveformOverviewType`. effectiveType() returns this
+    /// unchanged; it is a separate function only because the drawing paths
+    /// read it in several places.
     Type m_type;
     int m_actualCompletion;
     bool m_pixmapDone;
@@ -244,7 +245,10 @@ class WOverview : public WWidget, public TrackDropTarget {
     /// `[Waveform] waveform_type`, watched only so the overview can repaint
     /// when the scrolling waveform switches into or out of 3Band. Read only;
     /// nothing here writes to it.
-    parented_ptr<ControlProxy> m_pWaveformTypeControl;
+    /// The writable overview type control, `[Waveform] waveform_overview_type`.
+    /// m_pTypeControl above is read-only (DlgPrefWaveform calls setReadOnly on
+    /// it), so a skin needs this one. Both feed slotTypeControlChanged().
+    parented_ptr<ControlProxy> m_pOverviewTypeControl;
 
     QPointF m_timeRulerPos;
     WaveformMarkLabel m_timeRulerPositionLabel;

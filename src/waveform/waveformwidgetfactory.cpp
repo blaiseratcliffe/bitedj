@@ -8,6 +8,7 @@
 #include <QGLShaderProgram>
 #endif
 
+#include <QMetaEnum>
 #include <QOpenGLFunctions>
 #include <QRegularExpression>
 #include <QStringList>
@@ -25,6 +26,10 @@
 #include "waveform/visualsmanager.h"
 #include "waveform/vsyncthread.h"
 #ifdef MIXXX_USE_QOPENGL
+// For WOverview::Type, so the overview type control validates against the enum
+// rather than a hardcoded count that a new overview type would silently
+// outgrow.
+#include "widget/woverview.h"
 #include "waveform/widgets/allshader/filteredwaveformwidget.h"
 #include "waveform/widgets/allshader/hsvwaveformwidget.h"
 #include "waveform/widgets/allshader/lrrgbwaveformwidget.h"
@@ -414,6 +419,42 @@ bool WaveformWidgetFactory::setConfig(UserSettingsPointer config) {
         m_pCODefaultZoom->set(m_defaultZoom);
     }
 
+    // Skin-facing control for the overall waveform amplitude. VisualGain_0 is
+    // read into m_visualGain below and every signal renderer multiplies it in,
+    // so this is a display setting for all waveform types rather than a 3Band
+    // one. Same shape as the zoom control above.
+    if (!m_pCOVisualGain) {
+        m_pCOVisualGain.reset(new ControlObject(
+                ConfigKey(QStringLiteral("[Waveform]"),
+                        QStringLiteral("waveform_visual_gain"))));
+        m_pCOVisualGain->set(getVisualGain(All));
+        connect(m_pCOVisualGain.data(),
+                &ControlObject::valueChanged,
+                this,
+                &WaveformWidgetFactory::slotSetVisualGainFromControl);
+    } else {
+        m_pCOVisualGain->set(getVisualGain(All));
+    }
+
+    // Skin-facing control for the overview strip's type. DlgPrefWaveform owns a
+    // ControlPushButton on the same [Waveform] WaveformOverviewType config key
+    // and calls setReadOnly() on it, so a skin writing to that one is silently
+    // ignored: the button renders, the tap registers, nothing happens. This is
+    // the writable counterpart. WOverview watches it directly.
+    if (!m_pCOOverviewType) {
+        m_pCOOverviewType.reset(new ControlObject(
+                ConfigKey(QStringLiteral("[Waveform]"),
+                        QStringLiteral("waveform_overview_type"))));
+        connect(m_pCOOverviewType.data(),
+                &ControlObject::valueChanged,
+                this,
+                &WaveformWidgetFactory::slotSetOverviewTypeFromControl);
+    }
+    m_pCOOverviewType->set(m_config->getValue(
+            ConfigKey(QStringLiteral("[Waveform]"),
+                    QStringLiteral("WaveformOverviewType")),
+            static_cast<int>(WOverview::Type::RGB)));
+
     bool zoomSync = m_config->getValue(ConfigKey("[Waveform]", "ZoomSynchronization"), m_zoomSync);
     setZoomSync(zoomSync);
 
@@ -741,6 +782,28 @@ bool WaveformWidgetFactory::setWidgetTypeFromHandle(int handleIndex, bool force)
 
 void WaveformWidgetFactory::slotSetDefaultZoomFromControl(double value) {
     setDefaultZoom(value);
+}
+
+void WaveformWidgetFactory::slotSetVisualGainFromControl(double value) {
+    // setVisualGain() both persists to VisualGain_0 and emits
+    // overallVisualGainChanged() itself, so there is nothing to do after it.
+    // Clamped because this is reachable from a skin and a controller: at 0 the
+    // waveform vanishes with no other symptom, which is a confusing thing to
+    // leave one tap away.
+    setVisualGain(All, math_clamp(value, 0.1, 4.0));
+}
+
+void WaveformWidgetFactory::slotSetOverviewTypeFromControl(double value) {
+    // WOverview watches this control and repaints itself; all this has to do is
+    // persist the choice, the mirror-back the waveform type and zoom controls
+    // also do so the two sources cannot drift apart across a restart.
+    const int type = static_cast<int>(value);
+    if (type < 0 || type >= QMetaEnum::fromType<WOverview::Type>().keyCount()) {
+        return;
+    }
+    m_config->setValue(ConfigKey(QStringLiteral("[Waveform]"),
+                               QStringLiteral("WaveformOverviewType")),
+            type);
 }
 
 void WaveformWidgetFactory::setDefaultZoom(double zoom) {

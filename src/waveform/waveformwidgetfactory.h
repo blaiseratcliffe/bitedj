@@ -204,6 +204,8 @@ class WaveformWidgetFactory : public QObject, public Singleton<WaveformWidgetFac
     void slotFrameSwapped();
     void slotSetWidgetTypeFromControl(double value);
     void slotSetDefaultZoomFromControl(double value);
+    void slotSetVisualGainFromControl(double value);
+    void slotSetOverviewTypeFromControl(double value);
 
   private:
     void renderSelf();
@@ -233,6 +235,15 @@ class WaveformWidgetFactory : public QObject, public Singleton<WaveformWidgetFac
     QScopedPointer<ControlObject> m_pCOWaveformType;
     QScopedPointer<ControlObject> m_pCOApplyEqToWaveform;
     QScopedPointer<ControlObject> m_pCODefaultZoom;
+    /// The overall waveform amplitude, [Waveform] VisualGain_0, as something a
+    /// skin can bind to. Every signal renderer already multiplies it in, so
+    /// this is a display setting for all waveform types and not a 3Band one.
+    QScopedPointer<ControlObject> m_pCOVisualGain;
+    /// The overview strip's type. The preferences dialog owns a control on the
+    /// same config key but calls setReadOnly() on it (dlgprefwaveform.cpp), so
+    /// a skin cannot write that one; this is the writable counterpart, exactly
+    /// as waveform_type and waveform_default_zoom are for their config keys.
+    QScopedPointer<ControlObject> m_pCOOverviewType;
 
     bool m_skipRender;
     int m_frameRate;

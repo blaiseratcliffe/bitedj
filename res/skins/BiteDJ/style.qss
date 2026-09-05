@@ -959,6 +959,31 @@ WBeatSpinBox::up-button {
   min-width: 68px;
 }
 
+/* The General page's OVERVIEW and HEIGHT rows sit in the right-hand column,
+ * which is about 200px wide against the 492px a full-width row gets, so four
+ * segments cannot have the shared 80px min-width: that would ask for 320px.
+ * 44px asks for 176px and leaves room for the row label. The longest labels are
+ * 3BAND and 0.75, five and four characters at 12px.
+ *
+ * They are in the column rather than full width because there are about ten
+ * pixels left below the SPLIT row and each row is 52f, so two more full-width
+ * rows would run into the deck info bar. The right column ends three rows
+ * before the left one and the section is only as tall as its taller column, so
+ * this space was already being wasted. Measure it on the panel. */
+#OverviewSegmented,
+#HeightSegmented {
+  qproperty-layoutAlignment: 'AlignRight | AlignVCenter';
+}
+
+#OverviewSegmented #SettingsSegmentLeft,
+#OverviewSegmented #SettingsSegmentMid,
+#OverviewSegmented #SettingsSegmentRight,
+#HeightSegmented #SettingsSegmentLeft,
+#HeightSegmented #SettingsSegmentMid,
+#HeightSegmented #SettingsSegmentRight {
+  min-width: 44px;
+}
+
 #SettingsSegmentLeft {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
