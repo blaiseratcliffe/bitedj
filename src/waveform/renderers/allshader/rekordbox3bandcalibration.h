@@ -72,8 +72,11 @@ struct Rekordbox3BandCalibration {
     // The bands are concentric, so the colour at any height is decided by
     // which band reaches that far, and only the RATIOS between these three
     // matter. Scaling all three together changes the amplitude and moves no
-    // colour at all. 0.55 on the low band is the headroom judged on the panel;
-    // the other two are the balance.
+    // colour at all. That is measured, not argued: raising all three by 1.8x on
+    // the device left the light-to-blue ratio at 0.33, unchanged to two
+    // decimal places, while the waveform went from half the pane to filling it.
+    // So read these as two independent settings that happen to share three
+    // numbers. The ratio 1 : 0.51 : 0.24 is the colour; the 1.00 is the height.
     //
     // Why they have to differ. In stored PWV7 the high band is not the quiet
     // one: measured across three real drum and bass tracks its p95 is the
@@ -85,9 +88,9 @@ struct Rekordbox3BandCalibration {
     // sets the radius of the cream all-three core. At equal scales that core
     // was 58% of everything drawn.
     //
-    // Where 0.28 and 0.13 come from: two CDJ-3000 photographs, classified by
-    // colour family and compared against renders of real PWV7 through the same
-    // classifier. The reference measures blue 49-57% of drawn ink, amber
+    // Where the 1 : 0.51 : 0.24 ratio comes from: two CDJ-3000 photographs,
+    // classified by colour family and compared against renders of real PWV7
+    // through the same classifier. The reference measures blue 49-57% of ink, amber
     // 21-29%, light 15-20%, with light divided by blue between 0.27 and 0.41.
     // Equal scales measured 7.20 on that last figure. These scales, with the
     // punch below, measure 0.32, with all four quantities inside the reference
@@ -98,10 +101,27 @@ struct Rekordbox3BandCalibration {
     // reorder two bands: where the high band's bytes exceed the low band's it
     // stays outside whatever gamma does. A global gamma of 4 moved that 7.20
     // only as far as 4.03. Scale reorders; gamma only reshapes.
+    //
+    // The height. 0.55 shipped here first and left the waveform at about half
+    // the pane, which is the second thing the balance change exposed. That
+    // number was set when all three bands were 0.55 and the combined picture
+    // was tall enough that 0.55 read as sensible headroom; once mid and high
+    // came down, the low band alone became the envelope and the picture lost
+    // half its height. Measured against the same CDJ-3000 photograph: it fills
+    // 64% of its pane at the median and peaks at 84%, against 33% and 44% at
+    // 0.55. At 1.00 this measures 59% and 81% offscreen, and 60% and 74% on the
+    // panel.
+    //
+    // 1.00 is also the largest value that cannot clip. scaleHeight() clamps to
+    // the half height, and pwv7FullScale is 127, so a low band byte of 127 maps
+    // to exactly the pane edge. Measured across three real drum and bass
+    // tracks, the low band peaks at 102, 108 and 102, so the envelope tops out
+    // near 85% and there is real black above it. Raise this past 1.00 and the
+    // loudest columns start flattening against the edge.
     float gamma = 1.0f;
-    float lowHeightScale = 0.55f;
-    float midHeightScale = 0.28f;
-    float highHeightScale = 0.13f;
+    float lowHeightScale = 1.00f;
+    float midHeightScale = 0.51f;
+    float highHeightScale = 0.24f;
     // How much of the peak-hold each band keeps when several entries fall under
     // one column, in 0..1. 1 is `MaxOverRange` exactly and 0 a rounded mean.
     // Only read when `columnRule` is `PunchBlend`. The low band keeps its full
