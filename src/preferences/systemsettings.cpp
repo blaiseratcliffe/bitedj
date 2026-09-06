@@ -15,6 +15,7 @@
 #include "analyzer/trackanalysisscheduler.h"
 #include "control/controlobject.h"
 #include "control/controlpushbutton.h"
+#include "encoder/encodermp3settings.h"
 #include "library/dao/fsanalysiscache.h"
 #include "library/dao/fshistoryworker.h"
 #include "mixer/basetrackplayer.h"
@@ -199,6 +200,41 @@ SystemSettings::SystemSettings(UserSettingsPointer pConfig,
             &ControlObject::valueChanged,
             this,
             &SystemSettings::onScreenRotationChanged);
+
+    // Recording format (System settings tab): 0 = WAV, 1 = MP3. Seeded from
+    // whatever [Recording],Encoding already holds rather than a fixed
+    // default, since that key is stock Mixxx's own source of truth and this
+    // CO is only ever a translation of it (see the member comment). A fresh
+    // install has never had Encoding set — the appliance skin never opens
+    // the stock DlgPrefRecord that normally seeds it — which today leaves
+    // EncoderFactory::getFormatFor() warning on every recording start as it
+    // falls back to WAV; set the default explicitly here to close that gap.
+    const ConfigKey recordingEncodingKey(RECORDING_PREF_KEY, "Encoding");
+    QString recordingEncoding = m_pConfig->getValueString(recordingEncodingKey);
+    if (recordingEncoding.isEmpty()) {
+        recordingEncoding = QString(ENCODING_WAVE);
+        m_pConfig->setValue(recordingEncodingKey, recordingEncoding);
+    }
+    m_pCoRecordingFormat = std::make_unique<ControlObject>(
+            ConfigKey(kBiteDj, QStringLiteral("recording_format")));
+    m_pCoRecordingFormat->set(recordingEncoding == QLatin1String(ENCODING_MP3) ? 1.0 : 0.0);
+    connect(m_pCoRecordingFormat.get(),
+            &ControlObject::valueChanged,
+            this,
+            &SystemSettings::onRecordingFormatChanged);
+
+    // MP3 bitrate (System settings tab): an index into EncoderMp3Settings'
+    // CBR bitrate list. Bound directly to the stock [Recording],MP3_Quality
+    // key rather than translated, since both sides already agree on a plain
+    // int index (see the member comment).
+    const ConfigKey mp3QualityKey(RECORDING_PREF_KEY, "MP3_Quality");
+    m_pCoMp3Quality = std::make_unique<ControlObject>(mp3QualityKey);
+    m_pCoMp3Quality->set(m_pConfig->getValue(
+            mp3QualityKey, EncoderMp3Settings::DEFAULT_BITRATE_INDEX));
+    connect(m_pCoMp3Quality.get(),
+            &ControlObject::valueChanged,
+            this,
+            &SystemSettings::onMp3QualityChanged);
 
     // Drive-level eject, addressed by physical USB port.
     for (int drive = 1; drive <= kNumEjectDrives; ++drive) {
@@ -892,6 +928,49 @@ void SystemSettings::onScreenRotationChanged(double value) {
         notify(tr("Failed to apply screen rotation"),
                 Notifications::Severity::Error);
     }
+}
+
+// Whether a recording is armed, running, or mid-split — the exact window the
+// skin disables the Recording row for (a single <Not/> transform on this same
+// CO). Deliberately not RecordingManager::isRecordingActive(): that only
+// turns true once the audio-thread encoder confirms the file opened, which is
+// one or more buffer callbacks after this CO already flipped to RECORD_READY.
+// Guarding on isRecordingActive() would leave a gap, between the tap and that
+// confirmation, where a caller writing the format/quality COs directly (a
+// controller mapping, not the disabled skin widget) could still land a change
+// RecordingManager would read on the next split.
+bool SystemSettings::isRecordingArmedOrActive() const {
+    return ControlObject::get(ConfigKey(RECORDING_PREF_KEY, "status")) != RECORD_OFF;
+}
+
+void SystemSettings::onRecordingFormatChanged(double value) {
+    if (isRecordingArmedOrActive()) {
+        // Revert rather than no-op: the segment button already moved to the
+        // rejected value via its own Connection before this slot ran, so
+        // leaving config untouched would strand the skin showing a selection
+        // that was never applied.
+        const QString currentEncoding = m_pConfig->getValueString(
+                ConfigKey(RECORDING_PREF_KEY, "Encoding"));
+        m_pCoRecordingFormat->set(
+                currentEncoding == QLatin1String(ENCODING_MP3) ? 1.0 : 0.0);
+        notify(tr("Cannot change recording format while recording"),
+                Notifications::Severity::Warning);
+        return;
+    }
+    m_pConfig->setValue(ConfigKey(RECORDING_PREF_KEY, "Encoding"),
+            value != 0.0 ? QString(ENCODING_MP3) : QString(ENCODING_WAVE));
+}
+
+void SystemSettings::onMp3QualityChanged(double value) {
+    const ConfigKey mp3QualityKey(RECORDING_PREF_KEY, "MP3_Quality");
+    if (isRecordingArmedOrActive()) {
+        m_pCoMp3Quality->set(m_pConfig->getValue(
+                mp3QualityKey, EncoderMp3Settings::DEFAULT_BITRATE_INDEX));
+        notify(tr("Cannot change recording bitrate while recording"),
+                Notifications::Severity::Warning);
+        return;
+    }
+    m_pConfig->setValue(mp3QualityKey, static_cast<int>(value));
 }
 
 void SystemSettings::onShutdownRequested(double value) {

@@ -1310,6 +1310,90 @@
                 </Children>
               </WidgetGroup>
 
+              <!-- Recording format/bitrate. Row disables itself on
+                   [Recording],status (armed/recording/splitting, not just
+                   "actively recording" — see SystemSettings' guard for why
+                   that distinction matters) so format/bitrate can't be
+                   changed out from under a running capture; the Quality
+                   segment additionally disables on its own when WAV is
+                   selected, since bitrate is meaningless there. -->
+              <WidgetGroup>
+                <ObjectName>SettingsRow</ObjectName>
+                <Layout>horizontal</Layout>
+                <Size>0me,68f</Size>
+                <Children>
+                  <Label>
+                    <ObjectName>SettingsRowLabel</ObjectName>
+                    <Text>Recording</Text>
+                    <Size>0me,0me</Size>
+                  </Label>
+                  <WidgetGroup>
+                    <ObjectName>RecordingFormatSegmented</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>120f,44f</Size>
+                    <Children>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                        <SetVariable name="Text">WAV</SetVariable>
+                        <SetVariable name="ConfigKey">[BiteDJ],recording_format</SetVariable>
+                        <SetVariable name="Value">0</SetVariable>
+                      </Template>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                        <SetVariable name="Text">MP3</SetVariable>
+                        <SetVariable name="ConfigKey">[BiteDJ],recording_format</SetVariable>
+                        <SetVariable name="Value">1</SetVariable>
+                      </Template>
+                    </Children>
+                  </WidgetGroup>
+                  <WidgetGroup>
+                    <Size>12f,0me</Size>
+                  </WidgetGroup>
+                  <WidgetGroup>
+                    <ObjectName>Mp3QualitySegmented</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>240f,44f</Size>
+                    <Children>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                        <SetVariable name="Text">128</SetVariable>
+                        <SetVariable name="ConfigKey">[Recording],MP3_Quality</SetVariable>
+                        <SetVariable name="Value">6</SetVariable>
+                      </Template>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                        <SetVariable name="Text">192</SetVariable>
+                        <SetVariable name="ConfigKey">[Recording],MP3_Quality</SetVariable>
+                        <SetVariable name="Value">8</SetVariable>
+                      </Template>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                        <SetVariable name="Text">256</SetVariable>
+                        <SetVariable name="ConfigKey">[Recording],MP3_Quality</SetVariable>
+                        <SetVariable name="Value">10</SetVariable>
+                      </Template>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                        <SetVariable name="Text">320</SetVariable>
+                        <SetVariable name="ConfigKey">[Recording],MP3_Quality</SetVariable>
+                        <SetVariable name="Value">11</SetVariable>
+                      </Template>
+                    </Children>
+                    <Connection>
+                      <ConnectValueFromWidget>false</ConnectValueFromWidget>
+                      <ConfigKey>[BiteDJ],recording_format</ConfigKey>
+                      <BindProperty>enabled</BindProperty>
+                    </Connection>
+                  </WidgetGroup>
+                </Children>
+                <Connection>
+                  <ConnectValueFromWidget>false</ConnectValueFromWidget>
+                  <ConfigKey>[Recording],status</ConfigKey>
+                  <Transform><Not/></Transform>
+                  <BindProperty>enabled</BindProperty>
+                </Connection>
+              </WidgetGroup>
+
               <VersionLabel>
                 <ObjectName>SettingsVersionLabel</ObjectName>
                 <Alignment>center</Alignment>

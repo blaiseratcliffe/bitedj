@@ -130,6 +130,8 @@ class SystemSettings : public QObject {
     void onVinylBrakeChanged(double value);
     void onHotcueActivatePlaysChanged(double value);
     void onScreenRotationChanged(double value);
+    void onRecordingFormatChanged(double value);
+    void onMp3QualityChanged(double value);
     // RecordingManager::isRecording — the engine's own view of whether the
     // sidechain recorder is running, which is what confirms a start took (the
     // file is opened on the audio thread, a few callbacks after we ask) and
@@ -168,6 +170,11 @@ class SystemSettings : public QObject {
     bool tryUnmount(const QString& mountPoint, QString* pError);
     // Row index of the mount at `mountPoint` in the current enumeration, or -1.
     int rowIndexForMountPoint(const QString& mountPoint) const;
+
+    // Whether [Recording],status is anything but off — armed, recording, or
+    // mid-split. The exact window the skin's Recording row disables itself
+    // for, and what onRecordingFormatChanged/onMp3QualityChanged guard on.
+    bool isRecordingArmedOrActive() const;
 
     // Points [Recording],Directory at <mount>/Recordings on the indexed drive
     // and asks RecordingManager to start. Notifies and does nothing when the
@@ -234,6 +241,18 @@ class SystemSettings : public QObject {
     std::unique_ptr<ControlObject> m_pCoHotcueActivatePlays;
     // [BiteDJ],screen_rotation — display rotation in degrees (0 or 180).
     std::unique_ptr<ControlObject> m_pCoScreenRotation;
+    // [BiteDJ],recording_format — 0 = WAV, 1 = MP3. BiteDJ-namespaced (unlike
+    // the CO below) because the CO it fronts, [Recording],Encoding, is a
+    // string and CO transport is doubles-only, so onRecordingFormatChanged
+    // is a translation layer rather than a direct mirror. Seeded from
+    // whatever Encoding currently holds; never itself persisted to config,
+    // so [Recording],Encoding stays the single source of truth.
+    std::unique_ptr<ControlObject> m_pCoRecordingFormat;
+    // Bound directly to the stock [Recording],MP3_Quality key (an index into
+    // EncoderMp3Settings' CBR bitrate list) — same numeric semantics on both
+    // sides, so no translation layer, following the HotcueActivatePlays
+    // pattern above rather than the BiteDJ-namespaced one.
+    std::unique_ptr<ControlObject> m_pCoMp3Quality;
     // Emitted from the controller thread; the queued connection hops the eject
     // onto this (main) thread, which ejectRow() requires.
     std::vector<std::unique_ptr<ControlPushButton>> m_ejectDriveCos;

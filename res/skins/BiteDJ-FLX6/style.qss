@@ -814,6 +814,22 @@ WBeatSpinBox::up-button {
   min-width: 60px;
 }
 
+/* The System page's RECORDING row: WAV/MP3 (3 chars each, same 60px as the
+ * Screen row's own 2-segment groups above) and, when MP3 is selected, a
+ * bitrate from 128/192/256/320 (3 digits each, 4 segments at the same 60px
+ * so the group's declared 240f width divides evenly). Unmeasured — confirm
+ * on the panel before trusting this arithmetic, per docs/M4-SKIN-NOTES.md. */
+#RecordingFormatSegmented #SettingsSegmentLeft,
+#RecordingFormatSegmented #SettingsSegmentRight {
+  min-width: 60px;
+}
+
+#Mp3QualitySegmented #SettingsSegmentLeft,
+#Mp3QualitySegmented #SettingsSegmentMid,
+#Mp3QualitySegmented #SettingsSegmentRight {
+  min-width: 60px;
+}
+
 /* The General page's ZOOM row carries seven segments in the same fixed 492f
  * container the six-segment WAVE row above it uses, so that the two rows line
  * up. Seven at the shared 80px min-width would need 560px and overflow. 68px
