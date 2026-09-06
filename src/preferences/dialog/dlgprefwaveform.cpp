@@ -31,6 +31,16 @@ DlgPrefWaveform::DlgPrefWaveform(
             tr("Filtered"), QVariant::fromValue(WOverview::Type::Filtered));
     waveformOverviewComboBox->addItem(tr("HSV"), QVariant::fromValue(WOverview::Type::HSV));
     waveformOverviewComboBox->addItem(tr("RGB"), QVariant::fromValue(WOverview::Type::RGB));
+    // Rekordbox3Band has to be offered here even though this dialog is
+    // unreachable on the appliance. The block below treats a stored type this
+    // combo box does not contain as an invalid config value and writes RGB back
+    // over it, and this dialog is constructed eagerly at startup
+    // (mixxxmainwindow.cpp), so leaving it out silently reset the overview to
+    // RGB on every launch for anyone who chose 3Band from the Settings page.
+    // The tap worked, the strip changed, the config was written, and the next
+    // restart undid it.
+    waveformOverviewComboBox->addItem(
+            tr("3Band (rekordbox)"), QVariant::fromValue(WOverview::Type::Rekordbox3Band));
     m_pTypeControl = std::make_unique<ControlPushButton>(kOverviewTypeCfgKey);
     m_pTypeControl->setStates(QMetaEnum::fromType<WOverview::Type>().keyCount());
     m_pTypeControl->setReadOnly();
@@ -39,11 +49,15 @@ DlgPrefWaveform::DlgPrefWaveform(
             m_pConfig->getValue<WOverview::Type>(kOverviewTypeCfgKey, WOverview::Type::RGB);
     int cfgTypeIndex = waveformOverviewComboBox->findData(QVariant::fromValue(overviewType));
     if (cfgTypeIndex == -1) {
-        // Invalid config value, set default type RGB and write it to config
+        // Invalid config value, set default type RGB and write it to config.
+        // The value written is the enum, not cfgTypeIndex: those coincide only
+        // while the combo box happens to be filled in enum order, which is not
+        // a property anything enforces.
         cfgTypeIndex = waveformOverviewComboBox->findData(
                 QVariant::fromValue(WOverview::Type::RGB));
         waveformOverviewComboBox->setCurrentIndex(cfgTypeIndex);
-        m_pConfig->setValue(kOverviewTypeCfgKey, cfgTypeIndex);
+        m_pConfig->setValue(kOverviewTypeCfgKey,
+                static_cast<int>(WOverview::Type::RGB));
     } else {
         waveformOverviewComboBox->setCurrentIndex(cfgTypeIndex);
     }
