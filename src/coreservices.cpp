@@ -9,6 +9,7 @@
 #include "broadcast/broadcastmanager.h"
 #endif
 #include "control/controlindicatortimer.h"
+#include "control/controlsocket.h"
 #include "controllers/controllermanager.h"
 #include "controllers/keyboard/keyboardeventfilter.h"
 #include "database/mixxxdb.h"
@@ -575,6 +576,15 @@ void CoreServices::initialize(QApplication* pApp) {
     // them on startup.
     m_pSkinControls = std::make_unique<SkinControls>();
 
+    // Bite DJ: opt-in scripting surface over ControlObject, off unless
+    // BITEDJ_CONTROL names a port (pi/bin/bitedj-run exports it when
+    // ~/.bitedj-control-port exists). Constructed last and looking every
+    // control up lazily, so it does not care that the skin's own controls
+    // do not exist until MixxxMainWindow parses the skin.
+    if (const auto controlPort = ControlSocket::configuredPort()) {
+        m_pControlSocket = std::make_unique<ControlSocket>(*controlPort);
+    }
+
     // Load tracks in args.qlMusicFiles (command line arguments) into player
     // 1 and 2:
     const QList<QString>& musicFiles = m_cmdlineArgs.getMusicFiles();
@@ -701,6 +711,11 @@ void CoreServices::finalize() {
 
     qDebug() << t.elapsed(false).debugMillisWithUnit() << "saving configuration";
     m_pSettingsManager->save();
+
+    // Bite DJ fork: stop answering scripted requests before anything below
+    // is torn down, so a client cannot write to a control whose owner has
+    // already gone.
+    m_pControlSocket.reset();
 
     // Bite DJ fork: AudioDeviceSettings / ControllerSettings each hold a
     // shared_ptr to their manager and would otherwise keep it alive past the

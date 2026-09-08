@@ -426,6 +426,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/control/controlpotmeter.cpp
   src/control/controlproxy.cpp
   src/control/controlpushbutton.cpp
+  src/control/controlsocket.cpp
   src/control/controlttrotary.cpp
   src/controllers/controller.cpp
   src/controllers/controllerenumerator.cpp
@@ -1094,6 +1095,7 @@ target_precompile_headers(mixxx-lib PUBLIC
   src/control/controlpotmeter.h
   src/control/controlproxy.h
   src/control/controlpushbutton.h
+  src/control/controlsocket.h
   src/control/controlsortfiltermodel.h
   src/control/controlttrotary.h
   src/control/controlvalue.h

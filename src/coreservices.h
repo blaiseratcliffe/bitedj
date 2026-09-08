@@ -28,6 +28,7 @@ class Notifications;
 class AudioDeviceSettings;
 class ControllerSettings;
 class SystemSettings;
+class ControlSocket;
 class HighContrast;
 
 namespace mixxx {
@@ -157,6 +158,7 @@ class CoreServices : public QObject {
     std::unique_ptr<AudioDeviceSettings> m_pAudioDeviceSettings;
     std::unique_ptr<ControllerSettings> m_pControllerSettings;
     std::unique_ptr<SystemSettings> m_pSystemSettings;
+    std::unique_ptr<ControlSocket> m_pControlSocket;
     // Constructed after SystemSettings, which is what it enumerates and watches
     // removable drives through.
     std::unique_ptr<SamplerDrive> m_pSamplerDrive;
