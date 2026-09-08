@@ -46,7 +46,8 @@ constexpr int kInitialNavWatchdogMs = 1500;
 // Child indices in the skin's two WidgetStacks, used to navigate to
 // Settings → Devices on an unconfigured startup.
 //   skin.xml top level: overview=0, library=1, samplers=2, levels=3, settings=4
-//   settings.xml:       general=0, midi=1, columns=2, system=3, audio=4
+//   settings.xml:       general=0, midi=1, columns=2, system=3, audio=4,
+//                       waveform=5
 // Reordering either stack means moving these with it.
 constexpr int kSettingsTabIndex = 4;
 constexpr int kDevicesSubtabIndex = 1;

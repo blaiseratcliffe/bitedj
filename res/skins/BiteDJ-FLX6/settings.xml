@@ -30,6 +30,10 @@
             <SetVariable name="Text">System</SetVariable>
             <SetVariable name="ConfigKey">system</SetVariable>
           </Template>
+          <Template src="skin:templates/setting_subtab_button.xml">
+            <SetVariable name="Text">Waveform</SetVariable>
+            <SetVariable name="ConfigKey">waveform</SetVariable>
+          </Template>
         </Children>
       </WidgetGroup>
 
@@ -254,6 +258,20 @@
                       </WidgetGroup>
 
                       <WidgetGroup>
+                        <ObjectName>SettingsSpacer</ObjectName>
+                        <Size>0me,0me</Size>
+                      </WidgetGroup>
+
+                    </Children>
+                  </WidgetGroup>
+
+                  <WidgetGroup>
+                    <ObjectName>GeneralCol</ObjectName>
+                    <Layout>vertical</Layout>
+                    <SizePolicy>me,me</SizePolicy>
+                    <Children>
+
+                      <WidgetGroup>
                         <ObjectName>SettingsRow</ObjectName>
                         <Layout>horizontal</Layout>
                         <Size>0me,52f</Size>
@@ -322,20 +340,6 @@
                         </Children>
                       </WidgetGroup>
 
-                      <WidgetGroup>
-                        <ObjectName>SettingsSpacer</ObjectName>
-                        <Size>0me,0me</Size>
-                      </WidgetGroup>
-
-                    </Children>
-                  </WidgetGroup>
-
-                  <WidgetGroup>
-                    <ObjectName>GeneralCol</ObjectName>
-                    <Layout>vertical</Layout>
-                    <SizePolicy>me,me</SizePolicy>
-                    <Children>
-
                       <!-- How long a thrown jog wheel keeps spinning after the DJ
                            lets go: Off snaps the platter straight back (stock
                            Mixxx), Short is a quick dab of brake, Long is a
@@ -394,38 +398,6 @@
                           <ConfigKey>[BiteDJ],vinyl_mode</ConfigKey>
                           <BindProperty>enabled</BindProperty>
                         </Connection>
-                      </WidgetGroup>
-
-                      <WidgetGroup>
-                        <ObjectName>SettingsRow</ObjectName>
-                        <Layout>horizontal</Layout>
-                        <Size>0me,52f</Size>
-                        <Children>
-                          <Label>
-                            <ObjectName>SettingsRowLabel</ObjectName>
-                            <Text>Apply Waveform EQ</Text>
-                            <Size>0me,0me</Size>
-                          </Label>
-                          <WidgetGroup>
-                            <ObjectName>SettingsSegmented</ObjectName>
-                            <Layout>horizontal</Layout>
-                            <Size>110f,40f</Size>
-                            <Children>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                                <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
-                                <SetVariable name="Text">On</SetVariable>
-                                <SetVariable name="ConfigKey">[Waveform],apply_eq_to_waveform</SetVariable>
-                                <SetVariable name="Value">1</SetVariable>
-                              </Template>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                                <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
-                                <SetVariable name="Text">Off</SetVariable>
-                                <SetVariable name="ConfigKey">[Waveform],apply_eq_to_waveform</SetVariable>
-                                <SetVariable name="Value">0</SetVariable>
-                              </Template>
-                            </Children>
-                          </WidgetGroup>
-                        </Children>
                       </WidgetGroup>
 
                       <!-- All three destructive actions share one row: the column
@@ -527,125 +499,6 @@
                         </Children>
                       </WidgetGroup>
 
-                      <!-- The overview strip's renderer, independent of the
-                           scrolling waveform above it. Writes
-                           [Waveform],waveform_overview_type, the writable
-                           control added in waveformwidgetfactory.cpp.
-
-                           NOT [Waveform],WaveformOverviewType. DlgPrefWaveform
-                           owns a ControlPushButton on that key and calls
-                           setReadOnly() on it, so a skin binding there renders,
-                           accepts the tap and does nothing at all.
-
-                           Values are WOverview::Type: 0 Filtered, 1 HSV, 2 RGB,
-                           3 the rekordbox PWV6 preview. Choosing 3Band for a
-                           track rekordbox never analysed costs nothing; that
-                           path returns false and falls through to RGB per
-                           track. -->
-                      <WidgetGroup>
-                        <ObjectName>SettingsRow</ObjectName>
-                        <Layout>horizontal</Layout>
-                        <Size>0me,52f</Size>
-                        <Children>
-                          <Label>
-                            <ObjectName>SettingsRowLabel</ObjectName>
-                            <Text>Overview</Text>
-                            <Size>0me,0me</Size>
-                          </Label>
-                          <WidgetGroup>
-                            <ObjectName>OverviewSegmented</ObjectName>
-                            <Layout>horizontal</Layout>
-                            <SizePolicy>max,f</SizePolicy>
-                            <Size>0me,40f</Size>
-                            <Children>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
-                            <SetVariable name="Text">Filt</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
-                            <SetVariable name="Value">0</SetVariable>
-                              </Template>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">HSV</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
-                            <SetVariable name="Value">1</SetVariable>
-                              </Template>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">RGB</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
-                            <SetVariable name="Value">2</SetVariable>
-                              </Template>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
-                            <SetVariable name="Text">3Band</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
-                            <SetVariable name="Value">3</SetVariable>
-                              </Template>
-                            </Children>
-                          </WidgetGroup>
-                        </Children>
-                      </WidgetGroup>
-
-                      <!-- Overall waveform amplitude, not the pane's share
-                           of the screen; that is the Split row. Writes
-                           [Waveform],waveform_visual_gain, which persists to
-                           VisualGain_0 and is clamped to 0.1..4.0 in the slot,
-                           because 0 makes the waveform vanish with no other
-                           symptom.
-
-                           Every signal renderer multiplies this in, so it
-                           applies to all six waveform types rather than to
-                           3Band alone.
-
-                           1.0 is the top of the row on purpose. It leaves the
-                           shipped 3Band calibration exactly as measured against
-                           the CDJ-3000 reference, and it is also the largest
-                           gain that cannot clip: scaleHeight() clamps to the
-                           half height and pwv7FullScale is 127, so a low band
-                           byte of 127 lands on the pane edge. Values above it
-                           only flatten the loudest columns, which is not a
-                           trade worth offering when turning the gain down gives
-                           the same headroom with the shape intact. -->
-                      <WidgetGroup>
-                        <ObjectName>SettingsRow</ObjectName>
-                        <Layout>horizontal</Layout>
-                        <Size>0me,52f</Size>
-                        <Children>
-                          <Label>
-                            <ObjectName>SettingsRowLabel</ObjectName>
-                            <Text>Height</Text>
-                            <Size>0me,0me</Size>
-                          </Label>
-                          <WidgetGroup>
-                            <ObjectName>HeightSegmented</ObjectName>
-                            <Layout>horizontal</Layout>
-                            <SizePolicy>max,f</SizePolicy>
-                            <Size>0me,40f</Size>
-                            <Children>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                                <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
-                                <SetVariable name="Text">0.5</SetVariable>
-                                <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
-                                <SetVariable name="Value">0.5</SetVariable>
-                              </Template>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                                <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                                <SetVariable name="Text">0.75</SetVariable>
-                                <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
-                                <SetVariable name="Value">0.75</SetVariable>
-                              </Template>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                                <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
-                                <SetVariable name="Text">1.0</SetVariable>
-                                <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
-                                <SetVariable name="Value">1.0</SetVariable>
-                              </Template>
-                            </Children>
-                          </WidgetGroup>
-                        </Children>
-                      </WidgetGroup>
-
                       <WidgetGroup>
                         <ObjectName>SettingsSpacer</ObjectName>
                         <Size>0me,0me</Size>
@@ -654,277 +507,6 @@
                     </Children>
                   </WidgetGroup>
 
-                </Children>
-              </WidgetGroup>
-
-              <!-- Waveform renderer, full width. Six labelled segments need
-                   about 492px and a GeneralCol half-column is about 200px (see
-                   the Clear row's note above), so this row spans both columns
-                   instead of sitting inside one. One segmented group rather
-                   than two stacked rows: each segment's IsEqual transform
-                   already makes the highlight exclusive, so there is nothing
-                   to coordinate across two groups.
-
-                   The five button row measured 335px on the panel, about 67px
-                   per button. Six buttons in the old 340f would be about 56px
-                   each, too tight for STACK HD, eight uppercase bold characters
-                   at 12px.
-
-                   408f was tried first and measured on the panel: 408px wide,
-                   six cells of 68px, nothing clipped. But STACK HD renders 62px
-                   of text in that 68px cell, so it had 3px a side against 10px
-                   for FILT HD and 13px for STACK. Legible, and one font metric
-                   change away from clipping. 492f gives 82px a cell, which puts
-                   STACK HD on the same 10px a side that FILT HD had at 408f.
-                   The row spans full width and is right aligned, so it grows
-                   leftwards into empty space.
-
-                   Filt HD (22) and Stack HD (24) are the textured renderers.
-                   They read the same SignalLow/Mid/HighColor tags from
-                   waveform.xml as their standard siblings, so no colour is
-                   duplicated here.
-
-                   Named GeneralCol so the #GeneralCol descendant rules in
-                   style.qss still match, giving this row the same padding,
-                   13px label and 12px segments as every other row here. -->
-              <WidgetGroup>
-                <ObjectName>GeneralCol</ObjectName>
-                <Layout>vertical</Layout>
-                <SizePolicy>me,max</SizePolicy>
-                <Children>
-                  <WidgetGroup>
-                    <ObjectName>SettingsRow</ObjectName>
-                    <Layout>horizontal</Layout>
-                    <Size>0me,52f</Size>
-                    <Children>
-                      <Label>
-                        <ObjectName>SettingsRowLabel</ObjectName>
-                        <Text>Wave</Text>
-                        <Size>0me,0me</Size>
-                      </Label>
-                      <WidgetGroup>
-                        <ObjectName>SettingsSegmented</ObjectName>
-                        <Layout>horizontal</Layout>
-                        <Size>492f,40f</Size>
-                        <Children>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
-                            <SetVariable name="Text">RGB</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
-                            <SetVariable name="Value">17</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">Filt</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
-                            <SetVariable name="Value">19</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">Filt HD</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
-                            <SetVariable name="Value">22</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">Stack</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
-                            <SetVariable name="Value">25</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">Stack HD</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
-                            <SetVariable name="Value">24</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
-                            <SetVariable name="Text">3Band</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
-                            <SetVariable name="Value">26</SetVariable>
-                          </Template>
-                        </Children>
-                      </WidgetGroup>
-                    </Children>
-                  </WidgetGroup>
-                </Children>
-              </WidgetGroup>
-
-              <!-- Waveform zoom, full width, directly under the Wave row.
-
-                   Higher is more zoomed out. Zoom is visual samples per pixel
-                   and Mixxx stores 441 visual samples a second
-                   (analyzerwaveform.cpp), so a pane shows width * zoom / 441
-                   seconds. A cell is only half width once two or more decks
-                   are loaded; a single deck gets the whole band and twice the
-                   bars.
-
-                   These seven were measured rather than computed. On a 1280px
-                   band at drum and bass tempo, zoom 12 shows 34.8s, about 13
-                   pixels a beat; a CDJ-3000 photograph of comparable material
-                   works out at roughly 48 pixels a beat, which lands between
-                   zoom 3 and 4. The old row ran 4/8/12/16/24/32 and put four of
-                   its six values above the useful range with nothing between 4
-                   and 8, which is exactly where the CDJ look lives. 16 is kept
-                   as the one far-out option. Change them here if they feel
-                   wrong; no rebuild is needed for that.
-
-                   Writes [Waveform],waveform_default_zoom, the control added in
-                   waveformwidgetfactory.cpp. It clamps to 1..160, persists to
-                   the [Waveform] DefaultZoom config key and pushes to every
-                   live viewer, so all four decks move together. Nothing
-                   highlights until the first tap if the stored value is not one
-                   of these seven, the same way the Wave row behaves for a type
-                   it does not offer. Mixxx's stock DefaultZoom of 3 is now one
-                   of them, so a fresh config highlights instead of showing
-                   nothing.
-
-                   492f and GeneralCol both match the Wave row above, so the two
-                   rows line up and the #GeneralCol rules in style.qss give this
-                   one the same padding, 13px label and 12px segments with no
-                   QSS edit. -->
-              <WidgetGroup>
-                <ObjectName>GeneralCol</ObjectName>
-                <Layout>vertical</Layout>
-                <SizePolicy>me,max</SizePolicy>
-                <Children>
-                  <WidgetGroup>
-                    <ObjectName>SettingsRow</ObjectName>
-                    <Layout>horizontal</Layout>
-                    <Size>0me,52f</Size>
-                    <Children>
-                      <Label>
-                        <ObjectName>SettingsRowLabel</ObjectName>
-                        <Text>Zoom</Text>
-                        <Size>0me,0me</Size>
-                      </Label>
-                      <WidgetGroup>
-                        <ObjectName>ZoomSegmented</ObjectName>
-                        <Layout>horizontal</Layout>
-                        <Size>492f,40f</Size>
-                        <Children>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
-                            <SetVariable name="Text">3</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
-                            <SetVariable name="Value">3</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">4</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
-                            <SetVariable name="Value">4</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">6</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
-                            <SetVariable name="Value">6</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">8</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
-                            <SetVariable name="Value">8</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">10</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
-                            <SetVariable name="Value">10</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">12</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
-                            <SetVariable name="Value">12</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
-                            <SetVariable name="Text">16</SetVariable>
-                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
-                            <SetVariable name="Value">16</SetVariable>
-                          </Template>
-                        </Children>
-                      </WidgetGroup>
-                    </Children>
-                  </WidgetGroup>
-                </Children>
-              </WidgetGroup>
-
-              <!-- How the Play page splits its waveform band between the deck
-                   1|2 row and the deck 3|4 row. The number written is the
-                   bottom row's cell floor in pixels, because that floor is the
-                   only lever this skin system has: there is no stretch factor,
-                   so the bottom row takes its cells' minimum and the top row
-                   takes the rest. waveforms.xml carries the arithmetic.
-
-                   The labels are the ratio, the values are pixels against a
-                   band measured at 373. Re-measure the band before changing
-                   them; do not recompute from a layout budget on paper.
-
-                   These four were 178/160/142/125 against a 355px band. The
-                   band grew to 373 when the deck strip lost its own clock row
-                   and its cap dropped 120 to 102, and because waveforms.xml's
-                   bottom row is me,max, every one of those 18px landed on the
-                   top row. Left alone the old values would have drifted every
-                   label by about two points, turning 50/50 into 52/48. The
-                   rule is round(band * bottom share): at 373 that is 186, 168,
-                   149 and 131, all within 0.2 points of their label. Anything
-                   that changes the band height decalibrates these again.
-
-                   Four buttons at the Wave row's 82px a cell is 328f. Same
-                   GeneralCol name as its neighbour above, so the #GeneralCol
-                   rules in style.qss give it the same padding, 13px label and
-                   12px segments with no QSS edit. -->
-              <WidgetGroup>
-                <ObjectName>GeneralCol</ObjectName>
-                <Layout>vertical</Layout>
-                <SizePolicy>me,max</SizePolicy>
-                <Children>
-                  <WidgetGroup>
-                    <ObjectName>SettingsRow</ObjectName>
-                    <Layout>horizontal</Layout>
-                    <Size>0me,52f</Size>
-                    <Children>
-                      <Label>
-                        <ObjectName>SettingsRowLabel</ObjectName>
-                        <Text>Split</Text>
-                        <Size>0me,0me</Size>
-                      </Label>
-                      <WidgetGroup>
-                        <ObjectName>SettingsSegmented</ObjectName>
-                        <Layout>horizontal</Layout>
-                        <Size>328f,40f</Size>
-                        <Children>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
-                            <SetVariable name="Text">50/50</SetVariable>
-                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
-                            <SetVariable name="Value">186</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">55/45</SetVariable>
-                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
-                            <SetVariable name="Value">168</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
-                            <SetVariable name="Text">60/40</SetVariable>
-                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
-                            <SetVariable name="Value">149</SetVariable>
-                          </Template>
-                          <Template src="skin:templates/setting_segment_button.xml">
-                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
-                            <SetVariable name="Text">65/35</SetVariable>
-                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
-                            <SetVariable name="Value">131</SetVariable>
-                          </Template>
-                        </Children>
-                      </WidgetGroup>
-                    </Children>
-                  </WidgetGroup>
                 </Children>
               </WidgetGroup>
 
@@ -1773,6 +1355,432 @@
 
                         </Children>
                       </WidgetStack>
+                    </Children>
+                  </WidgetGroup>
+
+                </Children>
+              </WidgetGroup>
+
+              <WidgetGroup>
+                <ObjectName>SettingsSpacer</ObjectName>
+                <Size>0me,0me</Size>
+              </WidgetGroup>
+
+            </Children>
+          </WidgetGroup>
+
+          <!-- Waveform. Appended last so the existing stack child indices are
+               unchanged: general=0, midi=1, columns=2, system=3, audio=4, and
+               this is 5. ControllerSettings hardcodes the Devices/midi panel
+               as child 1; keep it that way.
+
+               Index 5 was the old EQ panel's slot, so a mixxx.cfg carried over
+               from before that move opens here now instead of falling through
+               to General. Harmless, and it lands on a real page rather than on
+               nothing at all.
+
+               One GeneralCol wraps all six rows, so the #GeneralCol descendant
+               rules in style.qss give them the padding, 13px label and 12px
+               segments they had on General with no QSS edit. Every row keeps
+               the width it was measured at, and every label is
+               MinimumExpanding, so the control groups all right align. -->
+          <WidgetGroup trigger="[SettingsTab],waveform">
+            <ObjectName>SettingsPanel</ObjectName>
+            <Layout>vertical</Layout>
+            <SizePolicy>me,me</SizePolicy>
+            <Children>
+
+              <WidgetGroup>
+                <ObjectName>GeneralCol</ObjectName>
+                <Layout>vertical</Layout>
+                <SizePolicy>me,max</SizePolicy>
+                <Children>
+
+                  <!-- Waveform renderer. Six labelled segments need about 492px,
+                       so this is a full width row; it spanned both of the General
+                       tab's columns before it moved here. One segmented group rather
+                       than two stacked rows: each segment's IsEqual transform
+                       already makes the highlight exclusive, so there is nothing
+                       to coordinate across two groups.
+
+                       The five button row measured 335px on the panel, about 67px
+                       per button. Six buttons in the old 340f would be about 56px
+                       each, too tight for STACK HD, eight uppercase bold characters
+                       at 12px.
+
+                       408f was tried first and measured on the panel: 408px wide,
+                       six cells of 68px, nothing clipped. But STACK HD renders 62px
+                       of text in that 68px cell, so it had 3px a side against 10px
+                       for FILT HD and 13px for STACK. Legible, and one font metric
+                       change away from clipping. 492f gives 82px a cell, which puts
+                       STACK HD on the same 10px a side that FILT HD had at 408f.
+                       The row spans full width and is right aligned, so it grows
+                       leftwards into empty space.
+
+                       Filt HD (22) and Stack HD (24) are the textured renderers.
+                       They read the same SignalLow/Mid/HighColor tags from
+                       waveform.xml as their standard siblings, so no colour is
+                       duplicated here. -->
+                  <WidgetGroup>
+                    <ObjectName>SettingsRow</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>0me,52f</Size>
+                    <Children>
+                      <Label>
+                        <ObjectName>SettingsRowLabel</ObjectName>
+                        <Text>Wave</Text>
+                        <Size>0me,0me</Size>
+                      </Label>
+                      <WidgetGroup>
+                        <ObjectName>SettingsSegmented</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>492f,40f</Size>
+                        <Children>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                            <SetVariable name="Text">RGB</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
+                            <SetVariable name="Value">17</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">Filt</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
+                            <SetVariable name="Value">19</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">Filt HD</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
+                            <SetVariable name="Value">22</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">Stack</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
+                            <SetVariable name="Value">25</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">Stack HD</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
+                            <SetVariable name="Value">24</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="Text">3Band</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_type</SetVariable>
+                            <SetVariable name="Value">26</SetVariable>
+                          </Template>
+                        </Children>
+                      </WidgetGroup>
+                    </Children>
+                  </WidgetGroup>
+
+                  <!-- Waveform zoom, full width, directly under the Wave row.
+
+                       Higher is more zoomed out. Zoom is visual samples per pixel
+                       and Mixxx stores 441 visual samples a second
+                       (analyzerwaveform.cpp), so a pane shows width * zoom / 441
+                       seconds. A cell is only half width once two or more decks
+                       are loaded; a single deck gets the whole band and twice the
+                       bars.
+
+                       These seven were measured rather than computed. On a 1280px
+                       band at drum and bass tempo, zoom 12 shows 34.8s, about 13
+                       pixels a beat; a CDJ-3000 photograph of comparable material
+                       works out at roughly 48 pixels a beat, which lands between
+                       zoom 3 and 4. The old row ran 4/8/12/16/24/32 and put four of
+                       its six values above the useful range with nothing between 4
+                       and 8, which is exactly where the CDJ look lives. 16 is kept
+                       as the one far-out option. Change them here if they feel
+                       wrong; no rebuild is needed for that.
+
+                       Writes [Waveform],waveform_default_zoom, the control added in
+                       waveformwidgetfactory.cpp. It clamps to 1..160, persists to
+                       the [Waveform] DefaultZoom config key and pushes to every
+                       live viewer, so all four decks move together. Nothing
+                       highlights until the first tap if the stored value is not one
+                       of these seven, the same way the Wave row behaves for a type
+                       it does not offer. Mixxx's stock DefaultZoom of 3 is now one
+                       of them, so a fresh config highlights instead of showing
+                       nothing.
+
+                       492f matches the Wave row above, so the two rows line up. -->
+                  <WidgetGroup>
+                    <ObjectName>SettingsRow</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>0me,52f</Size>
+                    <Children>
+                      <Label>
+                        <ObjectName>SettingsRowLabel</ObjectName>
+                        <Text>Zoom</Text>
+                        <Size>0me,0me</Size>
+                      </Label>
+                      <WidgetGroup>
+                        <ObjectName>ZoomSegmented</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>492f,40f</Size>
+                        <Children>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                            <SetVariable name="Text">3</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">3</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">4</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">4</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">6</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">6</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">8</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">8</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">10</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">10</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">12</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">12</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="Text">16</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_default_zoom</SetVariable>
+                            <SetVariable name="Value">16</SetVariable>
+                          </Template>
+                        </Children>
+                      </WidgetGroup>
+                    </Children>
+                  </WidgetGroup>
+
+                  <!-- The overview strip's renderer, independent of the
+                       scrolling waveform above it. Writes
+                       [Waveform],waveform_overview_type, the writable
+                       control added in waveformwidgetfactory.cpp.
+
+                       NOT [Waveform],WaveformOverviewType. DlgPrefWaveform
+                       owns a ControlPushButton on that key and calls
+                       setReadOnly() on it, so a skin binding there renders,
+                       accepts the tap and does nothing at all.
+
+                       Values are WOverview::Type: 0 Filtered, 1 HSV, 2 RGB,
+                       3 the rekordbox PWV6 preview. Choosing 3Band for a
+                       track rekordbox never analysed costs nothing; that
+                       path returns false and falls through to RGB per
+                       track. -->
+                  <WidgetGroup>
+                    <ObjectName>SettingsRow</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>0me,52f</Size>
+                    <Children>
+                      <Label>
+                        <ObjectName>SettingsRowLabel</ObjectName>
+                        <Text>Overview</Text>
+                        <Size>0me,0me</Size>
+                      </Label>
+                      <WidgetGroup>
+                        <ObjectName>OverviewSegmented</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>328f,40f</Size>
+                        <Children>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                        <SetVariable name="Text">Filt</SetVariable>
+                        <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
+                        <SetVariable name="Value">0</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                        <SetVariable name="Text">HSV</SetVariable>
+                        <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
+                        <SetVariable name="Value">1</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                        <SetVariable name="Text">RGB</SetVariable>
+                        <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
+                        <SetVariable name="Value">2</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                        <SetVariable name="Text">3Band</SetVariable>
+                        <SetVariable name="ConfigKey">[Waveform],waveform_overview_type</SetVariable>
+                        <SetVariable name="Value">3</SetVariable>
+                          </Template>
+                        </Children>
+                      </WidgetGroup>
+                    </Children>
+                  </WidgetGroup>
+
+                  <!-- Overall waveform amplitude, not the pane's share
+                       of the screen; that is the Split row. Writes
+                       [Waveform],waveform_visual_gain, which persists to
+                       VisualGain_0 and is clamped to 0.1..4.0 in the slot,
+                       because 0 makes the waveform vanish with no other
+                       symptom.
+
+                       Every signal renderer multiplies this in, so it
+                       applies to all six waveform types rather than to
+                       3Band alone.
+
+                       1.0 is the top of the row on purpose. It leaves the
+                       shipped 3Band calibration exactly as measured against
+                       the CDJ-3000 reference, and it is also the largest
+                       gain that cannot clip: scaleHeight() clamps to the
+                       half height and pwv7FullScale is 127, so a low band
+                       byte of 127 lands on the pane edge. Values above it
+                       only flatten the loudest columns, which is not a
+                       trade worth offering when turning the gain down gives
+                       the same headroom with the shape intact. -->
+                  <WidgetGroup>
+                    <ObjectName>SettingsRow</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>0me,52f</Size>
+                    <Children>
+                      <Label>
+                        <ObjectName>SettingsRowLabel</ObjectName>
+                        <Text>Height</Text>
+                        <Size>0me,0me</Size>
+                      </Label>
+                      <WidgetGroup>
+                        <ObjectName>HeightSegmented</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>246f,40f</Size>
+                        <Children>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                            <SetVariable name="Text">0.5</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
+                            <SetVariable name="Value">0.5</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">0.75</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
+                            <SetVariable name="Value">0.75</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="Text">1.0</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],waveform_visual_gain</SetVariable>
+                            <SetVariable name="Value">1.0</SetVariable>
+                          </Template>
+                        </Children>
+                      </WidgetGroup>
+                    </Children>
+                  </WidgetGroup>
+
+                  <!-- How the Play page splits its waveform band between the deck
+                       1|2 row and the deck 3|4 row. The number written is the
+                       bottom row's cell floor in pixels, because that floor is the
+                       only lever this skin system has: there is no stretch factor,
+                       so the bottom row takes its cells' minimum and the top row
+                       takes the rest. waveforms.xml carries the arithmetic.
+
+                       The labels are the ratio, the values are pixels against a
+                       band measured at 373. Re-measure the band before changing
+                       them; do not recompute from a layout budget on paper.
+
+                       These four were 178/160/142/125 against a 355px band. The
+                       band grew to 373 when the deck strip lost its own clock row
+                       and its cap dropped 120 to 102, and because waveforms.xml's
+                       bottom row is me,max, every one of those 18px landed on the
+                       top row. Left alone the old values would have drifted every
+                       label by about two points, turning 50/50 into 52/48. The
+                       rule is round(band * bottom share): at 373 that is 186, 168,
+                       149 and 131, all within 0.2 points of their label. Anything
+                       that changes the band height decalibrates these again.
+
+                       Four buttons at the Wave row's 82px a cell is 328f. -->
+                  <WidgetGroup>
+                    <ObjectName>SettingsRow</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>0me,52f</Size>
+                    <Children>
+                      <Label>
+                        <ObjectName>SettingsRowLabel</ObjectName>
+                        <Text>Split</Text>
+                        <Size>0me,0me</Size>
+                      </Label>
+                      <WidgetGroup>
+                        <ObjectName>SettingsSegmented</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>328f,40f</Size>
+                        <Children>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                            <SetVariable name="Text">50/50</SetVariable>
+                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
+                            <SetVariable name="Value">186</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">55/45</SetVariable>
+                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
+                            <SetVariable name="Value">168</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
+                            <SetVariable name="Text">60/40</SetVariable>
+                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
+                            <SetVariable name="Value">149</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="Text">65/35</SetVariable>
+                            <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
+                            <SetVariable name="Value">131</SetVariable>
+                          </Template>
+                        </Children>
+                      </WidgetGroup>
+                    </Children>
+                  </WidgetGroup>
+
+                  <WidgetGroup>
+                    <ObjectName>SettingsRow</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>0me,52f</Size>
+                    <Children>
+                      <Label>
+                        <ObjectName>SettingsRowLabel</ObjectName>
+                        <Text>Apply Waveform EQ</Text>
+                        <Size>0me,0me</Size>
+                      </Label>
+                      <WidgetGroup>
+                        <ObjectName>SettingsSegmented</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>110f,40f</Size>
+                        <Children>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                            <SetVariable name="Text">On</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],apply_eq_to_waveform</SetVariable>
+                            <SetVariable name="Value">1</SetVariable>
+                          </Template>
+                          <Template src="skin:templates/setting_segment_button.xml">
+                            <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                            <SetVariable name="Text">Off</SetVariable>
+                            <SetVariable name="ConfigKey">[Waveform],apply_eq_to_waveform</SetVariable>
+                            <SetVariable name="Value">0</SetVariable>
+                          </Template>
+                        </Children>
+                      </WidgetGroup>
                     </Children>
                   </WidgetGroup>
 

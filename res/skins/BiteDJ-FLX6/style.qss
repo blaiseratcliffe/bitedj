@@ -849,17 +849,19 @@ WBeatSpinBox::up-button {
   min-width: 68px;
 }
 
-/* The General page's OVERVIEW and HEIGHT rows sit in the right-hand column,
- * which is about 200px wide against the 492px a full-width row gets, so four
- * segments cannot have the shared 80px min-width: that would ask for 320px.
- * 44px asks for 176px and leaves room for the row label. The longest labels are
- * 3BAND and 0.75, five and four characters at 12px.
+/* OVERVIEW and HEIGHT are full-width rows on the Waveform sub-tab now, so their
+ * groups carry an explicit width in settings.xml: 328f for Overview's four
+ * segments and 246f for Height's three, both at the Wave row's measured 82px a
+ * cell. The group width governs and this min-width is only a floor.
  *
- * They are in the column rather than full width because there are about ten
- * pixels left below the SPLIT row and each row is 52f, so two more full-width
- * rows would run into the deck info bar. The right column ends three rows
- * before the left one and the section is only as tall as its taller column, so
- * this space was already being wasted. Measure it on the panel. */
+ * It used to be 44px, because these two rows sat in the General page's ~200px
+ * right-hand column and four segments at the shared 80px would have asked for
+ * 320px. Measured on the panel, 44px gave Overview four cells of about 42px and
+ * clipped 3BAND, five uppercase characters at 12px, on both sides. The column
+ * is gone, so the cap is too. 68px matches the Zoom row.
+ *
+ * The plain BiteDJ skin still has these rows in its General column and still
+ * needs the 44px there. Do not sync the two files. */
 #OverviewSegmented,
 #HeightSegmented {
   qproperty-layoutAlignment: 'AlignRight | AlignVCenter';
@@ -871,7 +873,7 @@ WBeatSpinBox::up-button {
 #HeightSegmented #SettingsSegmentLeft,
 #HeightSegmented #SettingsSegmentMid,
 #HeightSegmented #SettingsSegmentRight {
-  min-width: 44px;
+  min-width: 68px;
 }
 
 #SettingsSegmentLeft {
