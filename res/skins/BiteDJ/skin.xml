@@ -21,7 +21,12 @@
 
 	<ObjectName>Mixxx</ObjectName>
 	<Style src="skin:style.qss"/>
-	<MinimumSize>480,420</MinimumSize>
+	<!-- 490 rather than the 420 this was: the System page's fixed height went
+	     from 202f to 270f when Power took a row of its own, and at 420 the
+	     UsbList would have been left 18px, under a third of one 56px drive
+	     row against three hardware slots. 490 gives it back the 86px it has
+	     today. -->
+	<MinimumSize>480,490</MinimumSize>
 	<SizePolicy>me,me</SizePolicy>
 	<Layout>vertical</Layout>
 

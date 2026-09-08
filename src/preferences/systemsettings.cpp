@@ -32,6 +32,21 @@
 
 namespace {
 const QString kGroup = QStringLiteral("[System]");
+
+// Disarmed value of [System],power_arm, which is also page 0 of the Power row's
+// confirm WidgetStack: the three action buttons rather than a Confirm/Cancel.
+constexpr double kPowerArmIdle = 0.0;
+
+// How long an armed Power row waits before disarming itself. Long enough to
+// read the confirm page and mean it, short enough that a row armed by accident
+// and walked away from is not still live later in the set.
+constexpr int kPowerDisarmMs = 10000;
+
+// Exit code the app returns for a deliberate in-skin restart, so the supervisor
+// can tell one from a crash and relaunch rather than give up. Keep in sync with
+// RESTART_EXIT_CODE in pi/bin/bitedj-run.
+constexpr int kRestartExitCode = 42;
+
 // Fork-wide preference namespace (distinct from the [System] tab COs above).
 const QString kBiteDj = QStringLiteral("[BiteDJ]");
 // Jog-wheel behaviour: 1 = Vinyl (touching the platter scratches), 0 = CDJ
@@ -145,17 +160,44 @@ SystemSettings::SystemSettings(UserSettingsPointer pConfig,
             this,
             &SystemSettings::onRefreshRequested);
 
-    // Drives the shutdown confirm WidgetStack in settings.xml: 0 = "Shut Down"
-    // page, 1 = "Confirm / Cancel" page. Pre-created so the skin parser's
-    // controlFromConfigKey() reuses it and the WidgetStack has a value to read
-    // on its first showEvent.
-    m_pCoShutdownArm = std::make_unique<ControlObject>(ConfigKey(kGroup, "shutdown_arm"));
+    // Drives the Power row's confirm WidgetStack in settings.xml: 0 = the row
+    // itself, 1 = confirm Restart App, 2 = confirm Reboot, 3 = confirm Shut
+    // Down. Pre-created so the skin parser's controlFromConfigKey() reuses it
+    // and the WidgetStack has a value to read on its first showEvent.
+    m_pCoPowerArm = std::make_unique<ControlObject>(ConfigKey(kGroup, "power_arm"));
+    connect(m_pCoPowerArm.get(),
+            &ControlObject::valueChanged,
+            this,
+            &SystemSettings::onPowerArmChanged);
+
+    // The three actions the row can arm. Pre-created for the same reason as the
+    // arm CO above: the skin binds each Confirm button by config key, and a CO
+    // the parser had to invent for itself would be a different object from the
+    // one these connections are on.
+    m_pCoRestartApp = std::make_unique<ControlObject>(ConfigKey(kGroup, "restart_app"));
+    connect(m_pCoRestartApp.get(),
+            &ControlObject::valueChanged,
+            this,
+            &SystemSettings::onRestartAppRequested);
+
+    m_pCoReboot = std::make_unique<ControlObject>(ConfigKey(kGroup, "reboot"));
+    connect(m_pCoReboot.get(),
+            &ControlObject::valueChanged,
+            this,
+            &SystemSettings::onRebootRequested);
 
     m_pCoShutdown = std::make_unique<ControlObject>(ConfigKey(kGroup, "shutdown"));
     connect(m_pCoShutdown.get(),
             &ControlObject::valueChanged,
             this,
             &SystemSettings::onShutdownRequested);
+
+    m_powerDisarmTimer.setSingleShot(true);
+    m_powerDisarmTimer.setInterval(kPowerDisarmMs);
+    connect(&m_powerDisarmTimer,
+            &QTimer::timeout,
+            this,
+            &SystemSettings::onPowerDisarmTimeout);
 
     // Vinyl/CDJ jog mode (General settings tab). Seeded from the persisted config
     // value and written back on every change so the choice survives restarts. The
@@ -973,18 +1015,132 @@ void SystemSettings::onMp3QualityChanged(double value) {
     m_pConfig->setValue(mp3QualityKey, static_cast<int>(value));
 }
 
+void SystemSettings::onPowerArmChanged(double value) {
+    // Arming starts the clock; disarming (including the disarm we do ourselves
+    // on the way into an action) stops it. Restarting an already-running timer
+    // is what gives each arm its own full window when the DJ steps from one
+    // confirm page to another without going back through idle.
+    if (value == kPowerArmIdle) {
+        m_powerDisarmTimer.stop();
+    } else {
+        m_powerDisarmTimer.start();
+    }
+}
+
+void SystemSettings::onPowerDisarmTimeout() {
+    m_pCoPowerArm->set(kPowerArmIdle);
+}
+
+void SystemSettings::resetPowerControls() {
+    m_pCoPowerArm->set(kPowerArmIdle);
+    // The action COs have to be cleared too, not just the arm. See the member
+    // comment in the header: they latch at 1 on Confirm, setInner() drops a
+    // write of the value a CO already holds, and a retry into a latched CO
+    // would emit nothing and do nothing.
+    m_pCoRestartApp->set(0.0);
+    m_pCoReboot->set(0.0);
+    m_pCoShutdown->set(0.0);
+}
+
+void SystemSettings::runPowerCommand(const QString& program,
+        const QString& progressMessage,
+        const QString& failureMessage) {
+    if (Notifications* pNotifications = Notifications::tryInstance()) {
+        pNotifications->publishSticky(progressMessage,
+                Notifications::Severity::Info);
+    }
+
+    // Deliberately not QProcess::startDetached. That only reports whether the
+    // fork and exec worked, and on this appliance both `reboot` and `poweroff`
+    // are systemctl symlinks that do their real work by asking logind over
+    // D-Bus. An authorization refusal is therefore a non-zero exit status
+    // *after* a perfectly successful exec: startDetached would return true and
+    // we would leave a sticky "Shutting down..." banner up forever over a
+    // machine that is not going anywhere. Own the process so we can see how it
+    // ended.
+    auto* pProcess = new QProcess(this);
+
+    // finished and errorOccurred are both needed: finished is not emitted when
+    // the process fails to start at all, and errorOccurred is the only signal
+    // that reports a missing binary.
+    connect(pProcess,
+            &QProcess::finished,
+            this,
+            [this, pProcess, failureMessage](int exitCode,
+                    QProcess::ExitStatus exitStatus) {
+                if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+                    // On its way out. Leave the banner up and touch nothing;
+                    // there is no state left worth restoring.
+                    return;
+                }
+                // Disconnect before reporting so the failure cannot be told
+                // twice. errorOccurred can still be pending behind this.
+                pProcess->disconnect(this);
+                pProcess->deleteLater();
+                resetPowerControls();
+                notify(failureMessage, Notifications::Severity::Error);
+            });
+    connect(pProcess,
+            &QProcess::errorOccurred,
+            this,
+            [this, pProcess, failureMessage](QProcess::ProcessError error) {
+                Q_UNUSED(error);
+                pProcess->disconnect(this);
+                pProcess->deleteLater();
+                resetPowerControls();
+                notify(failureMessage, Notifications::Severity::Error);
+            });
+    pProcess->start(program, QStringList());
+}
+
 void SystemSettings::onShutdownRequested(double value) {
     if (value == 0.0) {
         return;
     }
+    m_powerDisarmTimer.stop();
+    runPowerCommand(QStringLiteral("poweroff"),
+            tr("Shutting down..."),
+            tr("Shutdown command failed"));
+}
+
+void SystemSettings::onRebootRequested(double value) {
+    if (value == 0.0) {
+        return;
+    }
+    m_powerDisarmTimer.stop();
+    runPowerCommand(QStringLiteral("reboot"),
+            tr("Rebooting..."),
+            tr("Reboot command failed"));
+}
+
+void SystemSettings::onRestartAppRequested(double value) {
+    if (value == 0.0) {
+        return;
+    }
+    m_powerDisarmTimer.stop();
     if (Notifications* pNotifications = Notifications::tryInstance()) {
-        pNotifications->publishSticky(tr("Shutting down..."),
+        pNotifications->publishSticky(tr("Restarting..."),
                 Notifications::Severity::Info);
     }
-    if (!QProcess::startDetached(QStringLiteral("poweroff"))) {
-        m_pCoShutdownArm->set(0.0);
-        m_pCoShutdown->set(0.0);
-        notify(tr("Shutdown command failed to start"),
-                Notifications::Severity::Error);
-    }
+
+    // Exit the event loop rather than closing the main window, because
+    // everything that has to be put away happens *after* exec() returns at
+    // src/main.cpp:102. CoreServices::finalize() saves mixxx.cfg and resets
+    // m_pSystemSettings, whose destructor stops a per-drive recording in
+    // progress (src/coreservices.cpp:688-717), and ~CoreServices saves again
+    // (:222-241). Routing through the window would add nothing on top of that:
+    // MixxxMainWindow::confirmExit() already returns true unconditionally in
+    // this fork (src/mixxxmainwindow.cpp:1353-1363), and it would need a
+    // main-window pointer this class does not have and should not acquire.
+    //
+    // singleShot(0) defers the teardown out of the delivery of the button's own
+    // tap, the same way slotHighContrastChanged defers its view rebuild
+    // (src/mixxxmainwindow.cpp:1119-1132); the sticky message also gets a
+    // chance to paint before the process goes.
+    //
+    // The exit code is what tells pi/bin/bitedj-run that this was deliberate
+    // and it should relaunch, rather than a crash it should back off from.
+    QTimer::singleShot(0, qApp, []() {
+        QCoreApplication::exit(kRestartExitCode);
+    });
 }

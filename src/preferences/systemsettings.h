@@ -23,7 +23,13 @@ class RecordingManager;
 // COs the skin binds to and a Qt signal carrying the USB mount labels (CO
 // transport carries doubles only, so list strings ride a signal alongside —
 // same pattern as ControllerSettings::rowsChanged / Notifications). Runs OS
-// actions (umount, shutdown) directly; the appliance process is root.
+// actions (umount, reboot, poweroff) directly, but not as root: the appliance
+// process is uid 1000 (blaise). Those actions are permitted because the lightdm
+// autologin session is seated and active (Seat=seat0), which is the property
+// logind's default policy keys on (allow_active=yes) for its umount, reboot and
+// power-off actions. Verified on the device: pkcheck --action-id
+// org.freedesktop.login1.reboot --process <app pid> returns 0.
+// pi/bin/bitedj-automount leans on the same session property.
 //
 // Soft contract with stock Mixxx: every CO no-ops and tryInstance() returns
 // nullptr when the singleton isn't constructed, so the skin parses end-to-end
@@ -126,6 +132,13 @@ class SystemSettings : public QObject {
   private slots:
     void onRefreshRequested(double value);
     void onShutdownRequested(double value);
+    void onRebootRequested(double value);
+    void onRestartAppRequested(double value);
+    // Arm/disarm bookkeeping for the Power row's confirm page. Only starts and
+    // stops the auto-disarm timer; the page change itself is the skin reading
+    // the CO, which has already happened by the time this runs.
+    void onPowerArmChanged(double value);
+    void onPowerDisarmTimeout();
     void onVinylModeChanged(double value);
     void onVinylBrakeChanged(double value);
     void onHotcueActivatePlaysChanged(double value);
@@ -191,6 +204,26 @@ class SystemSettings : public QObject {
     // runs on both paths and must survive running twice.
     void releaseRecordingTarget();
 
+    // Publishes progressMessage as a sticky notification, then runs `program`
+    // through a QProcess owned by this object. Nothing is reported on success:
+    // a successful reboot or power-off means the machine is on its way out and
+    // the banner should stay up until the screen does not. Any other outcome
+    // calls resetPowerControls() and replaces the banner with failureMessage.
+    void runPowerCommand(const QString& program,
+            const QString& progressMessage,
+            const QString& failureMessage);
+    // Puts power_arm and all three action COs back to 0.
+    //
+    // Clearing the action COs, not just the arm, is what makes a retry work at
+    // all. Tapping Confirm latches its CO at 1, and ControlDoublePrivate::
+    // setInner returns early when the new value equals the old one
+    // (m_bIgnoreNops defaults to true, see control/control.cpp:293-296). So if
+    // a failed command reset only the arm, the DJ's second Confirm would write
+    // 1 into a CO already holding 1, no valueChanged would fire, and the retry
+    // would be silently dead with no feedback at all. Every failure path has to
+    // come through here.
+    void resetPowerControls();
+
     // Re-entrancy guard: ejectRow() pumps the event loop while waiting for the
     // asynchronous track release, which can re-deliver a tap. One eject at a time.
     bool m_ejecting = false;
@@ -225,8 +258,24 @@ class SystemSettings : public QObject {
 
     std::unique_ptr<ControlObject> m_pCoUsbCount;
     std::unique_ptr<ControlObject> m_pCoUsbRefresh;
-    std::unique_ptr<ControlObject> m_pCoShutdownArm;
+    // [System],power_arm holds which power action the Power row has armed, and
+    // at the same time the page index of the confirm WidgetStack in
+    // settings.xml: 0 = idle (the row's three buttons), 1 = restart app armed,
+    // 2 = reboot armed, 3 = shutdown armed. The numbering is therefore part of
+    // the skin contract and cannot be reordered on this side alone.
+    //
+    // Must stay a plain ControlObject. A ControlPushButton carries a button
+    // behaviour built around a fixed state count (two by default) and is the
+    // wrong shape for something that has to hold a 0..3 page index.
+    std::unique_ptr<ControlObject> m_pCoPowerArm;
+    std::unique_ptr<ControlObject> m_pCoRestartApp;
+    std::unique_ptr<ControlObject> m_pCoReboot;
     std::unique_ptr<ControlObject> m_pCoShutdown;
+    // An armed confirm page left up is one stray tap away from powering the
+    // machine off mid-set, and a DJ who armed it by accident has no reason to
+    // go back and cancel. Single-shot, restarted on every arm, and drops
+    // power_arm back to 0 when it fires.
+    QTimer m_powerDisarmTimer;
     // [BiteDJ],vinyl_mode — 1 = Vinyl, 0 = CDJ jog behaviour. Persisted to
     // config; read by the controller mapping to toggle jog-touch scratching.
     std::unique_ptr<ControlObject> m_pCoVinylMode;

@@ -1144,179 +1144,86 @@
                 <SizePolicy>me,me</SizePolicy>
               </UsbList>
 
-              <!-- One row carries everything on this page that isn't a drive:
-                   rotation, day/night and Power. The USB list is the reason —
-                   it is the page's only content that grows with the hardware
-                   (three slots), and at the 420px floor a second and third
-                   drive were pushing it into the rows below. Folding the old
-                   72f Power row into this one buys the list ~72px, which is
-                   one and a bit more drive rows.
-                   The three read as one group in the sense that matters here:
-                   none is touched mid-set, they are all about the box rather
-                   than the mix. Rotation and day/night are both about making
-                   the panel readable from where the DJ is standing — Day
-                   inverts every colour in the skin's stylesheet (dark-on-light
-                   instead of light-on-dark), which is what survives an LCD in
-                   direct sun; HighContrast re-applies the inverted sheets live,
-                   so there is no skin reboot.
-                   Width at the 480px floor is the binding constraint and there
-                   is no slack left: 400px inside the row's padding, spent as
-                   120 + 12 + 120 + 16 + 64 = 332, leaving 68 for a label that
-                   measures 58 (six 16px Monospace caps). Both segment groups
-                   are therefore on the 60px min-width (#ScreenRotSegmented /
-                   #ScreenModeSegmented) rather than the stock 80, and Power
-                   is a 64f button reading POWER rather than the old 96f SHUT
-                   DOWN. Anything else that wants a place here needs a fourth
-                   row, not a fourth column.
-                   Rows are 68f/44f rather than the 52f/40f used elsewhere:
-                   Power is a destructive control and has to clear the 44px
-                   touch floor, and mixed heights in one row would have read as
-                   emphasis on the one control that deserves it least.
-                   68 is 44 plus everything #SettingsRow spends before its
-                   layout sees the height — 8px of margin-bottom and 8px of
-                   padding top and bottom. Qt's stylesheet box model takes all
-                   three off the widget's own geometry, so the 60f this used to
-                   be left a 36px content strip and the 44f controls lost their
-                   bottom border off the end of it. Any change to that padding
-                   or margin has to move this number with it. -->
+              <!-- Screen only, now that Power has a row of its own below.
+                   Rotation and day/night are both about making the panel
+                   readable from where the DJ is standing. Day inverts every
+                   colour in the skin's stylesheet (dark on light instead of
+                   light on dark), which is what survives an LCD in direct sun;
+                   HighContrast re-applies the inverted sheets live, so there
+                   is no skin reboot.
+                   Losing Power returns 80px of width to this row, the 64f
+                   button plus the 16f separator that kept it from reading as a
+                   third segment of the screen group. At the 480px floor that
+                   takes the label slot from 68px to 148px, which is why the
+                   old width arithmetic that used to sit here is gone rather
+                   than corrected: nothing on this row is width-critical any
+                   more. The two segment groups stay at 120f,44f and the QSS
+                   min-widths on #ScreenRotSegmented and #ScreenModeSegmented
+                   stay where they are, because the slack now belongs to the
+                   label and there is no reason to spend it.
+                   The row is 68f and its controls 44f. 68 is 44 plus
+                   everything #SettingsRow spends before its layout ever sees
+                   the height: 8px of margin-bottom and 8px of padding top and
+                   bottom. Qt's stylesheet box model takes all three off the
+                   widget's own geometry, so the 60f this used to be left a
+                   36px content strip and the 44f controls lost their bottom
+                   border off the end of it. Any change to that padding or
+                   margin has to move this number with it. -->
               <WidgetGroup>
                 <ObjectName>SettingsRow</ObjectName>
                 <Layout>horizontal</Layout>
                 <Size>0me,68f</Size>
                 <Children>
-                  <!-- Arming takes over the whole row instead of swapping a
-                       button in place (the pattern the Devices/Audio Apply rows
-                       use): at 64f the in-place page would have had to fit
-                       Confirm and Cancel in the width of one small button, well
-                       under the touch floor for a pair where the wrong tap
-                       powers the unit off mid-set. Taking the row also puts the
-                       question where the DJ is already looking. -->
-                  <WidgetStack currentpage="[System],shutdown_arm">
-                    <SizePolicy>me,me</SizePolicy>
+                  <Label>
+                    <ObjectName>SettingsRowLabel</ObjectName>
+                    <Text>Screen</Text>
+                    <Size>0me,0me</Size>
+                  </Label>
+                  <WidgetGroup>
+                    <ObjectName>ScreenRotSegmented</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>120f,44f</Size>
                     <Children>
-
-                      <WidgetGroup>
-                        <Layout>horizontal</Layout>
-                        <SizePolicy>me,me</SizePolicy>
-                        <Children>
-                          <Label>
-                            <ObjectName>SettingsRowLabel</ObjectName>
-                            <Text>Screen</Text>
-                            <Size>0me,0me</Size>
-                          </Label>
-                          <WidgetGroup>
-                            <ObjectName>ScreenRotSegmented</ObjectName>
-                            <Layout>horizontal</Layout>
-                            <Size>120f,44f</Size>
-                            <Children>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                                <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
-                                <SetVariable name="Text">0°</SetVariable>
-                                <SetVariable name="ConfigKey">[BiteDJ],screen_rotation</SetVariable>
-                                <SetVariable name="Value">0</SetVariable>
-                              </Template>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                                <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
-                                <SetVariable name="Text">180°</SetVariable>
-                                <SetVariable name="ConfigKey">[BiteDJ],screen_rotation</SetVariable>
-                                <SetVariable name="Value">180</SetVariable>
-                              </Template>
-                            </Children>
-                          </WidgetGroup>
-                          <!-- Keeps the two groups from reading as one
-                               four-segment strip; both are lit at once and
-                               would otherwise look like a single control with
-                               two selections. -->
-                          <WidgetGroup>
-                            <Size>12f,0me</Size>
-                          </WidgetGroup>
-                          <WidgetGroup>
-                            <ObjectName>ScreenModeSegmented</ObjectName>
-                            <Layout>horizontal</Layout>
-                            <Size>120f,44f</Size>
-                            <Children>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                                <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
-                                <SetVariable name="Text">Night</SetVariable>
-                                <SetVariable name="ConfigKey">[BiteDJ],high_contrast</SetVariable>
-                                <SetVariable name="Value">0</SetVariable>
-                              </Template>
-                              <Template src="skin:templates/setting_segment_button.xml">
-                                <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
-                                <SetVariable name="Text">Day</SetVariable>
-                                <SetVariable name="ConfigKey">[BiteDJ],high_contrast</SetVariable>
-                                <SetVariable name="Value">1</SetVariable>
-                              </Template>
-                            </Children>
-                          </WidgetGroup>
-                          <!-- Wider than the gap above: Power is not part of
-                               the screen group and must not read as a third
-                               segment of it. -->
-                          <WidgetGroup>
-                            <Size>16f,0me</Size>
-                          </WidgetGroup>
-                          <PushButton>
-                            <ObjectName>SettingsActionButton</ObjectName>
-                            <Size>64f,44f</Size>
-                            <NumberStates>1</NumberStates>
-                            <State>
-                              <Number>0</Number>
-                              <Text>Power</Text>
-                            </State>
-                            <Connection>
-                              <ConfigKey>[System],shutdown_arm</ConfigKey>
-                              <EmitOnDownPress>true</EmitOnDownPress>
-                              <Transform><IsEqual>1</IsEqual></Transform>
-                            </Connection>
-                          </PushButton>
-                        </Children>
-                      </WidgetGroup>
-
-                      <WidgetGroup>
-                        <Layout>horizontal</Layout>
-                        <SizePolicy>me,me</SizePolicy>
-                        <Children>
-                          <Label>
-                            <ObjectName>SettingsRowLabel</ObjectName>
-                            <Text>Shut Down?</Text>
-                            <Size>0me,0me</Size>
-                          </Label>
-                          <PushButton>
-                            <ObjectName>SettingsDangerButton</ObjectName>
-                            <Size>120f,44f</Size>
-                            <NumberStates>1</NumberStates>
-                            <State>
-                              <Number>0</Number>
-                              <Text>Confirm</Text>
-                            </State>
-                            <Connection>
-                              <ConfigKey>[System],shutdown</ConfigKey>
-                              <EmitOnDownPress>true</EmitOnDownPress>
-                              <Transform><IsEqual>1</IsEqual></Transform>
-                            </Connection>
-                          </PushButton>
-                          <WidgetGroup>
-                            <Size>12f,0me</Size>
-                          </WidgetGroup>
-                          <PushButton>
-                            <ObjectName>SettingsActionButton</ObjectName>
-                            <Size>120f,44f</Size>
-                            <NumberStates>1</NumberStates>
-                            <State>
-                              <Number>0</Number>
-                              <Text>Cancel</Text>
-                            </State>
-                            <Connection>
-                              <ConfigKey>[System],shutdown_arm</ConfigKey>
-                              <EmitOnDownPress>true</EmitOnDownPress>
-                              <Transform><IsEqual>0</IsEqual></Transform>
-                            </Connection>
-                          </PushButton>
-                        </Children>
-                      </WidgetGroup>
-
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                        <SetVariable name="Text">0°</SetVariable>
+                        <SetVariable name="ConfigKey">[BiteDJ],screen_rotation</SetVariable>
+                        <SetVariable name="Value">0</SetVariable>
+                      </Template>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                        <SetVariable name="Text">180°</SetVariable>
+                        <SetVariable name="ConfigKey">[BiteDJ],screen_rotation</SetVariable>
+                        <SetVariable name="Value">180</SetVariable>
+                      </Template>
                     </Children>
-                  </WidgetStack>
+                  </WidgetGroup>
+                  <!-- Keeps the two groups from reading as one
+                       four-segment strip; both are lit at once and
+                       would otherwise look like a single control with
+                       two selections. -->
+                  <WidgetGroup>
+                    <Size>12f,0me</Size>
+                  </WidgetGroup>
+                  <WidgetGroup>
+                    <ObjectName>ScreenModeSegmented</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>120f,44f</Size>
+                    <Children>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                        <SetVariable name="Text">Night</SetVariable>
+                        <SetVariable name="ConfigKey">[BiteDJ],high_contrast</SetVariable>
+                        <SetVariable name="Value">0</SetVariable>
+                      </Template>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                        <SetVariable name="Text">Day</SetVariable>
+                        <SetVariable name="ConfigKey">[BiteDJ],high_contrast</SetVariable>
+                        <SetVariable name="Value">1</SetVariable>
+                      </Template>
+                    </Children>
+                  </WidgetGroup>
                 </Children>
               </WidgetGroup>
 
@@ -1402,6 +1309,251 @@
                   <Transform><Not/></Transform>
                   <BindProperty>enabled</BindProperty>
                 </Connection>
+              </WidgetGroup>
+
+              <!-- Power. [System],power_arm carries the arm state and the page
+                   index of the stack below in one number: 0 idle, 1 restart
+                   app armed, 2 reboot armed, 3 shut down armed. Those can be
+                   the same number because WWidgetStack::onCurrentPageControlChanged
+                   casts the control value straight to an int and hands it to
+                   slotSetIndex (src/widget/wwidgetstack.cpp:138-144), so the
+                   value is the page.
+                   Each arming button writes its own page number through
+                   <Transform><IsEqual>N</IsEqual></Transform>. That works
+                   because TransformIsEqual::transformInverse returns the
+                   compare value for any press rather than a plain 1
+                   (src/util/valuetransformer.h:69-74), and the number arrives
+                   unclamped because [System],power_arm is a plain
+                   ControlObject with no behavior attached, so
+                   ControlDoublePrivate::setParameter takes its null-behavior
+                   branch straight into set() (src/control/control.cpp:323-330).
+                   Attach a behavior to that control and every arm value above
+                   1 would be squashed on the way in.
+                   Arming takes over the whole row rather than swapping a
+                   button in place (the pattern the Devices/Audio Apply rows
+                   use): the question has to be readable and both of its
+                   answers have to clear the 44px touch floor, and there is no
+                   width for that beside three buttons.
+                   Width budget at the 480px floor the BiteDJ skin declares:
+                   400px inside #SettingsRow's padding. The idle page spends
+                   100 + 12 + 100 + 12 + 100 = 324 and leaves 76 for the label;
+                   a confirm page spends 120 + 12 + 120 = 252 and leaves 148
+                   for the question. Both of those are UNMEASURED estimates and
+                   have to be checked on the panel with shoot.sh before anyone
+                   trusts them. The arithmetic they replaced was itself wrong:
+                   it costed its labels in DejaVu Sans Mono, while
+                   style.qss:13-15 asks for Inter and
+                   BiteDJ-FLX6/style.qss:1775 records Inter as absent from the
+                   panel, so the face that actually renders is DejaVu Sans.
+                   The idle page says Off and not Shut Down. The long form
+                   needs about 112f, which would leave the Power label 40px,
+                   and 40px is not a label. The confirm page says Shut Down? in
+                   full, which is where the word is worth its width.
+                   The three arming buttons are SettingsActionButton and only
+                   the Confirms are SettingsDangerButton: arming is reversible,
+                   confirming is not, and red sitting on the resting row would
+                   be an alarm nobody can turn off. -->
+              <WidgetGroup>
+                <ObjectName>SettingsRow</ObjectName>
+                <Layout>horizontal</Layout>
+                <Size>0me,68f</Size>
+                <Children>
+                  <WidgetStack currentpage="[System],power_arm">
+                    <SizePolicy>me,me</SizePolicy>
+                    <Children>
+
+                      <WidgetGroup>
+                        <Layout>horizontal</Layout>
+                        <SizePolicy>me,me</SizePolicy>
+                        <Children>
+                          <Label>
+                            <ObjectName>SettingsRowLabel</ObjectName>
+                            <Text>Power</Text>
+                            <Size>0me,0me</Size>
+                          </Label>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>100f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Restart</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[System],power_arm</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>1</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                          <WidgetGroup>
+                            <Size>12f,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>100f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Reboot</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[System],power_arm</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>2</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                          <WidgetGroup>
+                            <Size>12f,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>100f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Off</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[System],power_arm</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>3</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+
+                      <WidgetGroup>
+                        <Layout>horizontal</Layout>
+                        <SizePolicy>me,me</SizePolicy>
+                        <Children>
+                          <Label>
+                            <ObjectName>SettingsRowLabel</ObjectName>
+                            <Text>Restart App?</Text>
+                            <Size>0me,0me</Size>
+                          </Label>
+                          <PushButton>
+                            <ObjectName>SettingsDangerButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Confirm</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[System],restart_app</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>1</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                          <WidgetGroup>
+                            <Size>12f,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Cancel</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[System],power_arm</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>0</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+
+                      <WidgetGroup>
+                        <Layout>horizontal</Layout>
+                        <SizePolicy>me,me</SizePolicy>
+                        <Children>
+                          <Label>
+                            <ObjectName>SettingsRowLabel</ObjectName>
+                            <Text>Reboot Pi?</Text>
+                            <Size>0me,0me</Size>
+                          </Label>
+                          <PushButton>
+                            <ObjectName>SettingsDangerButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Confirm</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[System],reboot</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>1</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                          <WidgetGroup>
+                            <Size>12f,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Cancel</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[System],power_arm</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>0</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+
+                      <WidgetGroup>
+                        <Layout>horizontal</Layout>
+                        <SizePolicy>me,me</SizePolicy>
+                        <Children>
+                          <Label>
+                            <ObjectName>SettingsRowLabel</ObjectName>
+                            <Text>Shut Down?</Text>
+                            <Size>0me,0me</Size>
+                          </Label>
+                          <PushButton>
+                            <ObjectName>SettingsDangerButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Confirm</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[System],shutdown</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>1</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                          <WidgetGroup>
+                            <Size>12f,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Cancel</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[System],power_arm</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>0</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+
+                    </Children>
+                  </WidgetStack>
+                </Children>
               </WidgetGroup>
 
               <VersionLabel>
