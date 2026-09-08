@@ -6,7 +6,7 @@
 #include <QMessageBox>
 
 #include "effects/backends/builtin/biquadfullkilleqeffect.h"
-#include "effects/backends/builtin/filtereffect.h"
+#include "effects/backends/builtin/cfxfiltereffect.h"
 #include "effects/backends/effectmanifest.h"
 #include "effects/effectchain.h"
 #include "effects/presets/effectchainpreset.h"
@@ -693,7 +693,7 @@ EffectManifestPointer EffectChainPresetManager::getDefaultEqEffect() {
 
 EffectChainPresetPointer EffectChainPresetManager::getDefaultQuickEffectPreset() {
     EffectManifestPointer pDefaultQuickEffectManifest = m_pBackendManager->getManifest(
-            FilterEffect::getId(), EffectBackendType::BuiltIn);
+            CFXFilterEffect::getId(), EffectBackendType::BuiltIn);
     auto defaultQuickEffectChainPreset =
             EffectChainPresetPointer(pDefaultQuickEffectManifest
                             ? new EffectChainPreset(pDefaultQuickEffectManifest)
@@ -814,6 +814,27 @@ EffectsXmlData EffectChainPresetManager::readEffectsXml(
     m_effectChainPresets.insert(pEmptyChainPreset->name(), pEmptyChainPreset);
     m_effectChainPresetsSorted.prepend(pEmptyChainPreset);
     m_quickEffectChainPresetsSorted.prepend(pEmptyChainPreset);
+
+    // The only point on the startup path where this list is final, so this is
+    // where it gets logged. Warning level on purpose: kLogLevelDefault in
+    // util/logging.h is Warning and the appliance launches without --logLevel,
+    // so a qDebug here would never reach ~/bitedj.log. Same reasoning as the
+    // "3Band source:" lines; check-log.sh filters this prefix, so keep the two
+    // in step.
+    //
+    // Worth the line because the appliance has no effects.xml (it is powered
+    // off rather than quit, so Mixxx never writes one) and therefore rebuilds
+    // this whole list from defaults on every launch, while the FLX6 mapping
+    // addresses it by position: 32 padFxPressed entries at 1-8 and a merge
+    // cycle at 1-4. Nothing else can tell you those indices still mean what
+    // they meant, and a wrong one loads the wrong effect in silence.
+    QStringList quickEffectOrder;
+    quickEffectOrder.reserve(m_quickEffectChainPresetsSorted.size());
+    for (int i = 0; i < m_quickEffectChainPresetsSorted.size(); ++i) {
+        quickEffectOrder << QString("%1=%2").arg(
+                QString::number(i), m_quickEffectChainPresetsSorted.at(i)->name());
+    }
+    qWarning() << "QuickEffect preset order:" << quickEffectOrder.join(" | ");
 
     emit effectChainPresetListUpdated();
     emit quickEffectChainPresetListUpdated();
