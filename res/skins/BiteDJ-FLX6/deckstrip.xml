@@ -201,14 +201,66 @@
         </Children>
       </WidgetGroup>
 
-      <TrackProperty>
-        <ObjectName>DeckStripTitle</ObjectName>
-        <TooltipId>track_title</TooltipId>
-        <Size>0me,20f</Size>
-        <Property>title</Property>
-        <Elide>right</Elide>
-        <Channel><Variable name="channel"/></Channel>
-      </TrackProperty>
+      <!-- Title and clock share this row, and that merge is what pays for the
+           strip's 102px box. The clock used to own a 22f row of its own below
+           the artist; folding it up here freed 20px of content, which the Play
+           page hands to the waveform grid (355 to 373, measured).
+
+           DeckStripTitle is the row's only expanding child, and that is what
+           right-aligns the clock. Its "me" width parses to MinimumExpanding,
+           which carries the expand flag. Make every child fixed instead and the
+           row centres as a block, which is the trap #DeckStripHeader's
+           qproperty-layoutAlignment rule in style.qss works around.
+
+           The clock is 104f at 16px, not the full width at 22px it had before,
+           and both halves of that matter. Duration::formatTime switches to
+           hh:mm:ss once the hour is non-zero, so the widest reachable string is
+           -1:02:15.30, and -12:15.30 shows on anything with ten minutes left.
+           Inter is not installed on the panel, so style.qss's font stack falls
+           back to DejaVu Sans, where those two measure 127px and 106px at 22px,
+           and about 92px and 77px at 16px.
+
+           That box has to clear the worst case, because NumberPos carries no
+           Elide: an overflow is a hard clip, and AlignRight cuts it from the
+           LEFT. A box one size too small renders -12:15.30 as 2:15.30, which
+           reads as two minutes remaining when there are twelve. Widen the box
+           before shrinking the type again, and test on a track over an hour,
+           not on a 6 minute DnB cut that never reaches nine characters.
+
+           NumberOfDigits below is inert. WNumber::setup stores it, and
+           WNumberPos::setValue ignores its argument entirely and delegates to
+           slotSetTimeElapsed, which never reads it. Do not size the box from
+           it. -->
+      <WidgetGroup>
+        <ObjectName>DeckStripTitleRow</ObjectName>
+        <Layout>horizontal</Layout>
+        <Size>0me,22f</Size>
+        <Children>
+          <TrackProperty>
+            <ObjectName>DeckStripTitle</ObjectName>
+            <TooltipId>track_title</TooltipId>
+            <Size>0me,22f</Size>
+            <Property>title</Property>
+            <Elide>right</Elide>
+            <Channel><Variable name="channel"/></Channel>
+          </TrackProperty>
+
+          <NumberPos>
+            <ObjectName>DeckStripTime</ObjectName>
+            <TooltipId>track_time</TooltipId>
+            <Size>104f,22f</Size>
+            <NumberOfDigits>6</NumberOfDigits>
+            <Channel><Variable name="channel"/></Channel>
+            <Connection>
+              <ConfigKey>[Controls],ShowDurationRemaining</ConfigKey>
+              <Transform>
+                <IsEqual>2</IsEqual>
+              </Transform>
+              <BindProperty>highlight</BindProperty>
+            </Connection>
+          </NumberPos>
+        </Children>
+      </WidgetGroup>
 
       <TrackProperty>
         <ObjectName>DeckStripArtist</ObjectName>
@@ -218,21 +270,6 @@
         <Elide>right</Elide>
         <Channel><Variable name="channel"/></Channel>
       </TrackProperty>
-
-      <NumberPos>
-        <ObjectName>DeckStripTime</ObjectName>
-        <TooltipId>track_time</TooltipId>
-        <Size>0me,22f</Size>
-        <NumberOfDigits>6</NumberOfDigits>
-        <Channel><Variable name="channel"/></Channel>
-        <Connection>
-          <ConfigKey>[Controls],ShowDurationRemaining</ConfigKey>
-          <Transform>
-            <IsEqual>2</IsEqual>
-          </Transform>
-          <BindProperty>highlight</BindProperty>
-        </Connection>
-      </NumberPos>
 
       <WidgetGroup>
         <ObjectName>DeckStripOverviewContainer</ObjectName>

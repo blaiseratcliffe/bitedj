@@ -15,7 +15,7 @@
     <ObjectName>DeckStrips</ObjectName>
     <Layout>horizontal</Layout>
     <SizePolicy>me,max</SizePolicy>
-    <MaximumSize>-1,120</MaximumSize>
+    <MaximumSize>-1,102</MaximumSize>
     <Children>
       <Template src="skin:deckstrip.xml">
         <SetVariable name="channel">1</SetVariable>

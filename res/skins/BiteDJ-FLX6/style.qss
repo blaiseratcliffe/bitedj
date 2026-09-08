@@ -138,11 +138,12 @@ WPushButton[value="1"]:hover {
 
 #CuePanel {
   background-color: #151515;
-  /* Vertical padding removed: the drawer's 120px height cap forces Qt to
+  /* Vertical padding removed: the drawer's 102px height cap forces Qt to
      shrink the fixed-height pad rows to fit, so any padding taken off the
      top/bottom comes straight out of the pads. Horizontal padding is kept
      to inset the outermost pads from the screen edge. Do not restore the
-     vertical half. */
+     vertical half. The pads have no slack left to give: see the header of
+     templates/cue_deck_page.xml. */
   padding: 0 2px;
 }
 
@@ -1750,6 +1751,14 @@ WBeatSpinBox::up-button {
   color: #ffffff;
 }
 
+/* The title and the clock share this row. layoutSpacing, not a margin: a QSS
+ * margin on a plain widget does nothing here, and the group's default spacing
+ * is 0 (wwidgetgroup.cpp sets it explicitly), so without this the clock butts
+ * straight against the elided title. */
+#DeckStripTitleRow {
+  qproperty-layoutSpacing: 6;
+}
+
 #DeckStripTitle {
   color: #e7e8e9;
   font-size: 15px;
@@ -1761,8 +1770,18 @@ WBeatSpinBox::up-button {
   font-size: 12px;
 }
 
+/* 16px, down from the 22px it carried when it had a row to itself. Both the
+ * size and the 104f box in deckstrip.xml are set by the worst case string,
+ * -1:02:15.30, which is 127px at 22px in DejaVu Sans (Inter is not installed
+ * on the panel, so the stack at the top of this file falls back to it).
+ *
+ * AlignRight is load-bearing and dangerous in the same breath. NumberPos has
+ * no Elide, so text wider than the box is hard clipped, and right alignment
+ * clips the LEFT end: -12:15.30 would render as 2:15.30 and read as two
+ * minutes remaining instead of twelve. Widen the box, never narrow it. */
 #DeckStripTime {
-  font-size: 22px;
+  font-size: 16px;
+  qproperty-alignment: 'AlignRight | AlignVCenter';
 }
 
 #DeckStripTime[highlight="1"] {

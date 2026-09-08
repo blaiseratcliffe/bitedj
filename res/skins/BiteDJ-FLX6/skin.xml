@@ -26,7 +26,7 @@
 			     mixxx.cfg only when the key is absent, so a user's choice
 			     wins over the default on every later launch. -->
 			<attribute persist="true" config_key="[BiteDJ],waveform_min_top">178</attribute>
-			<attribute persist="true" config_key="[BiteDJ],waveform_min_bottom">142</attribute>
+			<attribute persist="true" config_key="[BiteDJ],waveform_min_bottom">149</attribute>
 		</attributes>
 	</manifest>
 

@@ -12,11 +12,17 @@
 
   Closed costs nothing but the chips in the deck headers. The drawer only ever
   covers the deck strips, which are readouts — the waveforms, which are not,
-  stay put. Every page carries the same MaximumSize of 120 as the Decks group
+  stay put. Every page carries the same MaximumSize of 102 as the Decks group
   it replaces, so the waveform row above does not resize when the drawer
-  opens (WWidgetStack forwards its minimumSizeHint to the current page).
-  MaximumSize is a real cap; the old 150max was a SizePolicy suffix and set a
-  minimum, not a cap, which is why the band used to reserve dead space.
+  opens. MaximumSize is a real cap; the old 150max was a SizePolicy suffix and
+  set a minimum, not a cap, which is why the band used to reserve dead space.
+
+  That 102 has no slack in it, which is new. At 120 both pages wanted more than
+  the cap (the strip 122, the drawer exactly 120) and the cap did the work, so
+  the two only had to be at least the cap, not equal to it. Now the strip is 102
+  and the drawer is 102 on the nose. Change the height of either one and the
+  band moves under the waveforms every time the drawer opens. Change both, or
+  neither.
 
   [Skin],cue_bank selects which bank the pads address (0 hot, 1 memory) and is
   shared by all four deck pages, so the bank survives switching decks. None of
@@ -25,7 +31,7 @@
 <Template>
   <WidgetStack currentpage="[Skin],cue_panel">
     <ObjectName>CuePanel_Stack</ObjectName>
-    <MaximumSize>-1,120</MaximumSize>
+    <MaximumSize>-1,102</MaximumSize>
     <SizePolicy>me,max</SizePolicy>
     <Children>
 
@@ -33,7 +39,7 @@
         <ObjectName>Decks</ObjectName>
         <Layout>horizontal</Layout>
         <SizePolicy>me,max</SizePolicy>
-        <MaximumSize>-1,120</MaximumSize>
+        <MaximumSize>-1,102</MaximumSize>
         <Children>
           <Template src="skin:deckstrips.xml"></Template>
         </Children>
@@ -42,7 +48,7 @@
       <WidgetGroup trigger="[Skin],cue_deck1">
         <ObjectName>CuePanel</ObjectName>
         <Layout>horizontal</Layout>
-        <MaximumSize>-1,120</MaximumSize>
+        <MaximumSize>-1,102</MaximumSize>
         <SizePolicy>me,max</SizePolicy>
         <Children>
           <Template src="skin:templates/cue_deck_page.xml">
@@ -54,7 +60,7 @@
       <WidgetGroup trigger="[Skin],cue_deck2">
         <ObjectName>CuePanel</ObjectName>
         <Layout>horizontal</Layout>
-        <MaximumSize>-1,120</MaximumSize>
+        <MaximumSize>-1,102</MaximumSize>
         <SizePolicy>me,max</SizePolicy>
         <Children>
           <Template src="skin:templates/cue_deck_page.xml">
@@ -67,7 +73,7 @@
         <ObjectName>CuePanel</ObjectName>
         <Layout>horizontal</Layout>
         <SizePolicy>me,max</SizePolicy>
-        <MaximumSize>-1,120</MaximumSize>
+        <MaximumSize>-1,102</MaximumSize>
         <Children>
           <Template src="skin:templates/cue_deck_page.xml">
             <SetVariable name="channel">3</SetVariable>
@@ -79,7 +85,7 @@
         <ObjectName>CuePanel</ObjectName>
         <Layout>horizontal</Layout>
         <SizePolicy>me,max</SizePolicy>
-        <MaximumSize>-1,120</MaximumSize>
+        <MaximumSize>-1,102</MaximumSize>
         <Children>
           <Template src="skin:templates/cue_deck_page.xml">
             <SetVariable name="channel">4</SetVariable>

@@ -860,8 +860,18 @@
                    takes the rest. waveforms.xml carries the arithmetic.
 
                    The labels are the ratio, the values are pixels against a
-                   band measured at 355. Re-measure the band before changing
+                   band measured at 373. Re-measure the band before changing
                    them; do not recompute from a layout budget on paper.
+
+                   These four were 178/160/142/125 against a 355px band. The
+                   band grew to 373 when the deck strip lost its own clock row
+                   and its cap dropped 120 to 102, and because waveforms.xml's
+                   bottom row is me,max, every one of those 18px landed on the
+                   top row. Left alone the old values would have drifted every
+                   label by about two points, turning 50/50 into 52/48. The
+                   rule is round(band * bottom share): at 373 that is 186, 168,
+                   149 and 131, all within 0.2 points of their label. Anything
+                   that changes the band height decalibrates these again.
 
                    Four buttons at the Wave row's 82px a cell is 328f. Same
                    GeneralCol name as its neighbour above, so the #GeneralCol
@@ -891,25 +901,25 @@
                             <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
                             <SetVariable name="Text">50/50</SetVariable>
                             <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
-                            <SetVariable name="Value">178</SetVariable>
+                            <SetVariable name="Value">186</SetVariable>
                           </Template>
                           <Template src="skin:templates/setting_segment_button.xml">
                             <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
                             <SetVariable name="Text">55/45</SetVariable>
                             <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
-                            <SetVariable name="Value">160</SetVariable>
+                            <SetVariable name="Value">168</SetVariable>
                           </Template>
                           <Template src="skin:templates/setting_segment_button.xml">
                             <SetVariable name="ObjectName">SettingsSegmentMid</SetVariable>
                             <SetVariable name="Text">60/40</SetVariable>
                             <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
-                            <SetVariable name="Value">142</SetVariable>
+                            <SetVariable name="Value">149</SetVariable>
                           </Template>
                           <Template src="skin:templates/setting_segment_button.xml">
                             <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
                             <SetVariable name="Text">65/35</SetVariable>
                             <SetVariable name="ConfigKey">[BiteDJ],waveform_min_bottom</SetVariable>
-                            <SetVariable name="Value">125</SetVariable>
+                            <SetVariable name="Value">131</SetVariable>
                           </Template>
                         </Children>
                       </WidgetGroup>
@@ -1632,7 +1642,7 @@
         <ObjectName>Decks</ObjectName>
         <Layout>horizontal</Layout>
         <SizePolicy>me,max</SizePolicy>
-        <MaximumSize>-1,120</MaximumSize>
+        <MaximumSize>-1,102</MaximumSize>
         <Children>
           <Template src="skin:deckstrips.xml"></Template>
         </Children>

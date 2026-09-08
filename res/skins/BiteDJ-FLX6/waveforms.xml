@@ -17,16 +17,24 @@
   control (below), seeded by skin.xml's manifest and, for the bottom row,
   written by the Split row on Settings -> General.
 
-  Measured on the panel at 1280x720, the band is 355px: y=45 to y=399, under
+  Measured on the panel at 1280x720, the band is 373px: y=45 to y=417, under
   the topbar and over the library band's top border. At the shipped default of
-  top 178, bottom 142:
+  top 178, bottom 149:
 
-    four decks   top 213, bottom 142   the 60/40 split
-    two decks    top 355, bottom 0     full height for the pair in use
-    three decks  top 213, bottom 142   deck 3 spans the full width
+    four decks   top 224, bottom 149   the 60/40 split
+    two decks    top 373, bottom 0     full height for the pair in use
+    three decks  top 224, bottom 149   deck 3 spans the full width
 
-  The other three Split settings measure top 177/195/230 against bottom
-  178/160/125, all within 0.2 points of the ratio on their label.
+  The other three Split settings measure top 187/205/242 against bottom
+  186/168/131, all within 0.2 points of the ratio on their label.
+
+  The band was 355px (y=45 to y=399) until the deck strip's clock moved up onto
+  the title row and the strip band's cap dropped from 120 to 102. All 18 of
+  those pixels arrive here, and because the bottom row is max and the top row
+  me, all 18 land on the top row alone. That is why every Split value moved as
+  well: they are absolute pixel floors, not ratios, so the band's height is
+  baked into each one. Re-measure this band and recompute settings.xml's four
+  values together, or the labels quietly stop matching what they do.
 
   Deck 3 alone in the bottom row gets the 40% height, not half the band. There
   is no way to condition a height on how many decks are loaded, for the same

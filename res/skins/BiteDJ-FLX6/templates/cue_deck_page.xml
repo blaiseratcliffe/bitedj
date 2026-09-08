@@ -11,13 +11,22 @@
     showEvent rewrites every trigger CO from the current page, so the two
     would fight each other on open.
 
-    The pad grid is sized so all eight pads clear the touch floor: 4 columns
-    of ~320px, 2 rows of 45px at 1280 wide. The true vertical budget is
-    header + CuePanel_Grid's 4px qproperty-layoutSpacing between the two pad
-    rows: 26 + 45 + 4 + 45 = 120 exactly. The header is 26px, not the more
-    obvious 30, because those 4px of spacing are real QLayout spacing that
-    the naive 30 + 45 + 45 sum leaves out. Do not "recover" the header's
-    apparent spare 4px; there is none.
+    The true vertical budget is the header plus CuePanel_Grid's 4px
+    qproperty-layoutSpacing between the two pad rows: 26 + 36 + 4 + 36 = 102
+    exactly. The header is 26px, not the more obvious 30, because those 4px of
+    spacing are real QLayout spacing that the naive sum leaves out. Do not
+    "recover" the header's apparent spare 4px; there is none.
+
+    The pads are 36f, and they are deliberately under the touch floor. They
+    were 45f, rendering 43px against a stated 44px floor that section 4 of
+    docs/M4-SKIN-NOTES.md records as accepted rather than chased. Taking them
+    to 36f is what let the deck strip band drop from 120 to 102, which is 18px
+    the Play page's waveform grid now has instead. That was a decision, not an
+    oversight: 4 columns of ~316px keeps the pads wide, and the height is what
+    was traded. If they prove too short to hit reliably, the honest fix is to
+    give the band back its pixels everywhere at once, not to grow this file
+    alone, because the strip and this drawer are two pages of one WidgetStack
+    and the waveforms move whenever they disagree. cuepanel.xml has the rest.
   Variables:
     channel: deck number.
 -->
@@ -89,7 +98,7 @@
           <WidgetGroup>
             <ObjectName>CuePanel_Row</ObjectName>
             <Layout>horizontal</Layout>
-            <Size>0me,45f</Size>
+            <Size>0me,36f</Size>
             <Children>
               <Template src="skin:templates/cue_pad.xml">
                 <SetVariable name="channel"><Variable name="channel"/></SetVariable>
@@ -116,7 +125,7 @@
           <WidgetGroup>
             <ObjectName>CuePanel_Row</ObjectName>
             <Layout>horizontal</Layout>
-            <Size>0me,45f</Size>
+            <Size>0me,36f</Size>
             <Children>
               <Template src="skin:templates/cue_pad.xml">
                 <SetVariable name="channel"><Variable name="channel"/></SetVariable>
@@ -158,7 +167,7 @@
           <WidgetGroup>
             <ObjectName>CuePanel_Row</ObjectName>
             <Layout>horizontal</Layout>
-            <Size>0me,45f</Size>
+            <Size>0me,36f</Size>
             <Children>
               <Template src="skin:templates/cue_pad.xml">
                 <SetVariable name="channel"><Variable name="channel"/></SetVariable>
@@ -185,7 +194,7 @@
           <WidgetGroup>
             <ObjectName>CuePanel_Row</ObjectName>
             <Layout>horizontal</Layout>
-            <Size>0me,45f</Size>
+            <Size>0me,36f</Size>
             <Children>
               <Template src="skin:templates/cue_pad.xml">
                 <SetVariable name="channel"><Variable name="channel"/></SetVariable>
