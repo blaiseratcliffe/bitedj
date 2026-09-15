@@ -286,6 +286,34 @@ TEST(WifiSettingsTest, ParseSavedWifiNamesOfNothingIsEmpty) {
     EXPECT_TRUE(WifiSettings::parseSavedWifiNames(QString()).isEmpty());
 }
 
+// --- parseActiveProfile -----------------------------------------------------
+
+TEST(WifiSettingsTest, ParseActiveProfileFindsTheProfileOnTheWifiDevice) {
+    // Phase 0, verbatim: NAME,TYPE,DEVICE, which is the join snapshot's form.
+    EXPECT_EQ(QStringLiteral("iwanttoridemybicycle"),
+            WifiSettings::parseActiveProfile(kConnectionShow, QStringLiteral("wlan0")));
+}
+
+TEST(WifiSettingsTest, ParseActiveProfileOfAnIdleDeviceIsEmpty) {
+    // Phase 0, verbatim: "Wired connection 1" is saved but active on nothing,
+    // so eth0 has no active profile. An empty device name matches nothing.
+    EXPECT_TRUE(WifiSettings::parseActiveProfile(kConnectionShow, QStringLiteral("eth0"))
+                        .isEmpty());
+    EXPECT_TRUE(WifiSettings::parseActiveProfile(kConnectionShow, QString()).isEmpty());
+}
+
+TEST(WifiSettingsTest, ParseActiveProfileUnescapesTheName) {
+    // Synthetic: a disconnected box whose only wifi profile is idle, then the
+    // same profile, with a colon in its name, active on wlan0.
+    EXPECT_TRUE(WifiSettings::parseActiveProfile(
+            QStringLiteral("Cafe\\: Upstairs:802-11-wireless:\n"), QStringLiteral("wlan0"))
+                        .isEmpty());
+    EXPECT_EQ(QStringLiteral("Cafe: Upstairs"),
+            WifiSettings::parseActiveProfile(
+                    QStringLiteral("Cafe\\: Upstairs:802-11-wireless:wlan0\n"),
+                    QStringLiteral("wlan0")));
+}
+
 // --- parseWifiDevice --------------------------------------------------------
 
 TEST(WifiSettingsTest, ParseWifiDeviceFindsTheWifiInterface) {

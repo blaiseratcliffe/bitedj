@@ -161,6 +161,9 @@ class WifiSettings : public QObject {
     // From `device show` terse IP4.ADDRESS: "192.168.4.39/22" -> "192.168.4.39",
     // empty if none.
     static QString parseIpv4(const QString& output);
+    // From `connection show` terse NAME,TYPE,DEVICE output: the name of the
+    // profile active on device, empty if none is.
+    static QString parseActiveProfile(const QString& output, const QString& device);
     // Whether a failed join's stderr says the passphrase was rejected, which
     // sends the DJ back to page 1 rather than to the list. Matches the fixed
     // NetworkManager phrases only, never a bare "psk", which an SSID in some
@@ -253,10 +256,21 @@ class WifiSettings : public QObject {
     // scanned on the current connection, else the profile name (which is the
     // SSID for every profile `device wifi connect` creates).
     QString connectedSsid() const;
-    // Whether the box is on this row's network now. A row's active flag is
-    // what the scan saw; it only counts while the box is connected and still
-    // on the connection it was scanned on.
+    // Whether the box is on this row's network now. In state 1, a row named
+    // like the connected profile always is (the common case, where profile
+    // name == SSID, and fresh from the last status read). Otherwise a row's
+    // active flag is what the scan saw, and only counts while the box is
+    // still on the connection it was scanned on.
     bool isActiveNow(const WifiRow& row) const;
+    // Rescans when a client is visible and the rows were scanned on another
+    // connection than the current one. For the ends of ops that held the slot
+    // while applyStatus() asked for a rescan, which was refused then.
+    void rescanIfRowsStale();
+    // Re-reads status before a page 3 action and checks that page 3 still
+    // shows the network the box is on. Otherwise returns to the list and
+    // returns false, so Disconnect never acts on one network while naming
+    // another.
+    bool manageTargetStillConnected();
     bool isUsableState() const {
         return m_state == kStateDisconnected || m_state == kStateConnected;
     }
@@ -334,6 +348,10 @@ class WifiSettings : public QObject {
     // there. Absent when that read failed, in which case nothing is ever
     // deleted: leaving residue is recoverable, deleting a DJ's profile is not.
     std::optional<QStringList> m_joinSnapshot;
+    // The profile the box was on when the current join began. A cancelled
+    // join never takes this one down: `connection down` also blocks its
+    // autoconnect, and on this box Wi-Fi is the only link ssh has.
+    QString m_joinStartProfile;
 
     // The async op slot. m_opInFlight is the guard; m_pOpProcess the process
     // (a child of this object) and m_opCallback its one-shot continuation.

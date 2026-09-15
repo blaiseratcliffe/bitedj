@@ -455,6 +455,21 @@ std::optional<WifiSettings::WifiDevice> WifiSettings::parseWifiDevice(const QStr
 }
 
 // static
+QString WifiSettings::parseActiveProfile(const QString& output, const QString& device) {
+    if (device.isEmpty()) {
+        return QString();
+    }
+    const QStringList lines = outputLines(output);
+    for (const QString& line : lines) {
+        const QStringList fields = splitTerseFields(line);
+        if (fields.size() >= 3 && fields.at(2) == device && !fields.at(0).isEmpty()) {
+            return fields.at(0);
+        }
+    }
+    return QString();
+}
+
+// static
 bool WifiSettings::isWrongPasswordError(const QString& nmcliError) {
     // "Secrets were required" is NetworkManager's own activation failure for a
     // rejected passphrase; newer nmcli words the same failure "Passwords or
@@ -498,6 +513,13 @@ void WifiSettings::onScanRequested(double value) {
     refreshStatus();
     if (startScan(true)) {
         // onScanFinished() puts the CO back when the scan ends.
+        return;
+    }
+    // Refused because a scan already holds the slot, typically the auto scan
+    // the refresh just started on seeing a change: that one is the answer to
+    // this tap, and its own onScanFinished() resets the CO, so it stays 1 for
+    // as long as a scan is actually running.
+    if (m_scanInFlight) {
         return;
     }
     m_pCoScan->set(0.0);
@@ -821,7 +843,40 @@ QString WifiSettings::connectedSsid() const {
 }
 
 bool WifiSettings::isActiveNow(const WifiRow& row) const {
-    return row.active && m_state == kStateConnected && m_rowsConnection == m_connectedProfile;
+    if (m_state != kStateConnected) {
+        return false;
+    }
+    // Closes, in the common case, the window between a link change and the
+    // rescan landing, in which the current network's row would otherwise not
+    // count as active and a tap on it would start joining the network the
+    // box is already on.
+    if (row.ssid == m_connectedProfile) {
+        return true;
+    }
+    return row.active && m_rowsConnection == m_connectedProfile;
+}
+
+void WifiSettings::rescanIfRowsStale() {
+    if (!m_visibleClients.isEmpty() && m_rowsConnection != m_connectedProfile) {
+        startScan(false);
+    }
+}
+
+bool WifiSettings::manageTargetStillConnected() {
+    // Captured first: a link change seen by the refresh sends page 3 back to
+    // the list, which clears the target.
+    const QString target = m_joinTarget;
+    refreshStatus();
+    if (page() == kPageManage && m_state == kStateConnected && !target.isEmpty() &&
+            (target == m_connectedProfile || target == connectedSsid())) {
+        return true;
+    }
+    qInfo() << "WifiSettings: page 3 action dropped," << target << "is no longer connected";
+    goToList();
+    if (!target.isEmpty()) {
+        notify(tr("No longer connected to %1").arg(target), Notifications::Severity::Info);
+    }
+    return false;
 }
 
 bool WifiSettings::startScan(bool explicitRescan) {
@@ -928,12 +983,18 @@ bool WifiSettings::startJoin(QString ssid, JoinCommand command) {
     // failure can tell a profile this attempt made from one the DJ already
     // had. Taken for saved networks too, where it simply names the target and
     // so protects it.
+    // The same read also says which profile the box is on right now, fresher
+    // than the last status read, which can be 10 s old.
     QString profiles;
     QString error;
-    if (readNmcliSync({"-t", "-f", "NAME,TYPE", "connection", "show"}, &profiles, &error)) {
+    if (readNmcliSync({"-t", "-f", "NAME,TYPE,DEVICE", "connection", "show"},
+                &profiles,
+                &error)) {
         m_joinSnapshot = allProfileNames(profiles);
+        m_joinStartProfile = parseActiveProfile(profiles, m_wifiDevice);
     } else {
         m_joinSnapshot.reset();
+        m_joinStartProfile = m_connectedProfile;
         qWarning() << "WifiSettings: could not list profiles before joining" << ssid
                    << "so a failed attempt will not be cleaned up:" << error;
     }
@@ -984,12 +1045,21 @@ void WifiSettings::onJoinFinished(const QString& ssid, const NmcliResult& result
         // cancelled. Deleting a profile this attempt created stops it as
         // well. Where there is nothing to delete (a saved profile brought up
         // by `connection up`, a password tried on a profile that already
-        // existed, or no snapshot to judge by) take the connection down.
+        // existed, or no snapshot to judge by) take the connection down,
+        // unless it is the one the box was on when the join began: that one
+        // would come back by itself, but `connection down` blocks its
+        // autoconnect and strands a box whose only link is this Wi-Fi.
         if (!cleanupResidue(ssid)) {
-            stopActivation(ssid);
+            if (ssid == m_joinStartProfile) {
+                qInfo() << "WifiSettings: not taking" << ssid
+                        << "down after the cancel, the box was on it when the join began";
+            } else {
+                stopActivation(ssid);
+            }
         }
         goToList();
         refreshStatus();
+        rescanIfRowsStale();
         return;
     }
     if (result.succeeded()) {
@@ -1019,6 +1089,8 @@ void WifiSettings::onJoinFinished(const QString& ssid, const NmcliResult& result
     // Starting a join tears down whatever the device was on, so the state
     // shown before the attempt is stale either way.
     refreshStatus();
+    // Refused if the residue delete holds the slot; its callback catches up.
+    rescanIfRowsStale();
 }
 
 bool WifiSettings::cleanupResidue(const QString& ssid) {
@@ -1030,7 +1102,7 @@ bool WifiSettings::cleanupResidue(const QString& ssid) {
     }
     const bool started = runNmcli({"--wait", kShortWaitSeconds, "connection", "delete", "id", ssid},
             kDisconnectWatchdogMs,
-            [ssid](const NmcliResult& result) {
+            [this, ssid](const NmcliResult& result) {
                 // "unknown connection" is the ordinary outcome when the attempt
                 // never got as far as creating a profile.
                 if (result.succeeded()) {
@@ -1040,6 +1112,9 @@ bool WifiSettings::cleanupResidue(const QString& ssid) {
                     qInfo() << "WifiSettings: no profile to remove after the failed join of"
                             << ssid << result.err.simplified();
                 }
+                // The rescan the failed join's link change asked for was
+                // refused while this delete held the slot.
+                rescanIfRowsStale();
             });
     if (!started) {
         qWarning() << "WifiSettings: another nmcli call is running, so a profile the failed"
@@ -1059,6 +1134,7 @@ void WifiSettings::stopActivation(const QString& ssid) {
                         << (result.succeeded() ? QStringLiteral("done")
                                                : result.err.simplified());
                 refreshStatus();
+                rescanIfRowsStale();
             });
     if (!started) {
         qWarning() << "WifiSettings: another nmcli call is running, so the cancelled join of"
@@ -1070,7 +1146,9 @@ bool WifiSettings::startDisconnect() {
     if (!isUsableState() || page() != kPageManage || m_wifiDevice.isEmpty()) {
         return false;
     }
-    if (!claimOpSlot()) {
+    // `device disconnect` acts on whatever the device is on, so check that is
+    // still the network page 3 names before touching it.
+    if (!manageTargetStillConnected() || !claimOpSlot()) {
         return false;
     }
     const QString ssid = m_joinTarget;
@@ -1095,6 +1173,7 @@ bool WifiSettings::startDisconnect() {
                 const QString detail = describeFailure(result);
                 qWarning() << "WifiSettings: disconnect failed:" << detail;
                 notify(detail, Notifications::Severity::Error);
+                rescanIfRowsStale();
             });
 }
 
@@ -1102,7 +1181,7 @@ bool WifiSettings::startForget() {
     if (!isUsableState() || page() != kPageManage || m_joinTarget.isEmpty()) {
         return false;
     }
-    if (!claimOpSlot()) {
+    if (!manageTargetStillConnected() || !claimOpSlot()) {
         return false;
     }
     const QString ssid = m_joinTarget;
@@ -1120,6 +1199,7 @@ bool WifiSettings::startForget() {
                 const QString detail = describeFailure(result);
                 qWarning() << "WifiSettings: forgetting" << ssid << "failed:" << detail;
                 notify(detail, Notifications::Severity::Error);
+                rescanIfRowsStale();
             });
 }
 
@@ -1142,6 +1222,7 @@ bool WifiSettings::startRadioOn() {
                 const QString detail = describeFailure(result);
                 qWarning() << "WifiSettings: turning the radio on failed:" << detail;
                 notify(detail, Notifications::Severity::Error);
+                rescanIfRowsStale();
             });
 }
 
