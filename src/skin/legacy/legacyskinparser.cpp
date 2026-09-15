@@ -78,6 +78,7 @@
 #include "widget/wcontrollerlist.h"
 #include "widget/wsamplerdrive.h"
 #include "widget/wusblist.h"
+#include "widget/wwifikeypad.h"
 #include "widget/wwifilist.h"
 #include "widget/wwifistatus.h"
 #include "widget/wversionlabel.h"
@@ -576,6 +577,8 @@ QList<QWidget*> LegacySkinParser::parseNode(const QDomElement& node) {
         result = wrapWidget(parseStandardWidget<WWifiList>(node));
     } else if (nodeName == "WifiStatus") {
         result = wrapWidget(parseStandardWidget<WWifiStatus>(node));
+    } else if (nodeName == "WifiKeypad") {
+        result = wrapWidget(parseStandardWidget<WWifiKeypad>(node));
     } else if (nodeName == "Display") {
         result = wrapWidget(parseStandardWidget<WDisplay>(node));
     } else if (nodeName == "BeatSpinBox") {
