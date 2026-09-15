@@ -13,7 +13,14 @@ class SkinContext;
 // WWifiList and (Phase 4's) WWifiKeypad on every one of the Network page's
 // four WidgetStack pages (settings.xml, Phase 3). Two QLabels: a title
 // (objectName WifiStatusTitle) and a detail line (objectName
-// WifiStatusDetail).
+// WifiStatusDetail), stacked top to bottom in a QVBoxLayout with a stretch
+// after them, so on a page sized much taller than the two labels (page 3
+// fills the whole Network page) they stay pinned together at the top rather
+// than each claiming a share of the leftover height -- a QLabel's default
+// size policy is Preferred, not Fixed, so without that trailing stretch a
+// plain QVBoxLayout spreads them apart to fill whatever space it's given.
+// Fonts, colors and horizontal padding are left to the skin's QSS, same as
+// every other widget in this file.
 //
 // This widget reads [Wifi],page through a ControlProxy rather than
 // listening for a WifiSettings signal. The contract's signal list

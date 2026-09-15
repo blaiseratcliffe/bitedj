@@ -33,6 +33,14 @@ WWifiStatus::WWifiStatus(QWidget* parent)
     m_pDetailLabel->setWordWrap(true);
     pLayout->addWidget(m_pTitleLabel);
     pLayout->addWidget(m_pDetailLabel);
+    // Without this, a QVBoxLayout with all-default (0) stretch factors gives
+    // its two Preferred-policy QLabels a share of any extra vertical space
+    // the skin gives this widget -- which on page 3, sized to the whole
+    // page, spread the title and detail hundreds of pixels apart instead of
+    // stacking them. The stretch item is Expanding by construction and
+    // claims that leftover space instead, pinning both labels to their
+    // natural (sizeHint) height at the top.
+    pLayout->addStretch(1);
 
     m_pPageControl->connectValueChanged(this, &WWifiStatus::onPageChanged);
     if (m_pPageControl->valid()) {
