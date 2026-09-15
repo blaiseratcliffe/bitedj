@@ -1483,13 +1483,15 @@ WBeatSpinBox::up-button {
   color: #5a5a64;
 }
 
-/* The rows live in a scroll area so more drives / controllers than fit the
- * panel can be reached by dragging; the panel behind it has to keep showing
- * through. */
+/* The rows live in a scroll area so more drives / controllers / networks
+ * than fit the panel can be reached by dragging; the panel behind it has to
+ * keep showing through. */
 #UsbList #UsbScrollArea,
 #UsbList #UsbScrollContent,
 #ControllerList #ControllerScrollArea,
-#ControllerList #ControllerScrollContent {
+#ControllerList #ControllerScrollContent,
+#WifiList #WifiScrollArea,
+#WifiList #WifiScrollContent {
   background-color: transparent;
   border: 0;
 }
@@ -1497,7 +1499,8 @@ WBeatSpinBox::up-button {
 /* Wide enough to grab with a fingertip, with the handle inset so it still
  * reads as a slim indicator. Track colours follow the library's scroll bar. */
 #UsbList QScrollBar:vertical,
-#ControllerList QScrollBar:vertical {
+#ControllerList QScrollBar:vertical,
+#WifiList QScrollBar:vertical {
   background-color: #151515;
   border: 0;
   border-radius: 4px;
@@ -1506,7 +1509,8 @@ WBeatSpinBox::up-button {
 }
 
 #UsbList QScrollBar::handle:vertical,
-#ControllerList QScrollBar::handle:vertical {
+#ControllerList QScrollBar::handle:vertical,
+#WifiList QScrollBar::handle:vertical {
   background-color: #855ea7;
   border: 0;
   border-radius: 5px;
@@ -1515,21 +1519,26 @@ WBeatSpinBox::up-button {
 }
 
 #UsbList QScrollBar::handle:vertical:pressed,
-#ControllerList QScrollBar::handle:vertical:pressed {
+#ControllerList QScrollBar::handle:vertical:pressed,
+#WifiList QScrollBar::handle:vertical:pressed {
   background-color: #7fb2d6;
 }
 
 #UsbList QScrollBar::add-page:vertical,
 #UsbList QScrollBar::sub-page:vertical,
 #ControllerList QScrollBar::add-page:vertical,
-#ControllerList QScrollBar::sub-page:vertical {
+#ControllerList QScrollBar::sub-page:vertical,
+#WifiList QScrollBar::add-page:vertical,
+#WifiList QScrollBar::sub-page:vertical {
   background-color: transparent;
 }
 
 #UsbList QScrollBar::add-line:vertical,
 #UsbList QScrollBar::sub-line:vertical,
 #ControllerList QScrollBar::add-line:vertical,
-#ControllerList QScrollBar::sub-line:vertical {
+#ControllerList QScrollBar::sub-line:vertical,
+#WifiList QScrollBar::add-line:vertical,
+#WifiList QScrollBar::sub-line:vertical {
   height: 0;
   width: 0;
 }
@@ -1617,6 +1626,112 @@ WBeatSpinBox::up-button {
   min-height: 56px;
   padding: 0 16px;
   text-transform: uppercase;
+}
+
+/* Wi-Fi network list (WWifiList, src/widget/wwifilist.h). The status line
+ * sits above the scroll area and never scrolls out of view; the row itself
+ * (not a label inside it, unlike UsbRowLabel above) carries the appearance,
+ * because WWifiList's header documents a real per-row QWidget container. */
+#WifiList #WifiStatusLine {
+  color: #a7a9ac;
+  font-size: 13px;
+  font-weight: bold;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+#WifiList #WifiRow {
+  background-color: #151515;
+  border: 2px solid #151515;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  min-height: 56px;
+  padding: 0 16px;
+}
+
+/* The network currently in use. */
+#WifiList #WifiRow[active="true"] {
+  background-color: #2d6488;
+  border-color: #855ea7;
+}
+
+/* A saved profile, not necessarily the active one; the accent border alone
+ * (no fill) keeps it distinct from the filled active row. */
+#WifiList #WifiRow[saved="true"] {
+  border-color: #855ea7;
+}
+
+/* SSID text. A QPushButton (WWifiList's desktop/mouse click path), styled
+ * flat so it reads as row text, not as a nested button — the whole row is
+ * the tap target, per wwifilist.h. */
+#WifiList #WifiSsid {
+  background-color: transparent;
+  border: 0;
+  color: #e5e6ea;
+  font-size: 16px;
+  font-weight: bold;
+  text-align: left;
+}
+
+/* Signal strength: 0-4 filled U+25CF out of 4 empty U+25CB (wwifilist.h).
+ * Both glyphs are plain BMP code points guaranteed to be in DejaVu Sans;
+ * Inter (line 14 above) is not installed on the Pi (see the fallback this
+ * file documents near the deck strip's clock, "DejaVu Sans" in the comment
+ * above #DeckStripTime), so this label names DejaVu Sans first instead of
+ * trusting the generic sans-serif fallback to land there. */
+#WifiList #WifiSignal {
+  color: #a7a9ac;
+  font-family: 'DejaVu Sans', sans-serif, 'Monospace';
+  font-size: 14px;
+  padding: 0 8px;
+}
+
+/* "Secured" text shown only for secured rows (wwifilist.h); muted, since it
+ * is information, not a control. */
+#WifiList #WifiLock {
+  color: #7a7a84;
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+/* Inert empty state: tryInstance() == nullptr, or a scan that found nothing.
+ * Same dashed-border treatment as UsbRow[empty] above. */
+#WifiList #WifiRow[empty="true"] {
+  background-color: transparent;
+  border: 2px dashed #32323c;
+  border-radius: 4px;
+  color: #5a5a64;
+  font-size: 16px;
+  font-weight: bold;
+  min-height: 56px;
+  padding: 0 16px;
+  text-transform: uppercase;
+}
+
+/* WWifiStatus (src/widget/wwifistatus.h), shown on the joining and manage
+ * pages. Title carries the ssid or "Joining <ssid>...", detail is the
+ * status line underneath it — same size relationship as SettingsRowLabel
+ * over SettingsRowHint elsewhere on this panel. */
+#WifiStatusTitle {
+  color: #e5e6ea;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+#WifiStatusDetail {
+  color: #a7a9ac;
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+/* Page 1's placeholder (Ruling 4): centred, muted, same tone as
+ * SamplerDrivePlaceholder — text to read, not a control to tap. */
+#WifiPlaceholderLabel {
+  color: #5c707d;
+  font-size: 14px;
+  font-weight: bold;
+  qproperty-alignment: 'AlignCenter';
 }
 
 #SettingsDangerButton {
