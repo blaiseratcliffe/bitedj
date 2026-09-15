@@ -17,10 +17,12 @@
 #include <QLabel>
 #include <QLayout>
 #include <QMouseEvent>
+#include <QPointer>
 #include <QPointingDevice>
 #include <QPushButton>
 #include <QSet>
 #include <QSignalSpy>
+#include <QTest>
 #include <memory>
 #include <utility>
 
@@ -123,41 +125,63 @@ TEST_F(WWifiKeypadTest, PressOnOneKeyReleaseOnAnotherTypesNothing) {
 
 TEST_F(WWifiKeypadTest, PressThenDragOffThenReleaseTypesNothing) {
     QSignalSpy spy(m_pKeypad.get(), &WWifiKeypad::characterTyped);
-    const QPoint start = centerOf(keyButtons().at(0));
-    // Comfortably more than one key's width away (~120 px at this size), so
-    // the release lands off the pressed key, whether on a neighbour or on
-    // the gap the A-row leaves in its last column.
-    const QPoint draggedOff = start + QPoint(300, 0);
+    QPushButton* pKey = keyButtons().at(0);
+    const QPoint start = centerOf(pKey);
+    // Outside the keypad's own bounds entirely, not just a neighbouring key
+    // -- landing on another key would duplicate
+    // PressOnOneKeyReleaseOnAnotherTypesNothing instead of exercising the
+    // "off any key" case.
+    const QPoint outsideWidget = m_pKeypad->mapToGlobal(
+            QPoint(m_pKeypad->width() + 50, m_pKeypad->height() / 2));
 
     press(start);
+    EXPECT_TRUE(pKey->property("down").toBool());
     moveTo(start + QPoint(150, 0));
-    moveTo(draggedOff);
-    release(draggedOff);
+    moveTo(outsideWidget);
+    EXPECT_FALSE(pKey->property("down").toBool())
+            << "\"down\" must clear as soon as the finger leaves the key, "
+               "not wait for release";
+    release(outsideWidget);
 
     EXPECT_EQ(0, spy.count());
 }
 
 TEST_F(WWifiKeypadTest, LayoutSwitchChangesKeyTextNotWidgetPointers) {
-    const QList<QPushButton*> before = keyButtons();
+    // QPointer, not a raw address comparison: a raw pointer surviving in a
+    // second findChildren() call is not proof the original object is still
+    // alive (a freed allocation can be reused at the same address), while
+    // QPointer::isNull() reports real destruction directly.
+    QList<QPointer<QPushButton>> before;
+    for (QPushButton* pButton : keyButtons()) {
+        before.append(QPointer<QPushButton>(pButton));
+    }
     QPushButton* pLayoutSwitch = namedButton("WifiKeyLayout");
     ASSERT_NE(nullptr, pLayoutSwitch);
-    const QString firstKeyTextBefore = before.at(0)->text();
-    EXPECT_EQ(QStringLiteral("q"), firstKeyTextBefore);
+    EXPECT_EQ(QStringLiteral("q"), before.at(0)->text());
     EXPECT_EQ(QStringLiteral("123"), pLayoutSwitch->text());
 
     tap(centerOf(pLayoutSwitch));
 
+    for (const QPointer<QPushButton>& pButton : std::as_const(before)) {
+        ASSERT_FALSE(pButton.isNull())
+                << "layout switch must not destroy/rebuild the key widgets";
+    }
     const QList<QPushButton*> after = keyButtons();
-    EXPECT_EQ(before, after) << "layout switch must not destroy/rebuild the key widgets";
+    ASSERT_EQ(before.size(), after.size());
+    for (int i = 0; i < before.size(); ++i) {
+        EXPECT_EQ(before.at(i).data(), after.at(i));
+    }
     EXPECT_EQ(QStringLiteral("1"), after.at(0)->text());
     EXPECT_EQ(QStringLiteral("#+="), pLayoutSwitch->text());
 
     tap(centerOf(pLayoutSwitch));
-    EXPECT_EQ(QStringLiteral("\""), keyButtons().at(0)->text());
+    ASSERT_FALSE(before.at(0).isNull());
+    EXPECT_EQ(QStringLiteral("\""), before.at(0)->text());
     EXPECT_EQ(QStringLiteral("ABC"), pLayoutSwitch->text());
 
     tap(centerOf(pLayoutSwitch));
-    EXPECT_EQ(QStringLiteral("q"), keyButtons().at(0)->text());
+    ASSERT_FALSE(before.at(0).isNull());
+    EXPECT_EQ(QStringLiteral("q"), before.at(0)->text());
     EXPECT_EQ(QStringLiteral("123"), pLayoutSwitch->text());
 }
 
@@ -245,6 +269,39 @@ TEST_F(WWifiKeypadTest, EveryKeyMeasuresAtLeast44Pixels) {
     }
 }
 
+// Fix round 1: QPushButton's default vertical size policy is Fixed, so a
+// key that only ever got setMinimumSize(44, 44) stays pinned near 44px tall
+// even when its row's stretch factor gives the row itself much more height
+// -- leaving a dead band below the key, on the real page, where a tap hits
+// nothing. This resizes well above the widget's minimum and checks that two
+// vertically adjacent keys are separated by exactly the grid's own spacing,
+// which is only possible if both rows actually grew to fill the space they
+// were given.
+TEST_F(WWifiKeypadTest, KeyRowsFillTheirHeightWithNoDeadBandBetweenRows) {
+    constexpr int kTallFixtureHeight = 900; // well above the ~300px minimum
+    constexpr int kGridVerticalSpacing = 6; // matches wwifikeypad.cpp
+    m_pKeypad->resize(kKeypadWidth, kTallFixtureHeight);
+    layOut();
+
+    QPushButton* pRow2Key = keyButtons().at(0);  // 'q', row 2, column 0
+    QPushButton* pRow3Key = keyButtons().at(10); // 'a', row 3, same column
+
+    const int gap = pRow3Key->y() - (pRow2Key->y() + pRow2Key->height());
+    EXPECT_EQ(kGridVerticalSpacing, gap)
+            << "a bigger gap means a key is still stuck at its "
+               "minimum/Fixed height instead of filling its row";
+}
+
+TEST_F(WWifiKeypadTest, DownPropertyTracksThePressedKey) {
+    QPushButton* pKey = keyButtons().at(0);
+
+    press(centerOf(pKey));
+    EXPECT_TRUE(pKey->property("down").toBool());
+
+    release(centerOf(pKey));
+    EXPECT_FALSE(pKey->property("down").toBool());
+}
+
 // Ruling 18: a WPA passphrase may contain any printable ASCII character, so
 // every one of 0x20-0x7E must be reachable from this keypad. This walks the
 // real tap-dispatch path (not just the layout tables) across every layout,
@@ -306,6 +363,46 @@ TEST_F(WWifiKeypadTest, AllPrintableAsciiIsReachableAcrossLayoutsAndShift) {
         expected.insert(QChar(c));
     }
     EXPECT_EQ(expected, collected);
+}
+
+// Fix round 1: every test above drives WWifiKeypad through sendTouchAsMouse,
+// which only MIMICS what WWidget::event() does -- it hand-crafts a
+// QMouseEvent and sends it straight to the keypad. It does not exercise the
+// actual mechanism the whole design depends on: a real touch physically
+// lands on a CHILD button, which does not have Qt::WA_AcceptTouchEvents, so
+// Qt's own touch dispatch walks up the parent chain to the keypad (which
+// does have it, via WWidget's constructor) and delivers the touch there,
+// where WWidget::event() then synthesizes the mouse event. These two tests
+// use QTest's touch simulation, aimed at the child key widget itself, so
+// that real propagation-and-synthesis path runs end to end.
+TEST_F(WWifiKeypadTest, RealTouchTapOnAChildButtonTypesExactlyOneCharacter) {
+    QSignalSpy spy(m_pKeypad.get(), &WWifiKeypad::characterTyped);
+    QPushButton* pKey = keyButtons().at(0); // 'q' in the default layout.
+    QPointingDevice* pDevice = QTest::createTouchDevice();
+
+    QTest::touchEvent(pKey, pDevice)
+            .press(0, pKey->rect().center(), pKey)
+            .release(0, pKey->rect().center(), pKey);
+
+    ASSERT_EQ(1, spy.count());
+    EXPECT_EQ(QChar('q'), spy.at(0).at(0).toChar());
+}
+
+TEST_F(WWifiKeypadTest, RealTouchDragOffAChildButtonTypesNothing) {
+    QSignalSpy spy(m_pKeypad.get(), &WWifiKeypad::characterTyped);
+    QPushButton* pKey = keyButtons().at(0);
+    const QPoint localCenter = pKey->rect().center();
+    QPointingDevice* pDevice = QTest::createTouchDevice();
+
+    // 300px, in pKey's own local coordinate system, comfortably clears one
+    // key's width (~120px at this fixture size) and lands off pKey --
+    // mapToGlobal doesn't require the point to stay inside pKey's rect.
+    QTest::touchEvent(pKey, pDevice)
+            .press(0, localCenter, pKey)
+            .move(0, localCenter + QPoint(300, 0), pKey)
+            .release(0, localCenter + QPoint(300, 0), pKey);
+
+    EXPECT_EQ(0, spy.count());
 }
 
 } // namespace

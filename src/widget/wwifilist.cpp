@@ -92,6 +92,13 @@ WWifiList::WWifiList(QWidget* parent)
 
     m_pStatusLabel->setObjectName(kStatusLabelObjectName);
     m_pStatusLabel->setWordWrap(true);
+    // Ruling 22: this label's text can include the connected SSID
+    // (untrusted, broadcast by anyone nearby); AutoText would let one
+    // containing markup render as rich text. The per-row SSID text (below,
+    // in rebuildRows()) is a QPushButton's text, not a QLabel's -- a button
+    // draws its text via QStyle as plain text regardless of format, so it
+    // has no equivalent rich-text risk and needs no change here.
+    m_pStatusLabel->setTextFormat(Qt::PlainText);
     pOuterLayout->addWidget(m_pStatusLabel);
     pOuterLayout->addWidget(m_pScrollArea);
 

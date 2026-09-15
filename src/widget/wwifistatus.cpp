@@ -29,8 +29,13 @@ WWifiStatus::WWifiStatus(QWidget* parent)
 
     m_pTitleLabel->setObjectName(kTitleObjectName);
     m_pTitleLabel->setWordWrap(true);
+    // Ruling 22: both labels can render an SSID (untrusted, broadcast by
+    // anyone nearby); AutoText would let one containing markup render as
+    // rich text.
+    m_pTitleLabel->setTextFormat(Qt::PlainText);
     m_pDetailLabel->setObjectName(kDetailObjectName);
     m_pDetailLabel->setWordWrap(true);
+    m_pDetailLabel->setTextFormat(Qt::PlainText);
     pLayout->addWidget(m_pTitleLabel);
     pLayout->addWidget(m_pDetailLabel);
     // Without this, a QVBoxLayout with all-default (0) stretch factors gives

@@ -6,7 +6,6 @@
 #include <QPushButton>
 #include <QString>
 
-#include "preferences/wifisettings.h"
 #include "widget/wwidget.h"
 
 class QDomNode;
@@ -59,8 +58,9 @@ class SkinContext;
 // Ruling 18 requires all 95 printable ASCII characters (0x20-0x7E) be
 // reachable; the split below was chosen so the three layouts' emitted
 // characters are pairwise disjoint and their union is exactly that range
-// (verified by WifiKeypadAsciiCoverageTest in wwifikeypad_test.cpp, which
-// walks every layout/shift combination rather than trusting this comment):
+// (verified by AllPrintableAsciiIsReachableAcrossLayoutsAndShift in
+// wwifikeypad_test.cpp, which walks every layout/shift combination rather
+// than trusting this comment):
 //   - Layout 0, "abc" (26 keys, all 26 slots used): lowercase letters,
 //     QWERTY row order (qwertyuiop / asdfghjkl / zxcvbnm). Shift
 //     (objectName WifiKeyShift) uppercases them. Shift is ONE-SHOT, not
@@ -68,7 +68,13 @@ class SkinContext;
 //     Chosen over sticky because the field below is masked (bullets only --
 //     the plaintext never leaves WifiSettings, so there is no way to notice
 //     a passphrase silently typed in all caps until the join fails).
-//     Switching away from "abc" always clears a pending shift.
+//     Switching away from "abc" always clears a pending shift, and so does
+//     hiding the widget (see hideEvent()). Space is a typed character and
+//     consumes a pending shift like any letter (commitTypedChar() is the
+//     one place both go through). Backspace does NOT consume it: it erases
+//     a character rather than typing one, and a DJ correcting a mistake
+//     mid-word has no reason to lose the capital they just armed for the
+//     next key.
 //   - Layout 1, "123" (24 of 26 slots used, 2 blank/disabled): digits
 //     1234567890, then !#$%&()*+ , then -=@^_.
 //   - Layout 2, "symbols" (18 of 26 slots used, 8 blank/disabled): the
@@ -83,17 +89,24 @@ class SkinContext;
 // WifiKeyBackspace) are their own fixed keys, outside the 26-slot grid,
 // unaffected by layout or shift.
 //
-// Size budget (measured on deploy with shoot.sh, not computed): this widget
-// is built for the FLX6 settings page's body, about 1280x560-600 (BiteDJ's
-// 480px floor cannot fit it -- see phase-4-brief.md -- so this widget is
-// FLX6-only). One QGridLayout, 10 columns x 7 rows: title (row 0, ~28px),
-// masked field (row 1, ~40px), four key rows (rows 2-5, ~52px each = ~208px),
-// Cancel/Join (row 6, ~48px), 8px outer margins and 6px spacing throughout.
-// Expected total height is roughly 28+40+208+48 plus ~40px of margins/
-// spacing, call it 360-410px -- comfortably inside the budget with headroom
-// to spare, not up against it. Every key is given an explicit
-// setMinimumSize(44, 44) rather than relying on the grid's arithmetic to
-// clear the 44px floor.
+// Size budget: COMPUTED below, not measured -- CLAUDE.md's rule ("measure,
+// do not compute") means these numbers are a plausibility check the
+// controller must still confirm on-device with shoot.sh/measure-panel.py,
+// not a substitute for that measurement. Built for the FLX6 settings page's
+// body, about 1280x560-600 (BiteDJ's 480px floor cannot fit it -- see
+// phase-4-brief.md -- so this widget is FLX6-only). One QGridLayout, 10
+// columns x 7 rows: title (row 0), masked field (row 1), four key rows
+// (rows 2-5), Cancel/Join (row 6), 8px outer margins and 6px spacing
+// throughout. Title/field/Cancel/Join sit at their content height; rows 2-5
+// share row stretch 1 each, and every key in every row -- not just those
+// four -- has an Expanding vertical QSizePolicy (QPushButton's default is
+// Fixed, which would otherwise leave the key stuck at its ~44px sizeHint
+// with a dead band below it for the rest of a taller row -- Fix round 1).
+// So the four key rows actually fill whatever height the page gives this
+// widget, growing past 44px on the real ~580px-tall page, rather than the
+// 360-410px figure a naive sum of sizeHints would suggest. Every key still
+// carries an explicit setMinimumSize(44, 44) as the floor under that
+// growth, for whatever height the widget ends up with.
 //
 // Keys call WifiSettings::appendPasswordChar/backspacePassword/submitJoin/
 // cancelJoin directly -- no per-key ControlObjects (47 of them would be 47
@@ -117,10 +130,17 @@ class SkinContext;
 //
 // objectNames a skin can style: WifiKeypadTitle, WifiKeypadField, WifiKey
 // (all 26 letter/digit/symbol keys), WifiKeyShift, WifiKeyLayout,
-// WifiKeyBackspace, WifiKeySpace, WifiKeypadCancel, WifiKeypadJoin. Shift's
-// engaged state is the dynamic property "shiftActive" (bool) on the
-// WifiKeyShift button, restyled with unpolish/polish on change, the same
-// idiom WWifiList uses for its rows' "active"/"saved" properties.
+// WifiKeyBackspace, WifiKeySpace, WifiKeypadCancel, WifiKeypadJoin. Two
+// dynamic bool properties, both restyled with unpolish/polish on change (the
+// same idiom WWifiList uses for its rows' "active"/"saved" properties):
+//   - "shiftActive" on WifiKeyShift: Shift's engaged state.
+//   - "down" on WHICHEVER button (any of the above, not just WifiKey) is
+//     currently under an in-progress press: set true in mousePressEvent,
+//     cleared in mouseReleaseEvent, on a drag that leaves the pressed key
+//     (mouseMoveEvent), on a QEvent::TouchCancel, and on hideEvent. This is
+//     the touch equivalent of Qt's own `:pressed` pseudo-state, which never
+//     fires here because a child key never receives the press that would
+//     trigger it (Fix round 1 / Ruling 21).
 class WWifiKeypad : public WWidget {
     Q_OBJECT
   public:
@@ -134,6 +154,11 @@ class WWifiKeypad : public WWidget {
     // whether or not the WifiSettings singleton exists -- see the header
     // comment for why a test needs this. Alongside it, when the singleton
     // does exist, this class calls WifiSettings::appendPasswordChar(c).
+    // WARNING: this carries one plaintext password character. It exists
+    // ONLY so a test built without the WifiSettings singleton can observe
+    // what a tap committed. Production code (skin connections, other
+    // widgets, logging) must never connect to it -- WifiSettings is the
+    // only place this plaintext is allowed to go.
     void characterTyped(QChar c);
     // Mirrors a Backspace commit the same way, alongside
     // WifiSettings::backspacePassword().
@@ -149,6 +174,17 @@ class WWifiKeypad : public WWidget {
     void mousePressEvent(QMouseEvent* e) override;
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
+    // Only overridden to catch QEvent::TouchCancel: WWidget::event() (see
+    // wwidget.cpp) translates TouchBegin/Update/End into synthesized mouse
+    // events but has no case for TouchCancel, so without this a cancelled
+    // gesture would leave m_pressedKeyIndex and a key's "down" property
+    // stuck. Everything else is forwarded to WWidget::event() unchanged.
+    bool event(QEvent* e) override;
+    // Returns to a clean state whenever the page hides (Cancel back to the
+    // list, a wrong-password bounce, or just navigating away): abc layout,
+    // Shift off, no stuck press/"down". A DJ returning to page 1 should
+    // never find Shift armed or a symbol layout left over from before.
+    void hideEvent(QHideEvent* e) override;
 
   private slots:
     void onJoinTargetChanged(const QString& ssid);
@@ -174,11 +210,24 @@ class WWifiKeypad : public WWidget {
     void toggleShift();
     void cycleLayout();
     // Emits characterTyped(c) and calls WifiSettings::appendPasswordChar(c)
-    // if the singleton exists. Used by both the 26-key grid and Space.
+    // if the singleton exists. The low-level primitive; does not touch
+    // Shift. Used directly by nothing outside commitTypedChar() today, kept
+    // separate from it so a future caller that must not perturb Shift (there
+    // isn't one yet) has somewhere to attach.
     void commitChar(QChar c);
+    // commitChar(c), then consumes a pending one-shot Shift if this was a
+    // letter typed in the "abc" layout. Used by both the 26-key grid and
+    // Space -- Space is a typed character and arms/disarms Shift like any
+    // other. Backspace does NOT go through this: see the header comment.
+    void commitTypedChar(QChar c);
     void commitBackspace();
     void commitCancel();
     void commitJoin();
+    // Sets/clears the "down" dynamic property (see the header comment) on
+    // m_allButtons[index], restyling only if the value actually changed.
+    // No-op for an out-of-range index, so callers can pass along
+    // m_pressedKeyIndex (which is -1 when nothing is pressed) unguarded.
+    void setKeyDown(int index, bool down);
 
     QLabel* m_pTitleLabel;
     QLabel* m_pFieldLabel;

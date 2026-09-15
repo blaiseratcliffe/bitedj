@@ -1,8 +1,10 @@
 #include "widget/wwifikeypad.h"
 
+#include <QEvent>
 #include <QGridLayout>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QSizePolicy>
 #include <QStyle>
 
 #include "moc_wwifikeypad.cpp"
@@ -20,6 +22,10 @@ const char* kSpaceObjectName = "WifiKeySpace";
 const char* kCancelObjectName = "WifiKeypadCancel";
 const char* kJoinObjectName = "WifiKeypadJoin";
 const char* kShiftActiveProperty = "shiftActive";
+// Fix round 1 / Ruling 21: the touch equivalent of Qt's own `:pressed`
+// pseudo-state, which never fires here (a child key never receives the
+// press). Set true on press, cleared on release/cancel/drag-off/hide.
+const char* kDownProperty = "down";
 
 constexpr int kGridColumns = 10;
 constexpr int kMinKeyWidth = 44;
@@ -33,8 +39,8 @@ constexpr int kLayoutCount = 3;
 
 // Row-major: Q-row (10 slots), A-row (9 slots), Z-row (7 slots). See
 // wwifikeypad.h for the derivation and the disjointness/coverage argument;
-// WifiKeypadAsciiCoverageTest in wwifikeypad_test.cpp checks it directly
-// rather than trusting either comment.
+// AllPrintableAsciiIsReachableAcrossLayoutsAndShift in wwifikeypad_test.cpp
+// checks it directly rather than trusting either comment.
 constexpr char kLettersLower[kCharSlotCount] = {
         'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p',
         'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l',
@@ -78,11 +84,24 @@ QString layoutSwitchLabel(int layout) {
 }
 
 // Repolishes a widget so a property change picked up by the stylesheet
-// ([shiftActive]) is actually repainted. Same small helper WWifiList and
-// WUsbList each keep locally.
+// ([shiftActive], [down]) is actually repainted. Same small helper
+// WWifiList and WUsbList each keep locally.
 void restyle(QStyle* pStyle, QWidget* pWidget) {
     pStyle->unpolish(pWidget);
     pStyle->polish(pWidget);
+}
+
+// Fix round 1: QPushButton's default vertical size policy is Fixed, which
+// pins it to its ~44px sizeHint even when its QGridLayout row has stretch
+// and extra height to give it -- leaving a dead band below every key on the
+// real, taller page where a tap hits nothing. Expanding vertical policy
+// lets each key actually grow to fill its row. Horizontal is left at
+// QPushButton's default (Minimum, which already grows to fill a wider
+// column -- only the vertical axis was stuck).
+void makeKeyFillItsRow(QPushButton* pButton) {
+    QSizePolicy policy = pButton->sizePolicy();
+    policy.setVerticalPolicy(QSizePolicy::Expanding);
+    pButton->setSizePolicy(policy);
 }
 } // namespace
 
@@ -106,6 +125,9 @@ WWifiKeypad::WWifiKeypad(QWidget* parent)
     setMouseTracking(true);
 
     m_pTitleLabel->setObjectName(kTitleObjectName);
+    // Ruling 22: the title renders an SSID (untrusted, broadcast by anyone
+    // nearby); AutoText would let one containing markup render as rich text.
+    m_pTitleLabel->setTextFormat(Qt::PlainText);
     m_pFieldLabel->setObjectName(kFieldObjectName);
     m_pShiftButton->setObjectName(kShiftObjectName);
     m_pShiftButton->setText(tr("Shift"));
@@ -124,6 +146,7 @@ WWifiKeypad::WWifiKeypad(QWidget* parent)
     for (QPushButton* pButton : specialButtons) {
         pButton->setFocusPolicy(Qt::NoFocus);
         pButton->setMinimumSize(kMinKeyWidth, kMinKeyHeight);
+        makeKeyFillItsRow(pButton);
         connect(pButton, &QPushButton::clicked, this, &WWifiKeypad::onKeyClicked);
     }
 
@@ -134,6 +157,7 @@ WWifiKeypad::WWifiKeypad(QWidget* parent)
         pButton->setObjectName(kKeyObjectName);
         pButton->setFocusPolicy(Qt::NoFocus);
         pButton->setMinimumSize(kMinKeyWidth, kMinKeyHeight);
+        makeKeyFillItsRow(pButton);
         connect(pButton, &QPushButton::clicked, this, &WWifiKeypad::onKeyClicked);
         m_charButtons.append(pButton);
         m_currentChars.append(QChar());
@@ -223,26 +247,40 @@ void WWifiKeypad::onPasswordChanged(int length) {
 }
 
 void WWifiKeypad::mousePressEvent(QMouseEvent* e) {
+    // Fix round 1: always reset first, including the non-left early return
+    // below -- a stray press with some other button held must not leave a
+    // stale index from an earlier gesture for the next release to match.
+    m_pressedKeyIndex = -1;
     if (e->button() != Qt::LeftButton) {
         WWidget::mousePressEvent(e);
         return;
     }
     m_pressedKeyIndex = keyIndexAt(e->globalPosition().toPoint());
+    setKeyDown(m_pressedKeyIndex, true);
     e->accept();
 }
 
 void WWifiKeypad::mouseMoveEvent(QMouseEvent* e) {
     // Nothing scrolls here and the commit decision is made on release by
-    // comparing hit-tests, not by tracking the drag -- so there is nothing
-    // to do but keep the synthesized event from leaking anywhere else.
+    // comparing hit-tests, not by tracking the drag. But the "down" press
+    // feedback has to follow the finger off the key immediately, not wait
+    // for release (Fix round 1 / Ruling 21).
+    if (m_pressedKeyIndex >= 0 &&
+            keyIndexAt(e->globalPosition().toPoint()) != m_pressedKeyIndex) {
+        setKeyDown(m_pressedKeyIndex, false);
+    }
     e->accept();
 }
 
 void WWifiKeypad::mouseReleaseEvent(QMouseEvent* e) {
     const int pressedIndex = m_pressedKeyIndex;
     m_pressedKeyIndex = -1;
+    // Always clear "down" on release, whether or not this release commits
+    // anything -- idempotent if mouseMoveEvent already cleared it on a
+    // drag-off.
+    setKeyDown(pressedIndex, false);
 
-    if (pressedIndex >= 0) {
+    if (pressedIndex >= 0 && e->button() == Qt::LeftButton) {
         const int releasedIndex = keyIndexAt(e->globalPosition().toPoint());
         if (releasedIndex == pressedIndex) {
             dispatchButton(m_allButtons.at(pressedIndex));
@@ -250,11 +288,28 @@ void WWifiKeypad::mouseReleaseEvent(QMouseEvent* e) {
             return;
         }
     }
-    // No press was pending, or the release landed off the pressed key (or on
-    // a different one): nothing to commit. Falls through to the base
-    // handler rather than swallowing the event, the same as
-    // WWifiList/WUsbList do on a miss.
+    // No press was pending, the release used some other button, or it
+    // landed off the pressed key (or on a different one): nothing to
+    // commit. Falls through to the base handler rather than swallowing the
+    // event, the same as WWifiList/WUsbList do on a miss.
     WWidget::mouseReleaseEvent(e);
+}
+
+bool WWifiKeypad::event(QEvent* e) {
+    if (e->type() == QEvent::TouchCancel) {
+        setKeyDown(m_pressedKeyIndex, false);
+        m_pressedKeyIndex = -1;
+    }
+    return WWidget::event(e);
+}
+
+void WWifiKeypad::hideEvent(QHideEvent* e) {
+    WWidget::hideEvent(e);
+    setKeyDown(m_pressedKeyIndex, false);
+    m_pressedKeyIndex = -1;
+    m_currentLayout = kLayoutLetters;
+    m_shiftActive = false;
+    refreshLayout();
 }
 
 int WWifiKeypad::keyIndexAt(const QPoint& globalPos) const {
@@ -268,6 +323,18 @@ int WWifiKeypad::keyIndexAt(const QPoint& globalPos) const {
         }
     }
     return -1;
+}
+
+void WWifiKeypad::setKeyDown(int index, bool down) {
+    if (index < 0 || index >= m_allButtons.size()) {
+        return;
+    }
+    QPushButton* pButton = m_allButtons.at(index);
+    if (pButton->property(kDownProperty).toBool() == down) {
+        return;
+    }
+    pButton->setProperty(kDownProperty, down);
+    restyle(style(), pButton);
 }
 
 void WWifiKeypad::onKeyClicked() {
@@ -291,7 +358,7 @@ void WWifiKeypad::dispatchButton(QPushButton* pButton) {
         return;
     }
     if (pButton == m_pSpaceButton) {
-        commitChar(QChar(' '));
+        commitTypedChar(QChar(' '));
         return;
     }
     if (pButton == m_pCancelButton) {
@@ -307,16 +374,7 @@ void WWifiKeypad::dispatchButton(QPushButton* pButton) {
     if (index < 0 || !pButton->isEnabled()) {
         return;
     }
-    const QChar c = m_currentChars.at(index);
-    commitChar(c);
-    // One-shot Shift: consumed by the letter it capitalized. A digit or
-    // symbol key can't reach here with Shift active -- refreshLayout()
-    // disables Shift outside layout 0, and cycling layout always clears it
-    // first -- so this check only ever fires for a letter.
-    if (m_currentLayout == kLayoutLetters && m_shiftActive) {
-        m_shiftActive = false;
-        refreshLayout();
-    }
+    commitTypedChar(m_currentChars.at(index));
 }
 
 void WWifiKeypad::refreshLayout() {
@@ -365,6 +423,18 @@ void WWifiKeypad::commitChar(QChar c) {
     emit characterTyped(c);
     if (WifiSettings* pSettings = WifiSettings::tryInstance()) {
         pSettings->appendPasswordChar(c);
+    }
+}
+
+void WWifiKeypad::commitTypedChar(QChar c) {
+    commitChar(c);
+    // One-shot Shift: consumed by the letter (or Space) it capitalized/
+    // followed. A digit or symbol key can't reach here with Shift active --
+    // refreshLayout() disables Shift outside layout 0, and cycling layout
+    // always clears it first -- so this only ever actually fires in "abc".
+    if (m_currentLayout == kLayoutLetters && m_shiftActive) {
+        m_shiftActive = false;
+        refreshLayout();
     }
 }
 
