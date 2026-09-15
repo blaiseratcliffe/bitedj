@@ -1631,13 +1631,20 @@ WBeatSpinBox::up-button {
 /* Wi-Fi network list (WWifiList, src/widget/wwifilist.h). The status line
  * sits above the scroll area and never scrolls out of view; the row itself
  * (not a label inside it, unlike UsbRowLabel above) carries the appearance,
- * because WWifiList's header documents a real per-row QWidget container. */
+ * because WWifiList's header documents a real per-row QWidget container.
+ *
+ * Fix round 1: no text-transform here. This label renders WifiSettings'
+ * statusChanged text verbatim ("Connected to <ssid> ...") and an SSID is
+ * case-sensitive; uppercasing it would show the wrong string to the one
+ * person reading this line to recover the box. Every other panel header on
+ * this screen IS meant to be uppercase (it is static chrome text, not data),
+ * so that convention stays everywhere except here and WifiStatusTitle/
+ * WifiStatusDetail below. */
 #WifiList #WifiStatusLine {
   color: #a7a9ac;
   font-size: 13px;
   font-weight: bold;
   margin-bottom: 8px;
-  text-transform: uppercase;
 }
 
 #WifiList #WifiRow {
@@ -1646,7 +1653,6 @@ WBeatSpinBox::up-button {
   border-radius: 4px;
   margin-bottom: 8px;
   min-height: 56px;
-  padding: 0 16px;
 }
 
 /* The network currently in use. */
@@ -1663,13 +1669,24 @@ WBeatSpinBox::up-button {
 
 /* SSID text. A QPushButton (WWifiList's desktop/mouse click path), styled
  * flat so it reads as row text, not as a nested button — the whole row is
- * the tap target, per wwifilist.h. */
+ * the tap target, per wwifilist.h.
+ *
+ * Fix round 1: padding-left here, not on #WifiRow above, is what actually
+ * insets the row's content. wwifilist.cpp:333 calls
+ * pRowLayout->setContentsMargins(0, 0, 0, 0) on the row's own QHBoxLayout in
+ * C++, which wins over any QSS padding/box-model set on the #WifiRow
+ * container itself — that is why the row was flush left before. QPushButton
+ * and QLabel (WifiSsid/WifiSignal/WifiLock) are, unlike the bespoke row
+ * container, widgets whose own padding Qt's style engine honours directly,
+ * independent of the parent layout's hardcoded margins, so the inset moved
+ * onto these three leaf widgets instead. */
 #WifiList #WifiSsid {
   background-color: transparent;
   border: 0;
   color: #e5e6ea;
   font-size: 16px;
   font-weight: bold;
+  padding-left: 16px;
   text-align: left;
 }
 
@@ -1678,20 +1695,27 @@ WBeatSpinBox::up-button {
  * Inter (line 14 above) is not installed on the Pi (see the fallback this
  * file documents near the deck strip's clock, "DejaVu Sans" in the comment
  * above #DeckStripTime), so this label names DejaVu Sans first instead of
- * trusting the generic sans-serif fallback to land there. */
+ * trusting the generic sans-serif fallback to land there.
+ *
+ * padding is symmetric 16px, not the row's inner 8px gap, because this is
+ * the last visible child (and so the one touching the right edge) on an
+ * open network, where WifiLock is hidden rather than merely empty. */
 #WifiList #WifiSignal {
   color: #a7a9ac;
   font-family: 'DejaVu Sans', sans-serif, 'Monospace';
   font-size: 14px;
-  padding: 0 8px;
+  padding: 0 16px;
 }
 
 /* "Secured" text shown only for secured rows (wwifilist.h); muted, since it
- * is information, not a control. */
+ * is information, not a control. padding-right is the same fix-round-1
+ * inset as WifiSsid's padding-left, for when this row's rightmost visible
+ * child is the lock label rather than the signal glyph. */
 #WifiList #WifiLock {
   color: #7a7a84;
   font-size: 12px;
   font-weight: bold;
+  padding-right: 16px;
   text-transform: uppercase;
 }
 
