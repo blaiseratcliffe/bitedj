@@ -262,9 +262,11 @@ class WifiSettings : public QObject {
     // active flag is what the scan saw, and only counts while the box is
     // still on the connection it was scanned on.
     bool isActiveNow(const WifiRow& row) const;
-    // Rescans when a client is visible and the rows were scanned on another
-    // connection than the current one. For the ends of ops that held the slot
-    // while applyStatus() asked for a rescan, which was refused then.
+    // Rescans when a client is visible and the rows are stale: marked so
+    // (m_rowsStale), or scanned on another connection than the current one.
+    // Called at the ends of ops that held the slot while a rescan could have
+    // been refused, and on every 10 s status tick, so a lost scan comes back
+    // by the next refresh at the latest.
     void rescanIfRowsStale();
     // Re-reads status before a page 3 action and checks that page 3 still
     // shows the network the box is on. Otherwise returns to the list and
@@ -299,6 +301,10 @@ class WifiSettings : public QObject {
     void stopActivation(const QString& ssid);
 
     bool startDisconnect();
+    // Deletes the connected profile by its name (m_connectedProfile, just
+    // validated by manageTargetStillConnected()), not by the row's SSID,
+    // which differs from the profile name for a profile not made by
+    // `device wifi connect`.
     bool startForget();
     bool startRadioOn();
 
@@ -340,6 +346,12 @@ class WifiSettings : public QObject {
     // rows' active flags describe that connection and no other, so they are
     // only trusted while it still equals m_connectedProfile.
     QString m_rowsConnection;
+    // Whether m_rows is known not to be a current scan result, whatever the
+    // connection: set when a scan is pre-empted, when a scan request is
+    // refused because the slot is busy, and when the rows are cleared on
+    // leaving states 0 and 1. Cleared by publishRows() when a scan lands.
+    // Starts true: nothing has been scanned yet.
+    bool m_rowsStale = true;
     QString m_joinTarget;
     QString m_password;
 
@@ -348,10 +360,15 @@ class WifiSettings : public QObject {
     // there. Absent when that read failed, in which case nothing is ever
     // deleted: leaving residue is recoverable, deleting a DJ's profile is not.
     std::optional<QStringList> m_joinSnapshot;
-    // The profile the box was on when the current join began. A cancelled
-    // join never takes this one down: `connection down` also blocks its
-    // autoconnect, and on this box Wi-Fi is the only link ssh has.
-    QString m_joinStartProfile;
+    // The profile the box was on when the current join began (empty when it
+    // was on none). A cancelled join never takes this one down: `connection
+    // down` also blocks its autoconnect, and on this box Wi-Fi is the only
+    // link ssh has. Absent when the snapshot read failed, which makes the
+    // start profile unknown, so a cancel then takes nothing down at all: a
+    // cancelled join that goes on to complete is the recoverable side. Never
+    // guessed from m_connectedProfile, which can be one status read (or, with
+    // no widget visible, any length of time) old.
+    std::optional<QString> m_joinStartProfile;
 
     // The async op slot. m_opInFlight is the guard; m_pOpProcess the process
     // (a child of this object) and m_opCallback its one-shot continuation.
