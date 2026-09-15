@@ -1056,6 +1056,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/widget/wstarrating.cpp
   src/widget/wsamplerdrive.cpp
   src/widget/wusblist.cpp
+  src/widget/wwifilist.cpp
+  src/widget/wwifistatus.cpp
   src/widget/wversionlabel.cpp
   src/widget/wstatuslight.cpp
   src/widget/wtime.cpp
@@ -1679,6 +1681,7 @@ if(BUILD_TESTING)
     src/test/wpushbutton_test.cpp
     src/test/wusblist_test.cpp
     src/test/wwidgetstack_test.cpp
+    src/test/wwifilist_test.cpp
     src/util/moc_included_test.cpp
   )
   if(BUILD_BENCH)
