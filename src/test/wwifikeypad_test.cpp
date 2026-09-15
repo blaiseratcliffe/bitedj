@@ -22,7 +22,6 @@
 #include <QPushButton>
 #include <QSet>
 #include <QSignalSpy>
-#include <QTest>
 #include <memory>
 #include <utility>
 
@@ -365,44 +364,13 @@ TEST_F(WWifiKeypadTest, AllPrintableAsciiIsReachableAcrossLayoutsAndShift) {
     EXPECT_EQ(expected, collected);
 }
 
-// Fix round 1: every test above drives WWifiKeypad through sendTouchAsMouse,
-// which only MIMICS what WWidget::event() does -- it hand-crafts a
-// QMouseEvent and sends it straight to the keypad. It does not exercise the
-// actual mechanism the whole design depends on: a real touch physically
-// lands on a CHILD button, which does not have Qt::WA_AcceptTouchEvents, so
-// Qt's own touch dispatch walks up the parent chain to the keypad (which
-// does have it, via WWidget's constructor) and delivers the touch there,
-// where WWidget::event() then synthesizes the mouse event. These two tests
-// use QTest's touch simulation, aimed at the child key widget itself, so
-// that real propagation-and-synthesis path runs end to end.
-TEST_F(WWifiKeypadTest, RealTouchTapOnAChildButtonTypesExactlyOneCharacter) {
-    QSignalSpy spy(m_pKeypad.get(), &WWifiKeypad::characterTyped);
-    QPushButton* pKey = keyButtons().at(0); // 'q' in the default layout.
-    QPointingDevice* pDevice = QTest::createTouchDevice();
-
-    QTest::touchEvent(pKey, pDevice)
-            .press(0, pKey->rect().center(), pKey)
-            .release(0, pKey->rect().center(), pKey);
-
-    ASSERT_EQ(1, spy.count());
-    EXPECT_EQ(QChar('q'), spy.at(0).at(0).toChar());
-}
-
-TEST_F(WWifiKeypadTest, RealTouchDragOffAChildButtonTypesNothing) {
-    QSignalSpy spy(m_pKeypad.get(), &WWifiKeypad::characterTyped);
-    QPushButton* pKey = keyButtons().at(0);
-    const QPoint localCenter = pKey->rect().center();
-    QPointingDevice* pDevice = QTest::createTouchDevice();
-
-    // 300px, in pKey's own local coordinate system, comfortably clears one
-    // key's width (~120px at this fixture size) and lands off pKey --
-    // mapToGlobal doesn't require the point to stay inside pKey's rect.
-    QTest::touchEvent(pKey, pDevice)
-            .press(0, localCenter, pKey)
-            .move(0, localCenter + QPoint(300, 0), pKey)
-            .release(0, localCenter + QPoint(300, 0), pKey);
-
-    EXPECT_EQ(0, spy.count());
-}
+// Ruling 23: these tests drive the keypad with the mouse events
+// WWidget::event() synthesizes, not real touches, because QTest::touchEvent
+// delivers nothing to widgets under the offscreen QPA mixxx-test runs on
+// (checked on the Pi 2026-09-15 with a positive control: a direct
+// QMouseEvent reached the keypad and typed a character; neither the
+// QWidget- nor the QWindow-overload QTest::touchEvent sequence delivered
+// anything, touch or synthesized mouse, to the keypad or any key). The
+// touch route itself is verified with a real finger on the panel.
 
 } // namespace
