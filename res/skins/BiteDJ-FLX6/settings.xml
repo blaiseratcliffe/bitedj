@@ -1920,52 +1920,20 @@
                     </Children>
                   </WidgetGroup>
 
-                  <!-- Page 1: password entry placeholder (Ruling 4). Cancel
-                       keeps this from ever being a dead end before Phase 4
-                       lands the real keypad. -->
-                  <WidgetGroup>
-                    <Layout>vertical</Layout>
+                  <!-- Page 1: password entry. WifiKeypad is WWifiKeypad
+                       (src/widget/wwifikeypad.h), the in-skin keyboard for
+                       [Wifi],page == kPagePassword (Ruling 4's placeholder,
+                       now filled). It owns its own title, masked field, key
+                       grid and Cancel/Join row (one QGridLayout, 10x7), so
+                       this page needs nothing else: no header Label, no
+                       separate button row. Its own header comment gives the
+                       size budget: about 1280x360-410 for the FLX6 body,
+                       comfortably inside the ~1280x560-600 this page has to
+                       give it. -->
+                  <WifiKeypad>
+                    <ObjectName>WifiKeypad</ObjectName>
                     <SizePolicy>me,me</SizePolicy>
-                    <Children>
-
-                      <Label>
-                        <ObjectName>SettingsHeader</ObjectName>
-                        <Text>Enter Password</Text>
-                        <Size>0me,32f</Size>
-                      </Label>
-
-                      <Label>
-                        <ObjectName>WifiPlaceholderLabel</ObjectName>
-                        <Text>Password entry is not available yet.</Text>
-                        <SizePolicy>me,me</SizePolicy>
-                      </Label>
-
-                      <WidgetGroup>
-                        <ObjectName>SettingsRow</ObjectName>
-                        <Layout>horizontal</Layout>
-                        <Size>0me,68f</Size>
-                        <Children>
-                          <WidgetGroup>
-                            <Size>0me,0me</Size>
-                          </WidgetGroup>
-                          <PushButton>
-                            <ObjectName>SettingsActionButton</ObjectName>
-                            <Size>120f,44f</Size>
-                            <NumberStates>1</NumberStates>
-                            <State>
-                              <Number>0</Number>
-                              <Text>Cancel</Text>
-                            </State>
-                            <Connection>
-                              <ConfigKey>[Wifi],cancel</ConfigKey>
-                              <EmitOnDownPress>true</EmitOnDownPress>
-                            </Connection>
-                          </PushButton>
-                        </Children>
-                      </WidgetGroup>
-
-                    </Children>
-                  </WidgetGroup>
+                  </WifiKeypad>
 
                   <!-- Page 2: joining. Deliberately not routed through
                        Notifications::setBusy() (phase-3-brief.md); that

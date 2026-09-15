@@ -1736,26 +1736,157 @@ WBeatSpinBox::up-button {
 /* WWifiStatus (src/widget/wwifistatus.h), shown on the joining and manage
  * pages. Title carries the ssid or "Joining <ssid>...", detail is the
  * status line underneath it — same size relationship as SettingsRowLabel
- * over SettingsRowHint elsewhere on this panel. */
+ * over SettingsRowHint elsewhere on this panel.
+ *
+ * Fix round 3: both padding-left 16px, matching WifiSsid's own inset above,
+ * since these two labels were measured flush against x=0 the same way the
+ * list rows originally were. margin-top on the title only (WifiStatusDetail
+ * follows it immediately below, no bar to clear there) so the title doesn't
+ * sit hard against the sub-tab bar now that WWifiStatus (d8ada56) stacks
+ * both labels at the top of the page with a stretch below, rather than
+ * however it was centered/positioned before. */
 #WifiStatusTitle {
   color: #e5e6ea;
   font-size: 18px;
   font-weight: bold;
+  margin-top: 12px;
+  padding-left: 16px;
 }
 
 #WifiStatusDetail {
   color: #a7a9ac;
   font-size: 14px;
   margin-top: 4px;
+  padding-left: 16px;
 }
 
-/* Page 1's placeholder (Ruling 4): centred, muted, same tone as
- * SamplerDrivePlaceholder — text to read, not a control to tap. */
-#WifiPlaceholderLabel {
+/* WWifiKeypad (src/widget/wwifikeypad.h), page 1 (kPagePassword). Its own
+ * header comment gives the full objectName list: WifiKeypadTitle,
+ * WifiKeypadField, WifiKey (all 26 letter/digit/symbol keys), WifiKeyShift,
+ * WifiKeyLayout, WifiKeyBackspace, WifiKeySpace, WifiKeypadCancel,
+ * WifiKeypadJoin, plus the "shiftActive" (bool) dynamic property on
+ * WifiKeyShift. Every key already gets setMinimumSize(44, 44) in C++
+ * (wwifikeypad.h's size-budget comment); nothing here adds padding or a
+ * font-size large enough to fight that floor back down.
+ *
+ * #WifiKey is deliberately NOT text-transform: uppercase, unlike every
+ * other button on this panel. Shift changes a letter key's own displayed
+ * text between "q" and "Q" (wwifikeypad.h: Shift is one-shot, and the
+ * masked field never shows the plaintext, so the keycap's own case is the
+ * only feedback that Shift is armed); forcing uppercase here would repeat
+ * WifiStatusLine's fix-round-1 mistake, this time hiding Shift's state
+ * instead of an SSID's case. The control keys (Shift/Layout/Backspace/
+ * Space/Cancel/Join) show fixed English labels, not case-sensitive data, so
+ * they keep the panel's normal uppercase convention. */
+#WifiKeypad #WifiKeypadTitle {
+  color: #e5e6ea;
+  font-size: 15px;
+  font-weight: bold;
+  padding: 0 8px;
+}
+
+/* Readable at a glance: larger than the title, spaced out bullets, and a
+ * dark field background (matching #SettingsRow's own #151515) so the
+ * bullets read as "characters typed" rather than floating text. DejaVu Sans
+ * first because the field renders U+2022 bullets (wwifikeypad.cpp) and
+ * Inter is not installed on the Pi (style.qss:14, and the fallback this
+ * file documents near #DeckStripTime). */
+#WifiKeypad #WifiKeypadField {
+  background-color: #151515;
+  border: 2px solid #32323c;
+  border-radius: 4px;
+  color: #e7e8e9;
+  font-family: 'DejaVu Sans', sans-serif, 'Monospace';
+  font-size: 22px;
+  letter-spacing: 4px;
+  margin: 0 8px;
+  padding: 0 12px;
+}
+
+/* The 26-slot letter/digit/symbol grid. Outlined at rest like the Settings
+ * page's own segment/action buttons, filled on press. A disabled slot (a
+ * layout's unused blank, wwifikeypad.h) goes flat, same treatment
+ * #SettingsSegmentLeft:disabled and #UsbRecordButton:disabled already use. */
+#WifiKeypad #WifiKey {
+  background-color: transparent;
+  border: 2px solid #855ea7;
+  border-radius: 4px;
+  color: #e7e8e9;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+#WifiKeypad #WifiKey:pressed {
+  background-color: #2d6488;
+}
+
+#WifiKeypad #WifiKey:disabled {
+  border-color: #2b3f4d;
   color: #5c707d;
+}
+
+/* Shift, Layout switch (123/#+=/ABC), Backspace and Space: same outline as
+ * the character keys, but their own fixed labels keep the panel's normal
+ * uppercase convention. */
+#WifiKeypad #WifiKeyShift,
+#WifiKeypad #WifiKeyLayout,
+#WifiKeypad #WifiKeyBackspace,
+#WifiKeypad #WifiKeySpace {
+  background-color: transparent;
+  border: 2px solid #855ea7;
+  border-radius: 4px;
+  color: #e7e8e9;
   font-size: 14px;
   font-weight: bold;
-  qproperty-alignment: 'AlignCenter';
+  text-transform: uppercase;
+}
+
+#WifiKeypad #WifiKeyShift:pressed,
+#WifiKeypad #WifiKeyLayout:pressed,
+#WifiKeypad #WifiKeyBackspace:pressed,
+#WifiKeypad #WifiKeySpace:pressed {
+  background-color: #2d6488;
+}
+
+/* Shift engaged: filled purple, the same "selected" fill
+ * #SettingsSegmentLeft[displayValue="1"] uses, so an armed one-shot Shift
+ * reads the same way an armed selection does anywhere else on this panel. */
+#WifiKeypad #WifiKeyShift[shiftActive="true"] {
+  background-color: #855ea7;
+  color: #e7e8e9;
+}
+
+/* Cancel is neutral, matching #SettingsActionButton; Join is the primary,
+ * filled action, matching #SettingsPrimaryButton -- the same
+ * outline-vs-filled convention the Power row uses to mark the one
+ * affirmative action on a row. */
+#WifiKeypad #WifiKeypadCancel {
+  background-color: transparent;
+  border: 2px solid #855ea7;
+  border-radius: 4px;
+  color: #e7e8e9;
+  font-size: 14px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+#WifiKeypad #WifiKeypadCancel:pressed {
+  background-color: #2d6488;
+}
+
+#WifiKeypad #WifiKeypadJoin {
+  background-color: #855ea7;
+  border: 2px solid #855ea7;
+  border-radius: 4px;
+  color: #e7e8e9;
+  font-size: 14px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+#WifiKeypad #WifiKeypadJoin:pressed {
+  background-color: #2d6488;
+  border-color: #2d6488;
 }
 
 #SettingsDangerButton {
