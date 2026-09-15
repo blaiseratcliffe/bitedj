@@ -262,15 +262,21 @@ TEST_F(WWifiListTest, TapActivatesTheRowScrolledUnderTheFinger) {
 }
 
 TEST_F(WWifiListTest, TapOnRowScrolledOutOfSightActivatesNothing) {
-    const QPoint firstRowCenter = ssidButtonCenter(0);
     scrollBar()->setValue(scrollBar()->maximum());
     layOut();
     QSignalSpy spy(m_pList.get(), &WWifiList::rowActivated);
 
-    // The first row has been scrolled above the viewport, so a tap at the
-    // coordinates its button was pushed to must not reach it.
-    ASSERT_LT(ssidButtonCenter(0).y(), m_pList->mapToGlobal(QPoint(0, 0)).y());
-    tap(firstRowCenter);
+    // Row 0's *current* (post-scroll) position is off the top of the
+    // viewport -- asserted below -- and a tap there must not reach it or
+    // anything else, since nothing real occupies a point outside the
+    // viewport's clip. Deliberately not the position row 0's button held
+    // *before* scrolling: that point is still inside the still-visible
+    // viewport, just over whichever different row has scrolled up into it
+    // by then, so a tap there is a legitimate hit on that other row, not a
+    // test of the off-viewport case at all.
+    const QPoint offViewportPos = ssidButtonCenter(0);
+    ASSERT_LT(offViewportPos.y(), m_pList->mapToGlobal(QPoint(0, 0)).y());
+    tap(offViewportPos);
 
     EXPECT_EQ(0, spy.count());
 }
