@@ -1820,6 +1820,19 @@ WBeatSpinBox::up-button {
   background-color: #2d6488;
 }
 
+/* Fix round 4: touch never triggers :pressed here (wwifikeypad.h's touch
+ * quirk -- the outer widget's mousePressEvent/mouseReleaseEvent handle a
+ * synthesized touch and the child button never receives it), so the C++
+ * (e4c7827) now sets a dynamic bool property "down" on the key under the
+ * finger, cleared on release/drag-off/cancel/hide. Same visual as :pressed
+ * above; :pressed stays for the desktop mouse path. This selector already
+ * beats the bare #WifiKeypad #WifiKey rule above on specificity (same two
+ * ID selectors plus one more attribute selector), regardless of source
+ * order. */
+#WifiKeypad #WifiKey[down="true"] {
+  background-color: #2d6488;
+}
+
 #WifiKeypad #WifiKey:disabled {
   border-color: #2b3f4d;
   color: #5c707d;
@@ -1848,10 +1861,31 @@ WBeatSpinBox::up-button {
   background-color: #2d6488;
 }
 
+/* Fix round 4: same "down" dynamic property as #WifiKey above, for the
+ * same touch-never-triggers-:pressed reason. */
+#WifiKeypad #WifiKeyShift[down="true"],
+#WifiKeypad #WifiKeyLayout[down="true"],
+#WifiKeypad #WifiKeyBackspace[down="true"],
+#WifiKeypad #WifiKeySpace[down="true"] {
+  background-color: #2d6488;
+}
+
 /* Shift engaged: filled purple, the same "selected" fill
  * #SettingsSegmentLeft[displayValue="1"] uses, so an armed one-shot Shift
  * reads the same way an armed selection does anywhere else on this panel. */
 #WifiKeypad #WifiKeyShift[shiftActive="true"] {
+  background-color: #855ea7;
+  color: #e7e8e9;
+}
+
+/* Fix round 4: while a finger is actually down on Shift AND Shift is
+ * engaged, shiftActive must still show (the coordinator's own requirement),
+ * not get overwritten by the plain down fill above. Two attribute
+ * selectors on the same element is strictly more specific than either the
+ * one-attribute [down="true"] rule above or the one-attribute
+ * [shiftActive="true"] rule above it, so this wins deterministically
+ * whenever both properties are true, independent of source order. */
+#WifiKeypad #WifiKeyShift[down="true"][shiftActive="true"] {
   background-color: #855ea7;
   color: #e7e8e9;
 }
@@ -1874,6 +1908,11 @@ WBeatSpinBox::up-button {
   background-color: #2d6488;
 }
 
+/* Fix round 4: same "down" dynamic property, same reason. */
+#WifiKeypad #WifiKeypadCancel[down="true"] {
+  background-color: #2d6488;
+}
+
 #WifiKeypad #WifiKeypadJoin {
   background-color: #855ea7;
   border: 2px solid #855ea7;
@@ -1885,6 +1924,12 @@ WBeatSpinBox::up-button {
 }
 
 #WifiKeypad #WifiKeypadJoin:pressed {
+  background-color: #2d6488;
+  border-color: #2d6488;
+}
+
+/* Fix round 4: same "down" dynamic property, same reason. */
+#WifiKeypad #WifiKeypadJoin[down="true"] {
   background-color: #2d6488;
   border-color: #2d6488;
 }
