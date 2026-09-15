@@ -111,11 +111,13 @@ class WifiSettings : public QObject {
     // The tap dispatch, shared by WWifiList taps and the [Wifi],join CO on
     // page 0. Out of range: no-op. Active row: page 3 (checked first, so a
     // network the box is already on can always be managed, whatever its
-    // security). Enterprise: notify ("Enterprise Wi-Fi is not supported") and
-    // stay on page 0. Open or saved: start joining, page 2. New secured
-    // network: page 1 with the password buffer cleared. Sets joinTarget and
-    // emits joinTargetChanged in every case that changes page. Only acts on
-    // page 0 and in states 0 and 1.
+    // security; Ruling 14). "Active" means the box is on it now: state 1 and
+    // rows scanned while on the current connection, never just a stale
+    // IN-USE flag. Enterprise: notify ("Enterprise Wi-Fi is not supported")
+    // and stay on page 0. Open or saved: start joining, page 2, pre-empting a
+    // scan in flight (Ruling 13). New secured network: page 1 with the
+    // password buffer cleared. Sets joinTarget and emits joinTargetChanged in
+    // every case that changes page. Only acts on page 0 and in states 0 and 1.
     void activateRow(int index);
 
     // Password buffer. Plaintext never leaves this class: not in a CO, not in
@@ -128,7 +130,9 @@ class WifiSettings : public QObject {
     // Otherwise starts the join with the password, page 2.
     void submitJoin();
     // Page 1: clear the buffer, page 0. Page 2: kill the in-flight nmcli,
-    // clean up any profile the attempt created, page 0. Page 3: page 0.
+    // clean up any profile the attempt created (or, where there is none to
+    // delete, take the half-activated connection down again so the cancel
+    // sticks), page 0. Page 3: page 0. Works in every state (Ruling 14).
     void cancelJoin();
 
     // Static, process-free parsers of nmcli's terse (-t) output, public so they
@@ -157,6 +161,11 @@ class WifiSettings : public QObject {
     // From `device show` terse IP4.ADDRESS: "192.168.4.39/22" -> "192.168.4.39",
     // empty if none.
     static QString parseIpv4(const QString& output);
+    // Whether a failed join's stderr says the passphrase was rejected, which
+    // sends the DJ back to page 1 rather than to the list. Matches the fixed
+    // NetworkManager phrases only, never a bare "psk", which an SSID in some
+    // unrelated error message could contain.
+    static bool isWrongPasswordError(const QString& nmcliError);
 
   signals:
     void networksChanged(const QList<WifiRow>& rows);
@@ -180,7 +189,7 @@ class WifiSettings : public QObject {
     struct NmcliResult {
         bool started = false;    // exec succeeded
         bool timedOut = false;   // the watchdog killed it
-        bool cancelled = false;  // cancelJoin() killed it
+        bool cancelled = false;  // abortOp() killed it (a cancel or a pre-emption)
         bool normalExit = false; // exited rather than crashed or was killed
         int exitCode = -1;
         QString out;
@@ -204,10 +213,11 @@ class WifiSettings : public QObject {
     // Starts `nmcli <args>` in a QProcess owned by this object, with a
     // watchdog that kills it after watchdogMs. Returns false, without calling
     // back, when another async op is in flight: one at a time, refused rather
-    // than queued. Otherwise returns true and invokes callback exactly once,
-    // possibly before this returns (a process that fails to start can report
-    // it synchronously), so callers must finish every "op started" state
-    // change before calling this. The in-flight slot is already free when the
+    // than queued (a user action frees the slot first through claimOpSlot()).
+    // Otherwise returns true and invokes callback exactly once, possibly
+    // before this returns (a process that fails to start can report it
+    // synchronously), so callers must finish every "op started" state change
+    // before calling this. The in-flight slot is already free when the
     // callback runs, so a callback may start the next op.
     bool runNmcli(const QStringList& args, int watchdogMs, NmcliCallback callback);
     // The single terminating path of an async op: stops the watchdog,
@@ -216,31 +226,63 @@ class WifiSettings : public QObject {
     void completeOp(QProcess* pProcess, const NmcliResult& result);
     // Ends the in-flight op as cancelled. No-op when nothing is in flight.
     void abortOp();
+    // Frees the op slot for a user action (join, disconnect, forget, radio
+    // on). A scan in flight is pre-empted, since its result is disposable and
+    // a tap on a network during the page-open scan must not answer "busy"
+    // (Ruling 13); the scan ends as cancelled, which resets [Wifi],scan and
+    // discards what it found. Any other op in flight refuses the action with
+    // a notification. Returns whether the slot is free.
+    bool claimOpSlot();
 
     // Synchronous status read (device, radio, IPv4). Each read is bounded at
     // 2 s, and the first one that fails short-circuits to state 4, so one
     // refresh blocks the GUI for about 2 s at worst.
     void refreshStatus();
-    void applyStatus(int state, const QString& statusLine);
+    // Records one status read and reacts to what changed. connection (the
+    // profile name) and ipv4 only mean anything in state 1. A change of state
+    // or of the connected network drops pages 1 and 3 where they no longer
+    // apply and, while a client is visible, rescans so the rows' active flag
+    // catches up.
+    void applyStatus(int state,
+            const QString& connection = QString(),
+            const QString& ipv4 = QString());
+    // Rebuilds the status line from the state, connection and rows, and emits
+    // statusChanged when it or the state changed.
+    void updateStatusLine(bool stateChanged);
+    // The connected network's SSID: that of the active row when the rows were
+    // scanned on the current connection, else the profile name (which is the
+    // SSID for every profile `device wifi connect` creates).
+    QString connectedSsid() const;
+    // Whether the box is on this row's network now. A row's active flag is
+    // what the scan saw; it only counts while the box is connected and still
+    // on the connection it was scanned on.
+    bool isActiveNow(const WifiRow& row) const;
     bool isUsableState() const {
         return m_state == kStateDisconnected || m_state == kStateConnected;
     }
 
     // Both steps of a scan: saved profile names, then the network list.
-    // Returns whether the scan started. State 0 and 1 only.
+    // Returns whether the scan started. State 0 and 1 only, and refused
+    // (silently) while any op or a starting join holds the slot.
     bool startScan(bool explicitRescan);
-    void onScanFinished(const NmcliResult& result);
-    void publishRows(QList<WifiRow> rows);
+    // connectionAtStart is m_connectedProfile when the scan began: the
+    // connection the rows' active flag describes.
+    void onScanFinished(const NmcliResult& result, const QString& connectionAtStart);
+    void publishRows(QList<WifiRow> rows, const QString& connection);
 
-    // Returns whether the join started. Refuses (notifies) while another op
-    // is in flight.
+    // Returns whether the join started. Refuses (notifies) while an op other
+    // than a scan is in flight.
     // Takes ssid by value: callers pass m_joinTarget, which this rewrites.
     bool startJoin(QString ssid, JoinCommand command);
     void onJoinFinished(const QString& ssid, const NmcliResult& result);
     // Deletes, asynchronously, a profile named exactly ssid if the join
     // snapshot shows it did not exist before the attempt. Consumes the
-    // snapshot. Never deletes a profile that was there before.
-    void cleanupResidue(const QString& ssid);
+    // snapshot. Never deletes a profile that was there before. Returns
+    // whether it started a delete.
+    bool cleanupResidue(const QString& ssid);
+    // `connection down id <ssid>`, asynchronously: stops NetworkManager
+    // carrying on with an activation whose nmcli was killed by a cancel.
+    void stopActivation(const QString& ssid);
 
     bool startDisconnect();
     bool startForget();
@@ -276,6 +318,14 @@ class WifiSettings : public QObject {
     // Interface name from `device status` (wlan0 on bitepi), never hardcoded.
     // Empty when there is no wifi device.
     QString m_wifiDevice;
+    // The active profile's name and IPv4 from the last status read; empty
+    // unless in state 1.
+    QString m_connectedProfile;
+    QString m_connectedIpv4;
+    // m_connectedProfile as it was when the scan behind m_rows began. The
+    // rows' active flags describe that connection and no other, so they are
+    // only trusted while it still equals m_connectedProfile.
+    QString m_rowsConnection;
     QString m_joinTarget;
     QString m_password;
 
@@ -290,10 +340,16 @@ class WifiSettings : public QObject {
     bool m_opInFlight = false;
     QProcess* m_pOpProcess = nullptr;
     NmcliCallback m_opCallback;
-    // Whether the op in flight is a join, which is the only op cancelJoin()
-    // kills. Also what tells onJoinRequested that the tap started something
-    // that now owns the [Wifi],join CO until it ends.
+    // Whether a join holds the op slot, which makes it the only op
+    // cancelJoin() kills. Set as soon as startJoin() has claimed the slot,
+    // before its page change and snapshot read, so a scan cannot slip in
+    // before the join's own nmcli starts. Also what tells onJoinRequested
+    // that the tap started something that now owns the [Wifi],join CO until
+    // it ends.
     bool m_joinInFlight = false;
+    // Whether the op in flight is (either step of) a scan, the one op a user
+    // action may pre-empt.
+    bool m_scanInFlight = false;
     QTimer m_opWatchdog;
 
     // Widgets currently on screen, each with the connection that drops it if

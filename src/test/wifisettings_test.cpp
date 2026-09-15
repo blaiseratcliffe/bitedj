@@ -1,4 +1,5 @@
-// Tests for the static nmcli parsers behind the Bite DJ Wi-Fi settings page.
+// Tests for the static nmcli parsers (and the wrong-password classifier) behind
+// the Bite DJ Wi-Fi settings page.
 // They need neither NetworkManager nor a WifiSettings instance: the class keeps
 // every piece of text handling in process-free static functions for exactly
 // this reason.
@@ -347,6 +348,43 @@ TEST(WifiSettingsTest, ParseIpv4TakesTheFirstOfSeveralAddresses) {
     EXPECT_EQ(QStringLiteral("10.0.0.5"),
             WifiSettings::parseIpv4(QStringLiteral("IP4.ADDRESS[1]:10.0.0.5/24\n"
                                                    "IP4.ADDRESS[2]:10.0.0.6/24\n")));
+}
+
+// --- isWrongPasswordError ---------------------------------------------------
+// Not measured on bitepi (Ruling 2 skipped the live wrong-password probe).
+// The strings are NetworkManager's own wording, as named in the Phase 1 fix
+// round; the SSID-bearing ones are synthetic.
+
+TEST(WifiSettingsTest, WrongPasswordMatchesMissingSecrets) {
+    EXPECT_TRUE(WifiSettings::isWrongPasswordError(QStringLiteral(
+            "Error: Connection activation failed: Secrets were required, but not provided.")));
+}
+
+TEST(WifiSettingsTest, WrongPasswordMatchesAnInvalidPskProperty) {
+    EXPECT_TRUE(WifiSettings::isWrongPasswordError(
+            QStringLiteral("802-11-wireless-security.psk: property is invalid")));
+}
+
+TEST(WifiSettingsTest, WrongPasswordMatchesNewerNmcliWording) {
+    // Synthetic SSID in newer nmcli's wording of the same failure.
+    EXPECT_TRUE(WifiSettings::isWrongPasswordError(QStringLiteral(
+            "Passwords or encryption keys are required to access the wireless network 'x'.")));
+}
+
+TEST(WifiSettingsTest, WrongPasswordIgnoresOtherFailures) {
+    EXPECT_FALSE(WifiSettings::isWrongPasswordError(
+            QStringLiteral("Error: No network with SSID 'x' found.")));
+    EXPECT_FALSE(WifiSettings::isWrongPasswordError(QString()));
+}
+
+TEST(WifiSettingsTest, WrongPasswordIgnoresPskInAnSsid) {
+    // Synthetic: a network whose name contains "psk", in a failure that has
+    // nothing to do with its password. A bare "psk" match would misfire here.
+    EXPECT_FALSE(WifiSettings::isWrongPasswordError(
+            QStringLiteral("Error: No network with SSID 'mypsknet' found.")));
+    EXPECT_FALSE(WifiSettings::isWrongPasswordError(QStringLiteral(
+            "Error: Connection activation failed: (53) The Wi-Fi network 'mypsknet' "
+            "could not be found")));
 }
 
 } // namespace

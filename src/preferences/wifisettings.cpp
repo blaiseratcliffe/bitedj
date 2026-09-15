@@ -92,17 +92,6 @@ QStringList allProfileNames(const QString& output) {
     return names;
 }
 
-// How nmcli reports a rejected passphrase. "Secrets were required" is
-// NetworkManager's own activation failure; newer nmcli words the same failure
-// "Passwords or encryption keys are required"; and a passphrase NM refuses
-// outright is reported against the psk property.
-bool isWrongPasswordError(const QString& error) {
-    return error.contains(QLatin1String("Secrets were required"), Qt::CaseInsensitive) ||
-            error.contains(QLatin1String("Passwords or encryption keys are required"),
-                    Qt::CaseInsensitive) ||
-            error.contains(QLatin1String("psk"), Qt::CaseInsensitive);
-}
-
 // One synchronous nmcli read for the status refresh: the tryUnmount() shape,
 // with an explicit bound instead of waitForFinished()'s 30 s default. Only a
 // normal exit 0 counts as an answer, and then stdout goes to *pOut; anything
@@ -111,6 +100,9 @@ bool isWrongPasswordError(const QString& error) {
 bool readNmcliSync(const QStringList& args, QString* pOut, QString* pError) {
     QProcess process;
     process.setProcessEnvironment(nmcliEnvironment());
+    // No stdin: nmcli must never sit waiting on a prompt for input that
+    // cannot come.
+    process.setStandardInputFile(QProcess::nullDevice());
     process.start(kNmcli, args);
     if (!process.waitForFinished(kSyncReadTimeoutMs)) {
         QString error;
@@ -282,7 +274,10 @@ void WifiSettings::activateRow(int index) {
     // so a later [Wifi],join acts on the same row.
     m_pCoSelectedIndex->set(static_cast<double>(index));
 
-    if (row.active) {
+    // Not row.active alone: after a dropped link or a switch to another
+    // network the flag is stale until the rescan lands, and page 3 for a
+    // network the box has left would disconnect whatever it is on now.
+    if (isActiveNow(row)) {
         setJoinTarget(row.ssid);
         setPage(kPageManage);
         return;
@@ -460,6 +455,19 @@ std::optional<WifiSettings::WifiDevice> WifiSettings::parseWifiDevice(const QStr
 }
 
 // static
+bool WifiSettings::isWrongPasswordError(const QString& nmcliError) {
+    // "Secrets were required" is NetworkManager's own activation failure for a
+    // rejected passphrase; newer nmcli words the same failure "Passwords or
+    // encryption keys are required"; a passphrase NM refuses outright is
+    // reported against the full property name.
+    return nmcliError.contains(QLatin1String("Secrets were required"), Qt::CaseInsensitive) ||
+            nmcliError.contains(QLatin1String("Passwords or encryption keys are required"),
+                    Qt::CaseInsensitive) ||
+            nmcliError.contains(QLatin1String("802-11-wireless-security.psk"),
+                    Qt::CaseInsensitive);
+}
+
+// static
 QString WifiSettings::parseIpv4(const QString& output) {
     const QStringList lines = outputLines(output);
     for (const QString& line : lines) {
@@ -483,14 +491,14 @@ void WifiSettings::onScanRequested(double value) {
     if (value == 0.0) {
         return;
     }
-    // A dead end in state 2 and 4, like every action. State 3 still lets Scan
-    // re-check, since the radio may have been switched on from elsewhere.
-    if (m_state != kStateNoAdapter && m_state != kStateNotResponding) {
-        refreshStatus();
-        if (startScan(true)) {
-            // onScanFinished() puts the CO back when the scan ends.
-            return;
-        }
+    // In every state, not just 0 and 1 (Ruling 16): the refresh is the only
+    // way out of state 2, 3 or 4 when no widget is on screen to run the 10 s
+    // timer, so without it one startup blip would leave state 4 for good. It
+    // then scans only if the refresh made the state usable.
+    refreshStatus();
+    if (startScan(true)) {
+        // onScanFinished() puts the CO back when the scan ends.
+        return;
     }
     m_pCoScan->set(0.0);
 }
@@ -499,6 +507,7 @@ void WifiSettings::onJoinRequested(double value) {
     if (value == 0.0) {
         return;
     }
+    const bool joinWasInFlight = m_joinInFlight;
     if (isUsableState()) {
         const int currentPage = page();
         if (currentPage == kPageList) {
@@ -507,9 +516,10 @@ void WifiSettings::onJoinRequested(double value) {
             submitJoin();
         }
     }
-    // A join that started owns the CO until it ends (onJoinFinished() resets
-    // it). Every other outcome of the tap has already ended here.
-    if (!m_joinInFlight) {
+    // A join this tap started owns the CO until it ends (onJoinFinished()
+    // resets it). Every other outcome, a tap refused while an earlier join
+    // runs included, has already ended here.
+    if (joinWasInFlight || !m_joinInFlight) {
         m_pCoJoin->set(0.0);
     }
 }
@@ -579,6 +589,9 @@ bool WifiSettings::runNmcli(const QStringList& args, int watchdogMs, NmcliCallba
     auto* pProcess = new QProcess(this);
     m_pOpProcess = pProcess;
     pProcess->setProcessEnvironment(nmcliEnvironment());
+    // No stdin: a join whose secrets NetworkManager wants asked for must fail
+    // and say so, not wait on a prompt until the watchdog.
+    pProcess->setStandardInputFile(QProcess::nullDevice());
 
     // finished and errorOccurred are both needed: a process that fails to
     // start never emits finished. Whichever arrives first ends the op, and
@@ -652,6 +665,21 @@ void WifiSettings::abortOp() {
     completeOp(m_pOpProcess, result);
 }
 
+bool WifiSettings::claimOpSlot() {
+    if (!m_opInFlight) {
+        return true;
+    }
+    if (!m_scanInFlight) {
+        notifyBusy();
+        return false;
+    }
+    // onScanFinished() sees the cancel, resets [Wifi],scan and drops the
+    // result; it starts nothing, so the slot is free when this returns.
+    qInfo() << "WifiSettings: pre-empting the scan in flight for a user action";
+    abortOp();
+    return !m_opInFlight;
+}
+
 void WifiSettings::refreshStatus() {
     QString output;
     QString error;
@@ -659,7 +687,7 @@ void WifiSettings::refreshStatus() {
         if (m_state != kStateNotResponding) {
             qWarning() << "WifiSettings: NetworkManager is not responding:" << error;
         }
-        applyStatus(kStateNotResponding, tr("Network service not responding"));
+        applyStatus(kStateNotResponding);
     };
 
     if (!readNmcliSync({"-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"},
@@ -671,7 +699,7 @@ void WifiSettings::refreshStatus() {
     const std::optional<WifiDevice> device = parseWifiDevice(output);
     if (!device) {
         m_wifiDevice.clear();
-        applyStatus(kStateNoAdapter, tr("No Wi-Fi adapter"));
+        applyStatus(kStateNoAdapter);
         return;
     }
     m_wifiDevice = device->device;
@@ -683,7 +711,7 @@ void WifiSettings::refreshStatus() {
         return;
     }
     if (output.trimmed() != QLatin1String("enabled")) {
-        applyStatus(kStateRadioOff, tr("Wi-Fi is off"));
+        applyStatus(kStateRadioOff);
         return;
     }
 
@@ -691,41 +719,36 @@ void WifiSettings::refreshStatus() {
     // including the "connecting (...)" steps of a join in progress, is not
     // connected yet.
     if (!device->state.startsWith(QLatin1String("connected"))) {
-        applyStatus(kStateDisconnected, tr("Not connected"));
+        applyStatus(kStateDisconnected);
         return;
     }
-    // CONNECTION is the profile name, which is the SSID for every profile
-    // `device wifi connect` creates, and fresh from this very read, where the
-    // scanned rows may be up to a scan old.
-    QString statusLine = tr("Connected to %1").arg(device->connection);
     // The last read, so a failure here has nothing left to short-circuit:
     // report the link without an address rather than call a working link dead.
+    QString ipv4;
     if (readNmcliSync({"-t", "-f", "IP4.ADDRESS", "device", "show", m_wifiDevice},
                 &output,
                 &error)) {
-        const QString ipv4 = parseIpv4(output);
-        if (!ipv4.isEmpty()) {
-            // U+00B7 MIDDLE DOT, which DejaVu Sans renders, spelled as a code
-            // point so the source stays ASCII.
-            statusLine += QStringLiteral(" %1 ").arg(QChar(0x00B7)) + ipv4;
-        }
+        ipv4 = parseIpv4(output);
     }
-    applyStatus(kStateConnected, statusLine);
+    applyStatus(kStateConnected, device->connection, ipv4);
 }
 
-void WifiSettings::applyStatus(int state, const QString& statusLine) {
+void WifiSettings::applyStatus(int state, const QString& connection, const QString& ipv4) {
     const int oldState = m_state;
-    const bool wasUsable = isUsableState();
-    const bool lineChanged = statusLine != m_statusLine;
+    const QString oldConnection = m_connectedProfile;
     m_state = state;
-    m_statusLine = statusLine;
-    if (state != oldState) {
+    m_connectedProfile = state == kStateConnected ? connection : QString();
+    m_connectedIpv4 = state == kStateConnected ? ipv4 : QString();
+    const bool stateChanged = state != oldState;
+    if (stateChanged) {
         m_pCoState->forceSet(static_cast<double>(state));
     }
-    if (state != oldState || lineChanged) {
-        emit statusChanged(m_statusLine, m_state);
-    }
-    if (state == oldState) {
+    updateStatusLine(stateChanged);
+
+    // Covers a dropped link (1 -> 0) and a move from one network to another
+    // (1 -> 1), which is not a state change at all.
+    const bool connectionChanged = m_connectedProfile != oldConnection;
+    if (!stateChanged && !connectionChanged) {
         return;
     }
 
@@ -735,7 +758,7 @@ void WifiSettings::applyStatus(int state, const QString& statusLine) {
         // join in flight ends on its own, within its watchdog at worst, and
         // reports how.
         if (!m_rows.isEmpty()) {
-            publishRows(QList<WifiRow>());
+            publishRows(QList<WifiRow>(), QString());
         }
         const int currentPage = page();
         if (currentPage == kPagePassword || currentPage == kPageManage) {
@@ -743,29 +766,84 @@ void WifiSettings::applyStatus(int state, const QString& statusLine) {
         }
         return;
     }
-    if (oldState == kStateConnected && page() == kPageManage) {
-        // The network page 3 was managing is no longer the one the box is on.
+    if (connectionChanged && page() == kPageManage) {
+        // The network page 3 was managing is no longer the one the box is on,
+        // and its Disconnect would act on whatever the box is on now.
         goToList();
     }
-    if (!wasUsable && !m_visibleClients.isEmpty()) {
-        // Back from no adapter, radio off or no answer while someone is
-        // looking: fill the list this state change has made meaningful again.
+    if (!m_visibleClients.isEmpty()) {
+        // While someone is looking, rescan on every change of state or
+        // network, so the active flag in the list catches up with the link.
         startScan(false);
     }
 }
 
+void WifiSettings::updateStatusLine(bool stateChanged) {
+    QString statusLine;
+    switch (m_state) {
+    case kStateConnected:
+        statusLine = tr("Connected to %1").arg(connectedSsid());
+        if (!m_connectedIpv4.isEmpty()) {
+            // U+00B7 MIDDLE DOT, which DejaVu Sans renders, spelled as a code
+            // point so the source stays ASCII.
+            statusLine += QStringLiteral(" %1 ").arg(QChar(0x00B7)) + m_connectedIpv4;
+        }
+        break;
+    case kStateNoAdapter:
+        statusLine = tr("No Wi-Fi adapter");
+        break;
+    case kStateRadioOff:
+        statusLine = tr("Wi-Fi is off");
+        break;
+    case kStateNotResponding:
+        statusLine = tr("Network service not responding");
+        break;
+    default:
+        statusLine = tr("Not connected");
+        break;
+    }
+    if (!stateChanged && statusLine == m_statusLine) {
+        return;
+    }
+    m_statusLine = statusLine;
+    emit statusChanged(m_statusLine, m_state);
+}
+
+QString WifiSettings::connectedSsid() const {
+    if (m_rowsConnection == m_connectedProfile) {
+        for (const WifiRow& row : m_rows) {
+            if (row.active) {
+                return row.ssid;
+            }
+        }
+    }
+    return m_connectedProfile;
+}
+
+bool WifiSettings::isActiveNow(const WifiRow& row) const {
+    return row.active && m_state == kStateConnected && m_rowsConnection == m_connectedProfile;
+}
+
 bool WifiSettings::startScan(bool explicitRescan) {
-    if (!isUsableState()) {
+    // A scan is never the op that pre-empts: a busy slot simply refuses it.
+    // So does a join between claiming the slot and starting its nmcli, a
+    // window in which a page change can show a widget whose
+    // setClientVisible() asks for a scan.
+    if (!isUsableState() || m_opInFlight || m_joinInFlight) {
         return false;
     }
     const QString rescan = explicitRescan ? QStringLiteral("yes") : QStringLiteral("auto");
+    const QString connectionAtStart = m_connectedProfile;
+    // Set before runNmcli(), which can call back before it returns. Cleared
+    // only by onScanFinished(), where every path of both steps ends.
+    m_scanInFlight = true;
     // Saved profile names first, so the list is flagged against a view no
     // older than the scan itself.
-    return runNmcli({"-t", "-f", "NAME,TYPE", "connection", "show"},
+    runNmcli({"-t", "-f", "NAME,TYPE", "connection", "show"},
             kScanWatchdogMs,
-            [this, rescan](const NmcliResult& profiles) {
+            [this, rescan, connectionAtStart](const NmcliResult& profiles) {
                 if (!profiles.succeeded()) {
-                    onScanFinished(profiles);
+                    onScanFinished(profiles, connectionAtStart);
                     return;
                 }
                 m_savedWifiNames = parseSavedWifiNames(profiles.out);
@@ -774,17 +852,27 @@ bool WifiSettings::startScan(bool explicitRescan) {
                         {"-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
                                 "device", "wifi", "list", "--rescan", rescan},
                         kScanWatchdogMs,
-                        [this](const NmcliResult& list) {
-                            onScanFinished(list);
+                        [this, connectionAtStart](const NmcliResult& list) {
+                            onScanFinished(list, connectionAtStart);
                         });
                 if (!started) {
+                    m_scanInFlight = false;
                     m_pCoScan->set(0.0);
                 }
             });
+    return true;
 }
 
-void WifiSettings::onScanFinished(const NmcliResult& result) {
+void WifiSettings::onScanFinished(const NmcliResult& result, const QString& connectionAtStart) {
+    m_scanInFlight = false;
     m_pCoScan->set(0.0);
+    if (result.cancelled) {
+        // Pre-empted by a user action (Ruling 13). What it found is thrown
+        // away, and nothing is started from here: the action is waiting for
+        // the slot.
+        qInfo() << "WifiSettings: scan pre-empted, result discarded";
+        return;
+    }
     if (!result.succeeded()) {
         // Not the "Wi-Fi scan:" prefix, on purpose: check-log.sh filters that
         // one as healthy, and a scan that failed is a fault it should show.
@@ -803,20 +891,38 @@ void WifiSettings::onScanFinished(const NmcliResult& result) {
         // The radio went off, or NetworkManager went away, mid-scan.
         return;
     }
-    publishRows(std::move(rows));
+    publishRows(std::move(rows), connectionAtStart);
+    if (connectionAtStart != m_connectedProfile && !m_visibleClients.isEmpty()) {
+        // The link changed while this scan ran, so its active flags may
+        // describe the old connection and are not trusted (isActiveNow()).
+        // The rescan applyStatus() asked for was refused while this one held
+        // the slot; run it now that the slot is free.
+        startScan(false);
+    }
 }
 
-void WifiSettings::publishRows(QList<WifiRow> rows) {
+void WifiSettings::publishRows(QList<WifiRow> rows, const QString& connection) {
     m_rows = std::move(rows);
+    m_rowsConnection = connection;
     m_pCoNetworkCount->forceSet(static_cast<double>(m_rows.size()));
     emit networksChanged(m_rows);
+    // The status line names the active row's SSID when the rows allow it.
+    updateStatusLine(false);
 }
 
 bool WifiSettings::startJoin(QString ssid, JoinCommand command) {
-    if (m_opInFlight) {
-        notifyBusy();
+    if (!claimOpSlot()) {
         return false;
     }
+    // Holds the slot from here, through the page change and the snapshot
+    // read, until runNmcli() takes it: startScan() refuses while this is set.
+    m_joinInFlight = true;
+
+    // Page 2 before the snapshot read below, which can take up to 2 s when
+    // NetworkManager is wedged, so the page is already the joining page by
+    // the time the GUI next paints.
+    setJoinTarget(ssid);
+    setPage(kPageJoining);
 
     // Before anything is created: every profile name as it stands, so a
     // failure can tell a profile this attempt made from one the DJ already
@@ -848,15 +954,13 @@ bool WifiSettings::startJoin(QString ssid, JoinCommand command) {
     qInfo() << "WifiSettings: joining" << ssid
             << (command == JoinCommand::ConnectionUp ? "by its saved profile" : "as a new network");
 
-    // Every "started" change before runNmcli(), which can call back before it
-    // returns.
-    setJoinTarget(ssid);
-    setPage(kPageJoining);
-    m_joinInFlight = true;
+    // Every "started" change is made by now, before runNmcli(), which can call
+    // back before it returns.
     if (!runNmcli(args, kConnectWatchdogMs, [this, ssid](const NmcliResult& result) {
             onJoinFinished(ssid, result);
         })) {
-        // Unreachable: the slot was free above and nothing has run since.
+        // Unreachable: the slot was claimed above, and m_joinInFlight has kept
+        // scans out of it since.
         m_joinInFlight = false;
         m_joinSnapshot.reset();
         goToList();
@@ -869,10 +973,22 @@ void WifiSettings::onJoinFinished(const QString& ssid, const NmcliResult& result
     m_joinInFlight = false;
     m_pCoJoin->set(0.0);
 
+    // On every failure path below, the follow-up nmcli op starts before any
+    // page change. A page change can show a Wi-Fi widget, and its
+    // setClientVisible() would otherwise start a scan into the slot this op
+    // needs.
     if (result.cancelled) {
         qInfo() << "WifiSettings: join of" << ssid << "cancelled";
+        // Killing nmcli does not stop NetworkManager, which carries on with
+        // the activation it was asked for and can connect after the DJ
+        // cancelled. Deleting a profile this attempt created stops it as
+        // well. Where there is nothing to delete (a saved profile brought up
+        // by `connection up`, a password tried on a profile that already
+        // existed, or no snapshot to judge by) take the connection down.
+        if (!cleanupResidue(ssid)) {
+            stopActivation(ssid);
+        }
         goToList();
-        cleanupResidue(ssid);
         refreshStatus();
         return;
     }
@@ -887,6 +1003,7 @@ void WifiSettings::onJoinFinished(const QString& ssid, const NmcliResult& result
 
     // Before the buffer is cleared: the redaction in describeFailure() needs it.
     const QString detail = describeFailure(result);
+    cleanupResidue(ssid);
     if (result.started && !result.timedOut && isWrongPasswordError(result.err)) {
         // Info: a mistyped password is the DJ's business, not a fault.
         qInfo() << "WifiSettings: join of" << ssid << "rejected the password";
@@ -899,18 +1016,17 @@ void WifiSettings::onJoinFinished(const QString& ssid, const NmcliResult& result
         goToList();
         notify(detail, Notifications::Severity::Error);
     }
-    cleanupResidue(ssid);
     // Starting a join tears down whatever the device was on, so the state
     // shown before the attempt is stale either way.
     refreshStatus();
 }
 
-void WifiSettings::cleanupResidue(const QString& ssid) {
+bool WifiSettings::cleanupResidue(const QString& ssid) {
     const std::optional<QStringList> snapshot = std::exchange(m_joinSnapshot, std::nullopt);
     // No snapshot: nothing proves a profile by that name is new, so leave it.
     // Named in the snapshot: it was there before the attempt and is the DJ's.
     if (!snapshot || snapshot->contains(ssid)) {
-        return;
+        return false;
     }
     const bool started = runNmcli({"--wait", kShortWaitSeconds, "connection", "delete", "id", ssid},
             kDisconnectWatchdogMs,
@@ -929,14 +1045,32 @@ void WifiSettings::cleanupResidue(const QString& ssid) {
         qWarning() << "WifiSettings: another nmcli call is running, so a profile the failed"
                    << "join of" << ssid << "created may remain";
     }
+    return started;
+}
+
+void WifiSettings::stopActivation(const QString& ssid) {
+    // Called from onJoinFinished() with the slot just freed, so this cannot be
+    // refused in practice. "not an active connection" is the ordinary outcome
+    // when NetworkManager had already given up on its own.
+    const bool started = runNmcli({"--wait", kShortWaitSeconds, "connection", "down", "id", ssid},
+            kDisconnectWatchdogMs,
+            [this, ssid](const NmcliResult& result) {
+                qInfo() << "WifiSettings: took" << ssid << "down after a cancelled join:"
+                        << (result.succeeded() ? QStringLiteral("done")
+                                               : result.err.simplified());
+                refreshStatus();
+            });
+    if (!started) {
+        qWarning() << "WifiSettings: another nmcli call is running, so the cancelled join of"
+                   << ssid << "may still connect";
+    }
 }
 
 bool WifiSettings::startDisconnect() {
     if (!isUsableState() || page() != kPageManage || m_wifiDevice.isEmpty()) {
         return false;
     }
-    if (m_opInFlight) {
-        notifyBusy();
+    if (!claimOpSlot()) {
         return false;
     }
     const QString ssid = m_joinTarget;
@@ -968,8 +1102,7 @@ bool WifiSettings::startForget() {
     if (!isUsableState() || page() != kPageManage || m_joinTarget.isEmpty()) {
         return false;
     }
-    if (m_opInFlight) {
-        notifyBusy();
+    if (!claimOpSlot()) {
         return false;
     }
     const QString ssid = m_joinTarget;
@@ -994,8 +1127,7 @@ bool WifiSettings::startRadioOn() {
     if (m_state != kStateRadioOff) {
         return false;
     }
-    if (m_opInFlight) {
-        notifyBusy();
+    if (!claimOpSlot()) {
         return false;
     }
     return runNmcli({"radio", "wifi", "on"},
