@@ -28,6 +28,7 @@ class Notifications;
 class AudioDeviceSettings;
 class ControllerSettings;
 class SystemSettings;
+class WifiSettings;
 class ControlSocket;
 class HighContrast;
 
@@ -158,6 +159,7 @@ class CoreServices : public QObject {
     std::unique_ptr<AudioDeviceSettings> m_pAudioDeviceSettings;
     std::unique_ptr<ControllerSettings> m_pControllerSettings;
     std::unique_ptr<SystemSettings> m_pSystemSettings;
+    std::unique_ptr<WifiSettings> m_pWifiSettings;
     std::unique_ptr<ControlSocket> m_pControlSocket;
     // Constructed after SystemSettings, which is what it enumerates and watches
     // removable drives through.
