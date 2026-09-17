@@ -331,6 +331,11 @@ void WWifiList::rebuildRows(const QList<WifiRow>& rows) {
         return;
     }
 
+    // The backend decides what a tap on a row does; it decides what the row
+    // looks like too. Without an instance (the unit test harness) the scanned
+    // flag is all there is, and it is what the backend would answer anyway.
+    WifiSettings* pSettings = WifiSettings::tryInstance();
+
     for (int i = 0; i < rows.size(); ++i) {
         const WifiRow& row = rows.at(i);
 
@@ -355,7 +360,11 @@ void WWifiList::rebuildRows(const QList<WifiRow>& rows) {
         pLock->setVisible(row.secured);
         pRowLayout->addWidget(pLock, 0);
 
-        pFrame->setProperty(kActiveProperty, row.active);
+        // Not row.active, which is only what the last scan saw: after a link
+        // change the backend already distrusts it (isActiveNow()), so a row
+        // styled from the raw flag would be highlighted as the current
+        // network while a tap on it started a join, until the rescan landed.
+        pFrame->setProperty(kActiveProperty, pSettings ? pSettings->isActiveNow(row) : row.active);
         pFrame->setProperty(kSavedProperty, row.saved);
 
         m_pLayout->addWidget(pFrame, i, 0);

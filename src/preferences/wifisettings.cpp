@@ -1,5 +1,6 @@
 #include "preferences/wifisettings.h"
 
+#include <QElapsedTimer>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QtDebug>
@@ -10,6 +11,7 @@
 #include "control/controlpushbutton.h"
 #include "moc_wifisettings.cpp"
 #include "notifications/notifications.h"
+#include "util/fpclassify.h"
 
 namespace {
 const QString kGroup = QStringLiteral("[Wifi]");
@@ -20,12 +22,23 @@ const QString kNmcli = QStringLiteral("nmcli");
 // at the page, and never at all while they are not.
 constexpr int kStatusRefreshMs = 10000;
 
-// Bound on each synchronous status read. nmcli answers a local D-Bus query in
-// tens of milliseconds, so this only fires when NetworkManager is wedged, and
-// it is how long the GUI thread stalls when it is. Deliberately not the 30 s
-// default of QProcess::waitForFinished(), which the tryUnmount() pattern this
-// is modelled on still uses.
+// Bound on a synchronous read that stands on its own (the join snapshot).
+// nmcli answers a local D-Bus query in tens of milliseconds, so this only
+// fires when NetworkManager is wedged, and it is how long the GUI thread
+// stalls when it is. Deliberately not the 30 s default of
+// QProcess::waitForFinished(), which the tryUnmount() pattern this is modelled
+// on still uses.
 constexpr int kSyncReadTimeoutMs = 2000;
+
+// Bound on a whole status refresh, shared by its three reads rather than
+// granted to each. Reads that fail short-circuit, but reads that merely answer
+// slowly do not, so three of them at 2 s each would stall the GUI thread for
+// 6 s while the code and the contract both promised about 2.
+constexpr int kStatusBudgetMs = 2000;
+// Floor on what is left of that budget when a read starts. A read handed a
+// millisecond is a read that cannot succeed, so the budget is allowed to
+// overrun by this much rather than turn a working NetworkManager into state 4.
+constexpr int kMinSyncReadTimeoutMs = 100;
 
 // How long to wait for a process we have just SIGKILLed to be reaped, so its
 // QProcess is never destroyed while still running (which warns, then blocks).
@@ -38,6 +51,12 @@ constexpr int kScanWatchdogMs = 20000;
 constexpr int kConnectWatchdogMs = 40000;
 constexpr int kDisconnectWatchdogMs = 15000; // also connection delete
 constexpr int kRadioWatchdogMs = 10000;
+
+// How long after a successful `radio wifi on` to look again. rfkill and the
+// supplicant do not come up the instant nmcli returns, so the refresh that
+// follows the command can still read the radio as off and leave "Wi-Fi is off"
+// on a screen whose radio is already coming on, inviting a second tap.
+constexpr int kRadioSettleMs = 500;
 const QString kConnectWaitSeconds = QStringLiteral("30");
 const QString kShortWaitSeconds = QStringLiteral("10");
 
@@ -93,23 +112,25 @@ QStringList allProfileNames(const QString& output) {
 }
 
 // One synchronous nmcli read for the status refresh: the tryUnmount() shape,
-// with an explicit bound instead of waitForFinished()'s 30 s default. Only a
-// normal exit 0 counts as an answer, and then stdout goes to *pOut; anything
-// else writes a reason to *pError. The process is reaped before returning
-// either way. Never pumps the event loop, so it cannot re-enter this class.
-bool readNmcliSync(const QStringList& args, QString* pOut, QString* pError) {
+// with an explicit bound instead of waitForFinished()'s 30 s default. The
+// bound is a parameter because the three reads of a refresh share one budget
+// between them. Only a normal exit 0 counts as an answer, and then stdout goes
+// to *pOut; anything else writes a reason to *pError. The process is reaped
+// before returning either way. Never pumps the event loop, so it cannot
+// re-enter this class.
+bool readNmcliSync(const QStringList& args, int timeoutMs, QString* pOut, QString* pError) {
     QProcess process;
     process.setProcessEnvironment(nmcliEnvironment());
     // No stdin: nmcli must never sit waiting on a prompt for input that
     // cannot come.
     process.setStandardInputFile(QProcess::nullDevice());
     process.start(kNmcli, args);
-    if (!process.waitForFinished(kSyncReadTimeoutMs)) {
+    if (!process.waitForFinished(timeoutMs)) {
         QString error;
         if (process.error() == QProcess::FailedToStart) {
             error = QStringLiteral("could not run nmcli: ") + process.errorString();
         } else {
-            error = QStringLiteral("nmcli did not answer within %1 ms").arg(kSyncReadTimeoutMs);
+            error = QStringLiteral("nmcli did not answer within %1 ms").arg(timeoutMs);
         }
         if (process.state() != QProcess::NotRunning) {
             process.kill();
@@ -717,9 +738,29 @@ void WifiSettings::refreshStatus() {
         applyStatus(kStateNotResponding);
     };
 
-    if (!readNmcliSync({"-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"},
-                &output,
-                &error)) {
+    // One refresh is up to three reads in a row on the GUI thread, and they
+    // share kStatusBudgetMs between them. Per-read bounds would only have
+    // bounded the failing case: three reads that each answer slowly never
+    // short-circuit, and each would have been entitled to its own 2 s.
+    QElapsedTimer budget;
+    budget.start();
+    const auto readWithinBudget = [&budget, &error](const QStringList& args, QString* pOut) {
+        const qint64 left = kStatusBudgetMs - budget.elapsed();
+        if (left <= 0) {
+            // A spent budget is a read that failed: same short-circuit, same
+            // state 4, so the bound holds however the reads before it ended.
+            error = QStringLiteral("the status refresh spent its %1 ms budget")
+                            .arg(kStatusBudgetMs);
+            return false;
+        }
+        return readNmcliSync(args,
+                static_cast<int>(std::max<qint64>(left, kMinSyncReadTimeoutMs)),
+                pOut,
+                &error);
+    };
+
+    if (!readWithinBudget({"-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"},
+                &output)) {
         reportNotResponding();
         return;
     }
@@ -733,7 +774,7 @@ void WifiSettings::refreshStatus() {
 
     // The software radio switch, the one `nmcli radio wifi on` flips. The
     // exact form measured on bitepi in Phase 0.
-    if (!readNmcliSync({"-t", "-f", "WIFI", "general"}, &output, &error)) {
+    if (!readWithinBudget({"-t", "-f", "WIFI", "general"}, &output)) {
         reportNotResponding();
         return;
     }
@@ -752,9 +793,7 @@ void WifiSettings::refreshStatus() {
     // The last read, so a failure here has nothing left to short-circuit:
     // report the link without an address rather than call a working link dead.
     QString ipv4;
-    if (readNmcliSync({"-t", "-f", "IP4.ADDRESS", "device", "show", m_wifiDevice},
-                &output,
-                &error)) {
+    if (readWithinBudget({"-t", "-f", "IP4.ADDRESS", "device", "show", m_wifiDevice}, &output)) {
         ipv4 = parseIpv4(output);
     }
     applyStatus(kStateConnected, device->connection, ipv4);
@@ -952,9 +991,18 @@ void WifiSettings::onScanFinished(const NmcliResult& result, const QString& conn
     if (!result.succeeded()) {
         // Not the "Wi-Fi scan:" prefix, on purpose: check-log.sh filters that
         // one as healthy, and a scan that failed is a fault it should show.
-        qWarning().noquote() << "Wi-Fi scan failed:" << describeFailure(result);
+        // Once per run of failures, though, not once per 10 s tick: the page
+        // left open with NetworkManager wedged would otherwise fill the log
+        // someone is reading to work out what is wrong with the box. A
+        // success, or a failure for a different reason, is a new line.
+        const QString reason = describeFailure(result);
+        if (reason != m_lastScanFailure) {
+            qWarning().noquote() << "Wi-Fi scan failed:" << reason;
+            m_lastScanFailure = reason;
+        }
         return;
     }
+    m_lastScanFailure.clear();
     QList<WifiRow> rows = parseWifiList(result.out, m_savedWifiNames);
     // Warning level so it reaches the log at all: the appliance runs at the
     // default warning threshold, which drops info lines. Exactly one per
@@ -1011,6 +1059,7 @@ bool WifiSettings::startJoin(QString ssid, JoinCommand command) {
     QString profiles;
     QString error;
     if (readNmcliSync({"-t", "-f", "NAME,TYPE,DEVICE", "connection", "show"},
+                kSyncReadTimeoutMs,
                 &profiles,
                 &error)) {
         m_joinSnapshot = allProfileNames(profiles);
@@ -1085,6 +1134,12 @@ void WifiSettings::onJoinFinished(const QString& ssid, const NmcliResult& result
                         << "down after the cancel, the box was on it when the join began";
             } else {
                 stopActivation(ssid);
+                // `connection down` also blocks that network's autoconnect
+                // until something asks for it explicitly, so the DJ who
+                // cancels while the box is on nothing is left with no link
+                // and no sign that one more tap is all it takes.
+                notify(tr("Cancelled. Tap the network again to connect."),
+                        Notifications::Severity::Info);
             }
         }
         goToList();
@@ -1257,6 +1312,11 @@ bool WifiSettings::startRadioOn() {
                 refreshStatus();
                 if (result.succeeded()) {
                     startScan(false);
+                    // The refresh above may have read the radio as still off.
+                    // One more look once it has settled, bound to this so a
+                    // teardown drops it; applyStatus() takes it from there if
+                    // the state did change.
+                    QTimer::singleShot(kRadioSettleMs, this, &WifiSettings::refreshStatus);
                     return;
                 }
                 const QString detail = describeFailure(result);
@@ -1268,9 +1328,20 @@ bool WifiSettings::startRadioOn() {
 
 int WifiSettings::page() const {
     const double value = m_pCoPage->get();
-    // Also rejects NaN. The CO is writable from outside (the control socket),
-    // so it may hold anything.
-    if (!(value >= kPageList) || value > kPageManage) {
+    // The CO is writable from outside (the control socket, and the skin's
+    // WidgetStack), so it may hold anything, and anything that is not one of
+    // the four pages reads as -1, no page. Not 0: the list is a real page
+    // whose actions this would then allow.
+    //
+    // NaN needs util_isnan() and cannot be caught by a comparison here. Mixxx
+    // is built with -ffast-math (CMakeLists.txt:226), under which the compiler
+    // may assume no operand is NaN and fold a guard like !(value >= kPageList)
+    // away; what is left is static_cast<int>(NaN), which is 0 on aarch64 --
+    // the list page, on the one box this ships to. util_isnan() is the
+    // deliberately un-inlined wrapper compiled without that flag, and this is
+    // the same reason ControllerScriptInterfaceLegacy screens the values
+    // scripts write to COs (controllerscriptinterfacelegacy.cpp:196).
+    if (util_isnan(value) || value < kPageList || value > kPageManage) {
         return -1;
     }
     return static_cast<int>(value);
@@ -1300,7 +1371,11 @@ void WifiSettings::goToList() {
 
 int WifiSettings::selectedIndex() const {
     const double value = m_pCoSelectedIndex->get();
-    if (!(value >= 0.0) || value >= static_cast<double>(m_rows.size())) {
+    // -1, no row, for NaN, for a negative index and for one past the end of
+    // the list as it stands now. An in-range fraction truncates to the row it
+    // names. See page() for why NaN takes util_isnan() rather than a
+    // comparison.
+    if (util_isnan(value) || value < 0.0 || value >= static_cast<double>(m_rows.size())) {
         return -1;
     }
     return static_cast<int>(value);

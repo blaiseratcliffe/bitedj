@@ -100,6 +100,19 @@ class WifiSettings : public QObject {
         return static_cast<int>(m_password.size());
     }
 
+    // Whether the box is on this row's network now. In state 1, a row named
+    // like the connected profile always is (the common case, where profile
+    // name == SSID, and fresh from the last status read). Otherwise a row's
+    // active flag is what the scan saw, and only counts while the box is
+    // still on the connection it was scanned on.
+    //
+    // Public because it decides both halves of what the DJ sees: the tap
+    // dispatch below uses it, and the list widget styles the row's highlight
+    // from it. Styling from the raw scanned flag instead left the two
+    // disagreeing for a scan cycle after a link change -- a row lit as the
+    // current network that a tap would try to join.
+    bool isActiveNow(const WifiRow& row) const;
+
     // Widgets call this from showEvent/hideEvent. While at least one client is
     // visible, status refreshes every 10 s. The transition from zero visible
     // clients to one triggers one status refresh and one scan with --rescan
@@ -187,6 +200,13 @@ class WifiSettings : public QObject {
     void onOpWatchdogTimeout();
 
   private:
+    // The state-machine test drives a real instance, which means seeding the
+    // rows a tap acts on and reading back the page and selected index. Every
+    // other route to those runs nmcli, which has no business in that harness;
+    // the friendship is what lets the test stay process-free rather than
+    // leaving the page transitions and the CO clamping untested.
+    friend class WifiSettingsStateTest;
+
     // How one async nmcli run ended. Exactly one of these reaches the
     // callback given to runNmcli().
     struct NmcliResult {
@@ -237,9 +257,12 @@ class WifiSettings : public QObject {
     // a notification. Returns whether the slot is free.
     bool claimOpSlot();
 
-    // Synchronous status read (device, radio, IPv4). Each read is bounded at
-    // 2 s, and the first one that fails short-circuits to state 4, so one
-    // refresh blocks the GUI for about 2 s at worst.
+    // Synchronous status read (device, radio, IPv4). The three reads share one
+    // 2 s budget rather than each having their own, and the first that fails,
+    // or that finds the budget spent, short-circuits to state 4. So one
+    // refresh blocks the GUI for about 2 s at worst whether the reads fail or
+    // merely answer slowly, which matters: this runs on the 10 s tick, on
+    // showEvent, and before every page 3 action.
     void refreshStatus();
     // Records one status read and reacts to what changed. connection (the
     // profile name) and ipv4 only mean anything in state 1. A change of state
@@ -256,12 +279,6 @@ class WifiSettings : public QObject {
     // scanned on the current connection, else the profile name (which is the
     // SSID for every profile `device wifi connect` creates).
     QString connectedSsid() const;
-    // Whether the box is on this row's network now. In state 1, a row named
-    // like the connected profile always is (the common case, where profile
-    // name == SSID, and fresh from the last status read). Otherwise a row's
-    // active flag is what the scan saw, and only counts while the box is
-    // still on the connection it was scanned on.
-    bool isActiveNow(const WifiRow& row) const;
     // Rescans when a client is visible and the rows are stale: marked so
     // (m_rowsStale), or scanned on another connection than the current one.
     // Called at the ends of ops that held the slot while a rescan could have
@@ -308,6 +325,10 @@ class WifiSettings : public QObject {
     bool startForget();
     bool startRadioOn();
 
+    // [Wifi],page as a page index, or -1 when it holds anything that is not
+    // one of the four pages. Never 0 for a bad value: everything that keys on
+    // the page must decline to act rather than act as though the DJ were
+    // looking at the list.
     int page() const;
     void setPage(int page);
     // Emits joinTargetChanged unconditionally: the widgets repaint on it, and
@@ -316,7 +337,8 @@ class WifiSettings : public QObject {
     void clearPassword();
     // Clears the password and the join target and returns to page 0.
     void goToList();
-    // [Wifi],selected_index as a row index, or -1 when it names no row.
+    // [Wifi],selected_index as a row index, or -1 when it names no row
+    // (negative, past the end of the list as it stands, or NaN).
     int selectedIndex() const;
     // Human-readable reason for a failed op, with the password (if any is in
     // the buffer) masked out in case nmcli ever echoes it.
@@ -352,6 +374,10 @@ class WifiSettings : public QObject {
     // leaving states 0 and 1. Cleared by publishRows() when a scan lands.
     // Starts true: nothing has been scanned yet.
     bool m_rowsStale = true;
+    // Why the last scan failed, empty once one has succeeded. Only a change of
+    // reason writes another "Wi-Fi scan failed:" line, so a page left open
+    // while scans keep failing does not push everything else out of the log.
+    QString m_lastScanFailure;
     QString m_joinTarget;
     QString m_password;
 

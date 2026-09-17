@@ -264,10 +264,13 @@ void WWifiKeypad::mouseMoveEvent(QMouseEvent* e) {
     // Nothing scrolls here and the commit decision is made on release by
     // comparing hit-tests, not by tracking the drag. But the "down" press
     // feedback has to follow the finger off the key immediately, not wait
-    // for release (Fix round 1 / Ruling 21).
-    if (m_pressedKeyIndex >= 0 &&
-            keyIndexAt(e->globalPosition().toPoint()) != m_pressedKeyIndex) {
-        setKeyDown(m_pressedKeyIndex, false);
+    // for release (Fix round 1 / Ruling 21). It follows the finger back on
+    // again too: the release still commits the key the press landed on, so a
+    // key left dark after a drag off and back would be a key that types
+    // something while looking untouched.
+    if (m_pressedKeyIndex >= 0) {
+        setKeyDown(m_pressedKeyIndex,
+                keyIndexAt(e->globalPosition().toPoint()) == m_pressedKeyIndex);
     }
     e->accept();
 }
