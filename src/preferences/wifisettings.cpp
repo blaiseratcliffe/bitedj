@@ -25,7 +25,8 @@ constexpr int kStatusRefreshMs = 10000;
 // Bound on a synchronous read that stands on its own (the join snapshot).
 // nmcli answers a local D-Bus query in tens of milliseconds, so this only
 // fires when NetworkManager is wedged, and it is how long the GUI thread
-// stalls when it is. Deliberately not the 30 s default of
+// stalls when it is, plus up to kReapTimeoutMs reaping the nmcli it then
+// kills: about 3 s in all. Deliberately not the 30 s default of
 // QProcess::waitForFinished(), which the tryUnmount() pattern this is modelled
 // on still uses.
 constexpr int kSyncReadTimeoutMs = 2000;
@@ -33,7 +34,8 @@ constexpr int kSyncReadTimeoutMs = 2000;
 // Bound on a whole status refresh, shared by its three reads rather than
 // granted to each. Reads that fail short-circuit, but reads that merely answer
 // slowly do not, so three of them at 2 s each would stall the GUI thread for
-// 6 s while the code and the contract both promised about 2.
+// 6 s while the code and the contract both promised about 2. The worst case
+// is this plus one reap (kReapTimeoutMs) of the read that ran out: about 3 s.
 constexpr int kStatusBudgetMs = 2000;
 // Floor on what is left of that budget when a read starts. A read handed a
 // millisecond is a read that cannot succeed, so the budget is allowed to
@@ -111,14 +113,38 @@ QStringList allProfileNames(const QString& output) {
     return names;
 }
 
-// One synchronous nmcli read for the status refresh: the tryUnmount() shape,
-// with an explicit bound instead of waitForFinished()'s 30 s default. The
-// bound is a parameter because the three reads of a refresh share one budget
-// between them. Only a normal exit 0 counts as an answer, and then stdout goes
-// to *pOut; anything else writes a reason to *pError. The process is reaped
-// before returning either way. Never pumps the event loop, so it cannot
-// re-enter this class.
-bool readNmcliSync(const QStringList& args, int timeoutMs, QString* pOut, QString* pError) {
+// Row order the list is shown in. SSIDs are unique after deduplication, so the
+// case-sensitive tie-break makes this a total order and the result
+// deterministic.
+bool rowLess(const WifiRow& a, const WifiRow& b) {
+    if (a.active != b.active) {
+        return a.active;
+    }
+    if (a.saved != b.saved) {
+        return a.saved;
+    }
+    if (a.signalPercent != b.signalPercent) {
+        return a.signalPercent > b.signalPercent;
+    }
+    const int caseless = a.ssid.compare(b.ssid, Qt::CaseInsensitive);
+    if (caseless != 0) {
+        return caseless < 0;
+    }
+    return a.ssid < b.ssid;
+}
+} // namespace
+
+QAtomicPointer<WifiSettings> WifiSettings::s_pInstance = nullptr;
+WifiSettings::NmcliFake* WifiSettings::s_pNmcliFake = nullptr;
+
+// static
+// The bound is a parameter because the three reads of a status refresh share
+// one budget between them.
+bool WifiSettings::readNmcliSync(
+        const QStringList& args, int timeoutMs, QString* pOut, QString* pError) {
+    if (s_pNmcliFake) {
+        return s_pNmcliFake->readSync(args, timeoutMs, pOut, pError);
+    }
     QProcess process;
     process.setProcessEnvironment(nmcliEnvironment());
     // No stdin: nmcli must never sit waiting on a prompt for input that
@@ -156,29 +182,6 @@ bool readNmcliSync(const QStringList& args, int timeoutMs, QString* pOut, QStrin
     }
     return true;
 }
-
-// Row order the list is shown in. SSIDs are unique after deduplication, so the
-// case-sensitive tie-break makes this a total order and the result
-// deterministic.
-bool rowLess(const WifiRow& a, const WifiRow& b) {
-    if (a.active != b.active) {
-        return a.active;
-    }
-    if (a.saved != b.saved) {
-        return a.saved;
-    }
-    if (a.signalPercent != b.signalPercent) {
-        return a.signalPercent > b.signalPercent;
-    }
-    const int caseless = a.ssid.compare(b.ssid, Qt::CaseInsensitive);
-    if (caseless != 0) {
-        return caseless < 0;
-    }
-    return a.ssid < b.ssid;
-}
-} // namespace
-
-QAtomicPointer<WifiSettings> WifiSettings::s_pInstance = nullptr;
 
 WifiSettings::WifiSettings(UserSettingsPointer pConfig)
         : m_pConfig(std::move(pConfig)),
@@ -313,11 +316,19 @@ void WifiSettings::activateRow(int index) {
         return;
     }
     if (row.saved) {
-        startJoin(row.ssid, JoinCommand::ConnectionUp);
-        return;
+        // Brought up by the profile's UUID, not by the SSID: the profile can
+        // be called anything. With two profiles for one SSID, the first one
+        // nmcli listed. A row flagged saved whose profile has since gone
+        // (a scan's profile steps landed, its list step failed) falls through
+        // and is joined as the unsaved network it now is.
+        if (const SavedProfile* pProfile = savedProfileForSsid(row.ssid)) {
+            startJoin(JoinTarget{row.ssid, pProfile->name, pProfile->uuid},
+                    JoinCommand::ConnectionUp);
+            return;
+        }
     }
     if (!row.secured) {
-        startJoin(row.ssid, JoinCommand::Connect);
+        startJoin(JoinTarget{row.ssid, QString(), QString()}, JoinCommand::Connect);
         return;
     }
     clearPassword();
@@ -358,7 +369,7 @@ void WifiSettings::submitJoin() {
                 Notifications::Severity::Warning);
         return;
     }
-    startJoin(m_joinTarget, JoinCommand::ConnectWithPassword);
+    startJoin(JoinTarget{m_joinTarget, QString(), QString()}, JoinCommand::ConnectWithPassword);
 }
 
 void WifiSettings::cancelJoin() {
@@ -404,7 +415,7 @@ QStringList WifiSettings::splitTerseFields(const QString& line) {
 
 // static
 QList<WifiRow> WifiSettings::parseWifiList(
-        const QString& output, const QStringList& savedWifiNames) {
+        const QString& output, const QStringList& savedSsids) {
     QList<WifiRow> rows;
     const QStringList lines = outputLines(output);
     for (const QString& line : lines) {
@@ -425,7 +436,7 @@ QList<WifiRow> WifiSettings::parseWifiList(
         const QString security = fields.at(3).trimmed();
         row.secured = !security.isEmpty() && security != QLatin1String("--");
         row.enterprise = security.contains(QLatin1String("802.1X"));
-        row.saved = savedWifiNames.contains(row.ssid);
+        row.saved = savedSsids.contains(row.ssid);
         row.active = fields.at(0).trimmed() == QLatin1String("*");
 
         // One row per BSSID from nmcli; one per network on screen.
@@ -444,20 +455,99 @@ QList<WifiRow> WifiSettings::parseWifiList(
 }
 
 // static
-QStringList WifiSettings::parseSavedWifiNames(const QString& output) {
-    QStringList names;
+QList<WifiSettings::SavedProfile> WifiSettings::parseWifiProfileList(const QString& output) {
+    QList<SavedProfile> profiles;
     const QStringList lines = outputLines(output);
     for (const QString& line : lines) {
         const QStringList fields = splitTerseFields(line);
-        if (fields.size() < 2 || fields.at(0).isEmpty()) {
+        if (fields.size() < 3 || fields.at(0).isEmpty() || fields.at(1).isEmpty()) {
             continue;
         }
-        if (fields.at(1) == QLatin1String("802-11-wireless")) {
-            names.append(fields.at(0));
+        if (fields.at(2) != QLatin1String("802-11-wireless")) {
+            continue;
+        }
+        // A UUID is unique by construction; a repeat can only be the same
+        // profile listed twice.
+        const QString uuid = fields.at(1);
+        const bool seen = std::any_of(profiles.cbegin(),
+                profiles.cend(),
+                [&uuid](const SavedProfile& profile) { return profile.uuid == uuid; });
+        if (!seen) {
+            profiles.append(SavedProfile{fields.at(0), uuid, QString()});
         }
     }
-    names.removeDuplicates();
-    return names;
+    return profiles;
+}
+
+// static
+QList<WifiSettings::SavedProfile> WifiSettings::parseSavedWifiProfiles(const QString& output) {
+    QList<SavedProfile> profiles;
+    // The block being read, and which of its keys have been seen. A key seen
+    // twice also ends a block, so a missing separator cannot merge two
+    // profiles into one.
+    SavedProfile block;
+    bool hasName = false;
+    bool hasUuid = false;
+    bool hasSsid = false;
+    const auto endBlock = [&]() {
+        // Keyed on the UUID the block itself names, never on its position
+        // among the uuids asked for. No SSID line: not a Wi-Fi profile.
+        if (hasUuid && hasSsid && !block.uuid.isEmpty() && !block.ssid.isEmpty()) {
+            const QString& uuid = block.uuid;
+            const bool seen = std::any_of(profiles.cbegin(),
+                    profiles.cend(),
+                    [&uuid](const SavedProfile& profile) { return profile.uuid == uuid; });
+            if (!seen) {
+                profiles.append(block);
+            }
+        }
+        block = SavedProfile();
+        hasName = false;
+        hasUuid = false;
+        hasSsid = false;
+    };
+
+    // Not outputLines(), which drops the empty lines that separate blocks.
+    const QStringList lines = output.split(QLatin1Char('\n'));
+    for (QString line : lines) {
+        if (line.endsWith(QLatin1Char('\r'))) {
+            line.chop(1);
+        }
+        if (line.isEmpty()) {
+            endBlock();
+            continue;
+        }
+        // Values are escaped like any other terse field, so an SSID holding
+        // ':' or '\' comes back whole.
+        const QStringList fields = splitTerseFields(line);
+        if (fields.size() < 2) {
+            continue;
+        }
+        const QString& key = fields.at(0);
+        const QString& value = fields.at(1);
+        if (key == QLatin1String("connection.id")) {
+            if (hasName) {
+                endBlock();
+            }
+            block.name = value;
+            hasName = true;
+        } else if (key == QLatin1String("connection.uuid")) {
+            if (hasUuid) {
+                endBlock();
+            }
+            block.uuid = value;
+            hasUuid = true;
+        } else if (key == QLatin1String("802-11-wireless.ssid")) {
+            if (hasSsid) {
+                endBlock();
+            }
+            block.ssid = value;
+            hasSsid = true;
+        }
+    }
+    // nmcli prints no blank line after the last block.
+    endBlock();
+    return profiles;
 }
 
 // static
@@ -523,6 +613,18 @@ QString WifiSettings::parseIpv4(const QString& output) {
         }
         if (!address.isEmpty()) {
             return address;
+        }
+    }
+    return QString();
+}
+
+// static
+QString WifiSettings::parseConnectionUuid(const QString& output) {
+    const QStringList lines = outputLines(output);
+    for (const QString& line : lines) {
+        const QStringList fields = splitTerseFields(line);
+        if (fields.size() >= 2 && fields.at(0) == QLatin1String("GENERAL.CON-UUID")) {
+            return fields.at(1).trimmed();
         }
     }
     return QString();
@@ -611,7 +713,7 @@ void WifiSettings::onRadioOnRequested(double value) {
 }
 
 void WifiSettings::onOpWatchdogTimeout() {
-    if (!m_pOpProcess) {
+    if (!m_opInFlight) {
         return;
     }
     // Info, not warning: every caller reports its own failure, and one fault
@@ -620,7 +722,7 @@ void WifiSettings::onOpWatchdogTimeout() {
     NmcliResult result;
     result.started = true;
     result.timedOut = true;
-    completeOp(m_pOpProcess, result);
+    endOp(result);
 }
 
 bool WifiSettings::runNmcli(const QStringList& args, int watchdogMs, NmcliCallback callback) {
@@ -629,6 +731,23 @@ bool WifiSettings::runNmcli(const QStringList& args, int watchdogMs, NmcliCallba
     }
     m_opInFlight = true;
     m_opCallback = std::move(callback);
+
+    if (s_pNmcliFake) {
+        // The test seam: no process, and the op stays in flight until the
+        // test ends it through finishOp(). Armed like the real thing, though
+        // with no event loop turning in that harness it never fires.
+        m_opWatchdog.start(watchdogMs);
+        if (!s_pNmcliFake->startAsync(args)) {
+            // A call the fake was not told to expect. It has already failed
+            // the test; ending the op as one that never started keeps
+            // whatever the code does next as close to a failed exec as
+            // possible, rather than leaving it waiting forever.
+            NmcliResult result;
+            result.err = QStringLiteral("nmcli call not scripted by the test");
+            finishOp(result);
+        }
+        return true;
+    }
 
     // Owned, never startDetached, for the reason SystemSettings::
     // runPowerCommand gives: a polkit refusal is a non-zero exit after a
@@ -693,6 +812,11 @@ void WifiSettings::completeOp(QProcess* pProcess, const NmcliResult& result) {
     }
     pProcess->deleteLater();
     m_pOpProcess = nullptr;
+    finishOp(result);
+}
+
+void WifiSettings::finishOp(const NmcliResult& result) {
+    m_opWatchdog.stop();
     m_opInFlight = false;
     // Moved out before the call: the callback may start the next op, which
     // installs a callback of its own.
@@ -703,14 +827,20 @@ void WifiSettings::completeOp(QProcess* pProcess, const NmcliResult& result) {
     }
 }
 
-void WifiSettings::abortOp() {
-    if (!m_pOpProcess) {
-        return;
+void WifiSettings::endOp(const NmcliResult& result) {
+    if (m_pOpProcess) {
+        completeOp(m_pOpProcess, result);
+    } else if (m_opInFlight) {
+        // Only the test seam holds the slot with no process behind it.
+        finishOp(result);
     }
+}
+
+void WifiSettings::abortOp() {
     NmcliResult result;
     result.started = true;
     result.cancelled = true;
-    completeOp(m_pOpProcess, result);
+    endOp(result);
 }
 
 bool WifiSettings::claimOpSlot() {
@@ -792,19 +922,28 @@ void WifiSettings::refreshStatus() {
     }
     // The last read, so a failure here has nothing left to short-circuit:
     // report the link without an address rather than call a working link dead.
+    // The same read names the active connection by UUID, which, unlike its
+    // name, cannot be shared by two profiles.
     QString ipv4;
-    if (readWithinBudget({"-t", "-f", "IP4.ADDRESS", "device", "show", m_wifiDevice}, &output)) {
+    QString uuid;
+    if (readWithinBudget({"-t", "-f", "IP4.ADDRESS,GENERAL.CON-UUID", "device", "show",
+                                 m_wifiDevice},
+                &output)) {
         ipv4 = parseIpv4(output);
+        uuid = parseConnectionUuid(output);
     }
-    applyStatus(kStateConnected, device->connection, ipv4);
+    applyStatus(kStateConnected, device->connection, ipv4, uuid);
 }
 
-void WifiSettings::applyStatus(int state, const QString& connection, const QString& ipv4) {
+void WifiSettings::applyStatus(
+        int state, const QString& connection, const QString& ipv4, const QString& uuid) {
     const int oldState = m_state;
     const QString oldConnection = m_connectedProfile;
+    const QString oldUuid = m_connectedUuid;
     m_state = state;
     m_connectedProfile = state == kStateConnected ? connection : QString();
     m_connectedIpv4 = state == kStateConnected ? ipv4 : QString();
+    m_connectedUuid = state == kStateConnected ? uuid : QString();
     const bool stateChanged = state != oldState;
     if (stateChanged) {
         m_pCoState->forceSet(static_cast<double>(state));
@@ -812,8 +951,13 @@ void WifiSettings::applyStatus(int state, const QString& connection, const QStri
     updateStatusLine(stateChanged);
 
     // Covers a dropped link (1 -> 0) and a move from one network to another
-    // (1 -> 1), which is not a state change at all.
-    const bool connectionChanged = m_connectedProfile != oldConnection;
+    // (1 -> 1), which is not a state change at all, including a move between
+    // two profiles that share a name, which only the UUID shows. A UUID that
+    // is merely unknown this time (its read failed) is not a move: that would
+    // throw page 3 away on one slow read.
+    const bool uuidChanged =
+            !oldUuid.isEmpty() && !m_connectedUuid.isEmpty() && m_connectedUuid != oldUuid;
+    const bool connectionChanged = m_connectedProfile != oldConnection || uuidChanged;
     if (!stateChanged && !connectionChanged) {
         return;
     }
@@ -831,8 +975,16 @@ void WifiSettings::applyStatus(int state, const QString& connection, const QStri
         // busy slot, and the connection can come back unchanged, so the
         // mismatch test alone would never ask again.
         m_rowsStale = true;
+        // Page 3 always goes: that is the safety rule, since its actions
+        // must never run against a link nobody can vouch for. Page 1 goes
+        // only when the adapter or the radio has gone, not on state 4: one
+        // status read that answered slowly (the GUI can be busy, and so can
+        // NetworkManager) would otherwise throw away a half-typed password.
+        // Keeping it is safe, because submitJoin() refuses outside states 0
+        // and 1, so nothing typed there can act until a read succeeds.
         const int currentPage = page();
-        if (currentPage == kPagePassword || currentPage == kPageManage) {
+        if (currentPage == kPageManage ||
+                (currentPage == kPagePassword && state != kStateNotResponding)) {
             goToList();
         }
         return;
@@ -888,18 +1040,78 @@ QString WifiSettings::connectedSsid() const {
             }
         }
     }
-    return m_connectedProfile;
+    return connectedProfileSsid();
+}
+
+QString WifiSettings::connectedProfileSsid() const {
+    if (!m_connectedUuid.isEmpty()) {
+        for (const SavedProfile& profile : m_savedProfiles) {
+            if (profile.uuid == m_connectedUuid) {
+                return profile.ssid;
+            }
+        }
+    }
+    return ssidOfProfile(m_connectedProfile);
+}
+
+int WifiSettings::savedProfileNameCount(const QString& name) const {
+    return static_cast<int>(std::count_if(m_savedProfiles.cbegin(),
+            m_savedProfiles.cend(),
+            [&name](const SavedProfile& profile) { return profile.name == name; }));
+}
+
+QString WifiSettings::ssidOfProfile(const QString& name) const {
+    for (const SavedProfile& profile : m_savedProfiles) {
+        if (profile.name == name) {
+            return profile.ssid;
+        }
+    }
+    return name;
+}
+
+const WifiSettings::SavedProfile* WifiSettings::savedProfileForSsid(const QString& ssid) const {
+    for (const SavedProfile& profile : m_savedProfiles) {
+        if (profile.ssid == ssid) {
+            return &profile;
+        }
+    }
+    return nullptr;
+}
+
+QString WifiSettings::uniqueUuidOfProfile(const QString& name) const {
+    QString uuid;
+    for (const SavedProfile& profile : m_savedProfiles) {
+        if (profile.name != name) {
+            continue;
+        }
+        if (!uuid.isEmpty()) {
+            return QString();
+        }
+        uuid = profile.uuid;
+    }
+    return uuid;
+}
+
+QStringList WifiSettings::savedSsids() const {
+    QStringList ssids;
+    for (const SavedProfile& profile : m_savedProfiles) {
+        ssids.append(profile.ssid);
+    }
+    return ssids;
 }
 
 bool WifiSettings::isActiveNow(const WifiRow& row) const {
     if (m_state != kStateConnected) {
         return false;
     }
-    // Closes, in the common case, the window between a link change and the
-    // rescan landing, in which the current network's row would otherwise not
-    // count as active and a tap on it would start joining the network the
-    // box is already on.
-    if (row.ssid == m_connectedProfile) {
+    // Closes the window between a link change and the rescan landing, in
+    // which the current network's row would otherwise not count as active
+    // and a tap on it would start joining the network the box is already
+    // on. By SSID, through the saved profiles, never by the profile's name:
+    // on a box connected by a profile called "Cafe" that joins "Home", the
+    // row "Cafe" is some other network, and page 3 for it would disconnect
+    // Home.
+    if (!m_connectedProfile.isEmpty() && row.ssid == connectedProfileSsid()) {
         return true;
     }
     return row.active && m_rowsConnection == m_connectedProfile;
@@ -917,12 +1129,23 @@ bool WifiSettings::manageTargetStillConnected() {
     // the list, which clears the target.
     const QString target = m_joinTarget;
     refreshStatus();
+    // By SSID only. Page 3 names a network, and a bare comparison with the
+    // profile's name would let a profile called "Cafe" that joins "Home"
+    // pass for the network "Cafe".
     if (page() == kPageManage && m_state == kStateConnected && !target.isEmpty() &&
-            (target == m_connectedProfile || target == connectedSsid())) {
+            target == connectedSsid()) {
         return true;
     }
-    qInfo() << "WifiSettings: page 3 action dropped," << target << "is no longer connected";
     goToList();
+    if (m_state == kStateNotResponding) {
+        // Nothing is known about the link, least of all that it has gone.
+        // Saying so would send the DJ looking for a fault that is not there.
+        qInfo() << "WifiSettings: page 3 action dropped, NetworkManager is not responding";
+        notify(tr("Network service not responding, try again"),
+                Notifications::Severity::Warning);
+        return false;
+    }
+    qInfo() << "WifiSettings: page 3 action dropped," << target << "is no longer connected";
     if (!target.isEmpty()) {
         notify(tr("No longer connected to %1").arg(target), Notifications::Severity::Info);
     }
@@ -947,25 +1170,47 @@ bool WifiSettings::startScan(bool explicitRescan) {
     const QString rescan = explicitRescan ? QStringLiteral("yes") : QStringLiteral("auto");
     const QString connectionAtStart = m_connectedProfile;
     // Set before runNmcli(), which can call back before it returns. Cleared
-    // only by onScanFinished(), where every path of both steps ends.
+    // only by onScanFinished(), where every path of every step ends.
     m_scanInFlight = true;
-    // Saved profile names first, so the list is flagged against a view no
-    // older than the scan itself.
-    runNmcli({"-t", "-f", "NAME,TYPE", "connection", "show"},
+    // Saved profiles first, so the list is flagged against a view no older
+    // than the scan itself. Their SSIDs, not their names, are what a row is
+    // matched against, and this listing cannot show an SSID, so it only
+    // says which profiles are Wi-Fi ones and what their UUIDs are.
+    runNmcli({"-t", "-f", "NAME,UUID,TYPE", "connection", "show"},
             kScanWatchdogMs,
-            [this, rescan, connectionAtStart](const NmcliResult& profiles) {
-                if (!profiles.succeeded()) {
-                    onScanFinished(profiles, connectionAtStart);
+            [this, rescan, connectionAtStart](const NmcliResult& listed) {
+                if (!listed.succeeded()) {
+                    onScanFinished(listed, connectionAtStart);
                     return;
                 }
-                m_savedWifiNames = parseSavedWifiNames(profiles.out);
+                const QList<SavedProfile> wifiProfiles = parseWifiProfileList(listed.out);
+                if (wifiProfiles.isEmpty()) {
+                    // Nothing saved: no SSIDs to read, and `connection show`
+                    // with no uuid after it would list every profile again.
+                    m_savedProfiles.clear();
+                    startScanList(rescan, connectionAtStart);
+                    return;
+                }
+                // One call for every Wi-Fi profile, each as its own "uuid"
+                // and value pair of argv elements.
+                QStringList args{"-t",
+                        "-f",
+                        "connection.id,connection.uuid,802-11-wireless.ssid",
+                        "connection",
+                        "show"};
+                for (const SavedProfile& profile : wifiProfiles) {
+                    args << QStringLiteral("uuid") << profile.uuid;
+                }
                 // Cannot be refused: callbacks run with the op slot free.
-                const bool started = runNmcli(
-                        {"-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
-                                "device", "wifi", "list", "--rescan", rescan},
+                const bool started = runNmcli(args,
                         kScanWatchdogMs,
-                        [this, connectionAtStart](const NmcliResult& list) {
-                            onScanFinished(list, connectionAtStart);
+                        [this, rescan, connectionAtStart](const NmcliResult& details) {
+                            if (!details.succeeded()) {
+                                onScanFinished(details, connectionAtStart);
+                                return;
+                            }
+                            m_savedProfiles = parseSavedWifiProfiles(details.out);
+                            startScanList(rescan, connectionAtStart);
                         });
                 if (!started) {
                     m_scanInFlight = false;
@@ -973,6 +1218,20 @@ bool WifiSettings::startScan(bool explicitRescan) {
                 }
             });
     return true;
+}
+
+void WifiSettings::startScanList(const QString& rescan, const QString& connectionAtStart) {
+    // Cannot be refused: called from a callback, with the op slot free.
+    const bool started = runNmcli(
+            {"-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", rescan},
+            kScanWatchdogMs,
+            [this, connectionAtStart](const NmcliResult& list) {
+                onScanFinished(list, connectionAtStart);
+            });
+    if (!started) {
+        m_scanInFlight = false;
+        m_pCoScan->set(0.0);
+    }
 }
 
 void WifiSettings::onScanFinished(const NmcliResult& result, const QString& connectionAtStart) {
@@ -1003,7 +1262,7 @@ void WifiSettings::onScanFinished(const NmcliResult& result, const QString& conn
         return;
     }
     m_lastScanFailure.clear();
-    QList<WifiRow> rows = parseWifiList(result.out, m_savedWifiNames);
+    QList<WifiRow> rows = parseWifiList(result.out, savedSsids());
     // Warning level so it reaches the log at all: the appliance runs at the
     // default warning threshold, which drops info lines. Exactly one per
     // completed scan, and check-log.sh filters it by this prefix.
@@ -1036,16 +1295,22 @@ void WifiSettings::publishRows(QList<WifiRow> rows, const QString& connection) {
     updateStatusLine(false);
 }
 
-bool WifiSettings::startJoin(QString ssid, JoinCommand command) {
+// static
+QString WifiSettings::joinProfileName(const JoinTarget& target, JoinCommand command) {
+    return command == JoinCommand::ConnectionUp ? target.profileName : target.ssid;
+}
+
+bool WifiSettings::startJoin(JoinTarget target, JoinCommand command) {
     if (!claimOpSlot()) {
         return false;
     }
+    const QString ssid = target.ssid;
     // Holds the slot from here, through the page change and the snapshot
     // read, until runNmcli() takes it: startScan() refuses while this is set.
     m_joinInFlight = true;
 
-    // Page 2 before the snapshot read below, which can take up to 2 s when
-    // NetworkManager is wedged, so the page is already the joining page by
+    // Page 2 before the snapshot read below, which can take about 3 s when
+    // NetworkManager is wedged (its 2 s bound plus the reap), so the page is already the joining page by
     // the time the GUI next paints.
     setJoinTarget(ssid);
     setPage(kPageJoining);
@@ -1067,6 +1332,10 @@ bool WifiSettings::startJoin(QString ssid, JoinCommand command) {
     } else {
         // Both unknown now. Not m_connectedProfile as a stand-in: it can be
         // stale, and a stale guess would let a cancel take down the live link.
+        // The snapshot reset is defensive: every way a join ends (success,
+        // failure, cancel) already consumes or clears it, so none should be
+        // left here. The start-profile reset is not: nothing else clears
+        // that one, so without it the previous join's would stand in.
         m_joinSnapshot.reset();
         m_joinStartProfile.reset();
         qWarning() << "WifiSettings: could not list profiles before joining" << ssid
@@ -1077,7 +1346,21 @@ bool WifiSettings::startJoin(QString ssid, JoinCommand command) {
     // characters they hold.
     QStringList args;
     if (command == JoinCommand::ConnectionUp) {
-        args = QStringList{"--wait", kConnectWaitSeconds, "connection", "up", "id", ssid};
+        // By UUID: the name need not be unique, and the SSID need not be the
+        // name at all. The name is only a fallback for a profile whose UUID
+        // the scan did not report, which parseSavedWifiProfiles() does not
+        // let through; kept so the command is never "up uuid" and nothing.
+        if (!target.profileUuid.isEmpty()) {
+            args = QStringList{"--wait",
+                    kConnectWaitSeconds,
+                    "connection",
+                    "up",
+                    "uuid",
+                    target.profileUuid};
+        } else {
+            args = QStringList{
+                    "--wait", kConnectWaitSeconds, "connection", "up", "id", target.profileName};
+        }
     } else {
         args = QStringList{"--wait", kConnectWaitSeconds, "device", "wifi", "connect", ssid};
         if (command == JoinCommand::ConnectWithPassword) {
@@ -1091,8 +1374,8 @@ bool WifiSettings::startJoin(QString ssid, JoinCommand command) {
 
     // Every "started" change is made by now, before runNmcli(), which can call
     // back before it returns.
-    if (!runNmcli(args, kConnectWatchdogMs, [this, ssid](const NmcliResult& result) {
-            onJoinFinished(ssid, result);
+    if (!runNmcli(args, kConnectWatchdogMs, [this, target, command](const NmcliResult& result) {
+            onJoinFinished(target, command, result);
         })) {
         // Unreachable: the slot was claimed above, and m_joinInFlight has kept
         // scans out of it since.
@@ -1104,9 +1387,15 @@ bool WifiSettings::startJoin(QString ssid, JoinCommand command) {
     return true;
 }
 
-void WifiSettings::onJoinFinished(const QString& ssid, const NmcliResult& result) {
+void WifiSettings::onJoinFinished(
+        const JoinTarget& target, JoinCommand command, const NmcliResult& result) {
     m_joinInFlight = false;
     m_pCoJoin->set(0.0);
+    const QString& ssid = target.ssid;
+    // What the snapshot and the start profile, both lists of profile names,
+    // are compared against: never the SSID for a saved profile, whose name
+    // can be anything.
+    const QString profileName = joinProfileName(target, command);
 
     // On every failure path below, the follow-up nmcli op starts before any
     // page change. A page change can show a Wi-Fi widget, and its
@@ -1125,15 +1414,19 @@ void WifiSettings::onJoinFinished(const QString& ssid, const NmcliResult& result
         // strands a box whose only link is this Wi-Fi. When the start
         // profile is unknown (the snapshot read failed), nothing is taken
         // down: a cancelled join that goes on to complete is recoverable.
-        if (!cleanupResidue(ssid)) {
+        if (!cleanupResidue(profileName)) {
             if (!m_joinStartProfile) {
-                qInfo() << "WifiSettings: not taking" << ssid
+                qInfo() << "WifiSettings: not taking" << profileName
                         << "down after the cancel, the profile the box was on is unknown";
-            } else if (ssid == *m_joinStartProfile) {
-                qInfo() << "WifiSettings: not taking" << ssid
+            } else if (profileName == *m_joinStartProfile) {
+                // By name, not UUID. With two profiles of one name this
+                // can only err towards leaving a link up, never towards
+                // taking the one the box was on down.
+                qInfo() << "WifiSettings: not taking" << profileName
                         << "down after the cancel, the box was on it when the join began";
             } else {
-                stopActivation(ssid);
+                stopActivation(profileName,
+                        command == JoinCommand::ConnectionUp ? target.profileUuid : QString());
                 // `connection down` also blocks that network's autoconnect
                 // until something asks for it explicitly, so the DJ who
                 // cancels while the box is on nothing is left with no link
@@ -1158,7 +1451,7 @@ void WifiSettings::onJoinFinished(const QString& ssid, const NmcliResult& result
 
     // Before the buffer is cleared: the redaction in describeFailure() needs it.
     const QString detail = describeFailure(result);
-    cleanupResidue(ssid);
+    cleanupResidue(profileName);
     if (result.started && !result.timedOut && isWrongPasswordError(result.err)) {
         // Info: a mistyped password is the DJ's business, not a fault.
         qInfo() << "WifiSettings: join of" << ssid << "rejected the password";
@@ -1178,44 +1471,52 @@ void WifiSettings::onJoinFinished(const QString& ssid, const NmcliResult& result
     rescanIfRowsStale();
 }
 
-bool WifiSettings::cleanupResidue(const QString& ssid) {
+bool WifiSettings::cleanupResidue(const QString& profileName) {
     const std::optional<QStringList> snapshot = std::exchange(m_joinSnapshot, std::nullopt);
     // No snapshot: nothing proves a profile by that name is new, so leave it.
     // Named in the snapshot: it was there before the attempt and is the DJ's.
-    if (!snapshot || snapshot->contains(ssid)) {
+    // A saved profile brought up by `connection up` always is, by its own
+    // name, which is why the name and not the SSID is what is looked for.
+    if (!snapshot || profileName.isEmpty() || snapshot->contains(profileName)) {
         return false;
     }
-    const bool started = runNmcli({"--wait", kShortWaitSeconds, "connection", "delete", "id", ssid},
+    // By name: a profile `device wifi connect` has only just created has no
+    // UUID this class ever saw.
+    const bool started = runNmcli(
+            {"--wait", kShortWaitSeconds, "connection", "delete", "id", profileName},
             kDisconnectWatchdogMs,
-            [this, ssid](const NmcliResult& result) {
+            [this, profileName](const NmcliResult& result) {
                 // "unknown connection" is the ordinary outcome when the attempt
                 // never got as far as creating a profile.
                 if (result.succeeded()) {
-                    qInfo() << "WifiSettings: removed the profile a failed join of" << ssid
-                            << "left behind";
+                    qInfo() << "WifiSettings: removed the profile" << profileName
+                            << "a failed join left behind";
                 } else {
-                    qInfo() << "WifiSettings: no profile to remove after the failed join of"
-                            << ssid << result.err.simplified();
+                    qInfo() << "WifiSettings: no profile" << profileName
+                            << "to remove after a failed join" << result.err.simplified();
                 }
                 // The rescan the failed join's link change asked for was
                 // refused while this delete held the slot.
                 rescanIfRowsStale();
             });
     if (!started) {
-        qWarning() << "WifiSettings: another nmcli call is running, so a profile the failed"
-                   << "join of" << ssid << "created may remain";
+        qWarning() << "WifiSettings: another nmcli call is running, so the profile"
+                   << profileName << "a failed join created may remain";
     }
     return started;
 }
 
-void WifiSettings::stopActivation(const QString& ssid) {
+void WifiSettings::stopActivation(const QString& profileName, const QString& profileUuid) {
     // Called from onJoinFinished() with the slot just freed, so this cannot be
     // refused in practice. "not an active connection" is the ordinary outcome
     // when NetworkManager had already given up on its own.
-    const bool started = runNmcli({"--wait", kShortWaitSeconds, "connection", "down", "id", ssid},
+    const QStringList args = profileUuid.isEmpty()
+            ? QStringList{"--wait", kShortWaitSeconds, "connection", "down", "id", profileName}
+            : QStringList{"--wait", kShortWaitSeconds, "connection", "down", "uuid", profileUuid};
+    const bool started = runNmcli(args,
             kDisconnectWatchdogMs,
-            [this, ssid](const NmcliResult& result) {
-                qInfo() << "WifiSettings: took" << ssid << "down after a cancelled join:"
+            [this, profileName](const NmcliResult& result) {
+                qInfo() << "WifiSettings: took" << profileName << "down after a cancelled join:"
                         << (result.succeeded() ? QStringLiteral("done")
                                                : result.err.simplified());
                 refreshStatus();
@@ -1223,7 +1524,7 @@ void WifiSettings::stopActivation(const QString& ssid) {
             });
     if (!started) {
         qWarning() << "WifiSettings: another nmcli call is running, so the cancelled join of"
-                   << ssid << "may still connect";
+                   << profileName << "may still connect";
     }
 }
 
@@ -1269,25 +1570,69 @@ bool WifiSettings::startForget() {
     if (!manageTargetStillConnected()) {
         return false;
     }
-    // The profile to delete is the one the box is on, by the name the status
-    // read just validated. Page 3 can name a network by its SSID where the
-    // profile is called something else, and `connection delete id <ssid>`
-    // would then fail, or hit an unrelated profile named like the SSID.
+    // The profile to delete is the one the box is on, the one the status read
+    // just validated. Page 3 can name a network by its SSID where the profile
+    // is called something else, and `connection delete id <ssid>` would then
+    // fail, or hit an unrelated profile named like the SSID. By the active
+    // connection's UUID, from the status read just taken, so a second profile
+    // sharing the name is never the one deleted. `connection delete id` with
+    // a shared name could delete both, so when that UUID is unknown the name
+    // is only used where no saved profile, or exactly one, has it.
     const QString profile = m_connectedProfile;
     const QString ssid = m_joinTarget;
-    if (profile.isEmpty() || !claimOpSlot()) {
+    if (profile.isEmpty()) {
         return false;
     }
-    return runNmcli({"--wait", kShortWaitSeconds, "connection", "delete", "id", profile},
+    QString uuid = m_connectedUuid;
+    if (uuid.isEmpty()) {
+        if (savedProfileNameCount(profile) > 1) {
+            qWarning() << "WifiSettings: not forgetting" << profile
+                       << "- more than one saved profile has that name and the status read"
+                       << "could not say which one is active";
+            goToList();
+            notify(tr("Could not tell which saved profile for %1 to forget, try again")
+                            .arg(ssid),
+                    Notifications::Severity::Warning);
+            return false;
+        }
+        uuid = uniqueUuidOfProfile(profile);
+    }
+    // Before the delete, while m_savedProfiles still lists the profile.
+    const QString forgottenSsid = connectedProfileSsid();
+    if (!claimOpSlot()) {
+        return false;
+    }
+    const QStringList args = uuid.isEmpty()
+            ? QStringList{"--wait", kShortWaitSeconds, "connection", "delete", "id", profile}
+            : QStringList{"--wait", kShortWaitSeconds, "connection", "delete", "uuid", uuid};
+    return runNmcli(args,
             kDisconnectWatchdogMs,
-            [this, profile, ssid](const NmcliResult& result) {
+            [this, profile, uuid, ssid, forgottenSsid](const NmcliResult& result) {
                 m_pCoForget->set(0.0);
+                // Counted before anything below can start the scan that
+                // replaces m_savedProfiles: the other profiles that join the
+                // same network, which this deliberately did not delete.
+                const bool otherProfileRemains = std::any_of(m_savedProfiles.cbegin(),
+                        m_savedProfiles.cend(),
+                        [&](const SavedProfile& saved) {
+                            return saved.ssid == forgottenSsid &&
+                                    (uuid.isEmpty() ? saved.name != profile
+                                                    : saved.uuid != uuid);
+                        });
                 goToList();
                 refreshStatus();
                 if (result.succeeded()) {
                     startScan(false);
-                    // Named as page 3 named it, by the SSID the DJ tapped.
-                    notify(tr("Forgot %1").arg(ssid), Notifications::Severity::Info);
+                    if (otherProfileRemains) {
+                        // "Forgot Home" would be untrue while another saved
+                        // profile still joins Home, so name the one that went.
+                        notify(tr("Forgot the saved profile %1. %2 is still saved.")
+                                        .arg(profile, ssid),
+                                Notifications::Severity::Info);
+                    } else {
+                        // Named as page 3 named it, by the SSID the DJ tapped.
+                        notify(tr("Forgot %1").arg(ssid), Notifications::Severity::Info);
+                    }
                     return;
                 }
                 const QString detail = describeFailure(result);

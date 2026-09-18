@@ -26,7 +26,10 @@ struct WifiRow {
     int signalPercent = 0;   // 0..100
     bool secured = false;    // SECURITY non-empty and not "--"
     bool enterprise = false; // SECURITY contains "802.1X"
-    bool saved = false;      // a 802-11-wireless profile whose NAME equals ssid
+    // A saved 802-11-wireless profile's 802-11-wireless.ssid equals ssid.
+    // Matched on the SSID, never on the profile NAME: a profile made by the
+    // imager or by hand can be called "preconfigured" and join "Home".
+    bool saved = false;
     bool active = false;     // IN-USE == "*"
 };
 Q_DECLARE_METATYPE(WifiRow)
@@ -100,11 +103,13 @@ class WifiSettings : public QObject {
         return static_cast<int>(m_password.size());
     }
 
-    // Whether the box is on this row's network now. In state 1, a row named
-    // like the connected profile always is (the common case, where profile
-    // name == SSID, and fresh from the last status read). Otherwise a row's
-    // active flag is what the scan saw, and only counts while the box is
-    // still on the connection it was scanned on.
+    // Whether the box is on this row's network now. In state 1, a row whose
+    // SSID is the connected profile's SSID always is (fresh from the last
+    // status read, and looked up through the saved profiles, since the
+    // profile's name need not be its SSID: a row called "Cafe" is not the
+    // current network just because the profile the box is on is called
+    // "Cafe"). Otherwise a row's active flag is what the scan saw, and only
+    // counts while the box is still on the connection it was scanned on.
     //
     // Public because it decides both halves of what the DJ sees: the tap
     // dispatch below uses it, and the list widget styles the row's highlight
@@ -158,11 +163,33 @@ class WifiSettings : public QObject {
     // Empty SSIDs (hidden networks) are dropped. nmcli prints one row per
     // BSSID, so rows are deduplicated by SSID, keeping the in-use row, else
     // the strongest. Ordered active first, then saved, then signal
-    // descending, then SSID ascending (case-insensitive).
-    static QList<WifiRow> parseWifiList(const QString& output, const QStringList& savedWifiNames);
-    // From `connection show` terse NAME,TYPE[,...] output: names of
-    // 802-11-wireless profiles.
-    static QStringList parseSavedWifiNames(const QString& output);
+    // descending, then SSID ascending (case-insensitive). A row is saved when
+    // its SSID is in savedSsids, the SSIDs (not the names) of the saved
+    // profiles.
+    static QList<WifiRow> parseWifiList(const QString& output, const QStringList& savedSsids);
+
+    // One saved Wi-Fi profile. name is what `device status` reports as the
+    // CONNECTION and what the join snapshot lists; uuid is what the nmcli
+    // commands that act on a known profile address it by, so a duplicate
+    // name, or a name that looks like an option, can never pick the wrong
+    // one; ssid is what the scan's rows are matched against.
+    struct SavedProfile {
+        QString name;
+        QString uuid;
+        QString ssid;
+    };
+    // The scan's first step. From `connection show` terse NAME,UUID,TYPE
+    // output: the 802-11-wireless profiles, in nmcli's order, with name and
+    // uuid filled in and ssid left empty (this listing cannot show it).
+    static QList<SavedProfile> parseWifiProfileList(const QString& output);
+    // The scan's second step. From `connection show uuid <A> uuid <B> ...`
+    // terse connection.id,connection.uuid,802-11-wireless.ssid output: one
+    // block of key:value lines per profile, separated by an empty line. A
+    // block is keyed on its connection.uuid, never on its position; a block
+    // with no uuid or no SSID is dropped (a profile that is not Wi-Fi omits
+    // the SSID line altogether), a repeated uuid is kept once, and unknown
+    // keys are ignored.
+    static QList<SavedProfile> parseSavedWifiProfiles(const QString& output);
     // From `device status` terse DEVICE,TYPE,STATE,CONNECTION: the first row
     // whose TYPE is exactly "wifi" (so never the wifi-p2p pseudo-device).
     struct WifiDevice {
@@ -174,6 +201,10 @@ class WifiSettings : public QObject {
     // From `device show` terse IP4.ADDRESS: "192.168.4.39/22" -> "192.168.4.39",
     // empty if none.
     static QString parseIpv4(const QString& output);
+    // From `device show` terse IP4.ADDRESS,GENERAL.CON-UUID: the UUID of the
+    // connection active on the device, empty if none. Keyed on the field
+    // name, never on the line's position.
+    static QString parseConnectionUuid(const QString& output);
     // From `connection show` terse NAME,TYPE,DEVICE output: the name of the
     // profile active on device, empty if none is.
     static QString parseActiveProfile(const QString& output, const QString& device);
@@ -201,11 +232,44 @@ class WifiSettings : public QObject {
 
   private:
     // The state-machine test drives a real instance, which means seeding the
-    // rows a tap acts on and reading back the page and selected index. Every
-    // other route to those runs nmcli, which has no business in that harness;
-    // the friendship is what lets the test stay process-free rather than
-    // leaving the page transitions and the CO clamping untested.
+    // rows a tap acts on, reading back the page and selected index, and
+    // standing in for nmcli through s_pNmcliFake. The friendship is what lets
+    // the test stay process-free rather than leaving the page transitions,
+    // the CO clamping and the join, cancel and forget guards untested.
     friend class WifiSettingsStateTest;
+
+    // The test seam for nmcli, and the only one. Declared here, installed
+    // only by WifiSettingsStateTest (the one class that can name
+    // s_pNmcliFake), and null everywhere else, in which case every nmcli run
+    // is a real QProcess exactly as if this did not exist. While it is set,
+    // no QProcess is ever constructed: readNmcliSync() asks readSync(), and
+    // runNmcli() hands the argv to startAsync() and keeps the callback until
+    // the test ends the op through finishOp(). startAsync() returning false
+    // ends the op at once as one that never started, which is what a fake
+    // does with a call it was not told to expect, so an unscripted call
+    // fails rather than runs.
+    struct NmcliFake {
+        virtual ~NmcliFake() = default;
+        virtual bool readSync(const QStringList& args,
+                int timeoutMs,
+                QString* pOut,
+                QString* pError) = 0;
+        virtual bool startAsync(const QStringList& args) = 0;
+    };
+    static NmcliFake* s_pNmcliFake;
+
+    // One synchronous nmcli read: the tryUnmount() shape, with an explicit
+    // bound instead of waitForFinished()'s 30 s default. Only a normal exit 0
+    // counts as an answer, and then stdout goes to *pOut; anything else
+    // writes a reason to *pError. A read that times out is killed and reaped,
+    // for up to kReapTimeoutMs more, before this returns, so the GUI thread
+    // can stall for timeoutMs plus about 1 s. Never pumps the event loop, so
+    // it cannot re-enter this class. Static: it touches no member but the
+    // test seam.
+    static bool readNmcliSync(const QStringList& args,
+            int timeoutMs,
+            QString* pOut,
+            QString* pError);
 
     // How one async nmcli run ended. Exactly one of these reaches the
     // callback given to runNmcli().
@@ -224,14 +288,29 @@ class WifiSettings : public QObject {
     };
     using NmcliCallback = std::function<void(const NmcliResult&)>;
 
-    // Which nmcli command a join runs. A saved profile is brought up by name;
-    // anything else is created by `device wifi connect`, with or without a
-    // password.
+    // Which nmcli command a join runs. A saved profile is brought up by its
+    // UUID; anything else is created by `device wifi connect`, with or
+    // without a password.
     enum class JoinCommand {
         ConnectionUp,
         Connect,
         ConnectWithPassword,
     };
+
+    // What a join is aimed at. ssid is the network, as the row and page 2
+    // name it. profileName and profileUuid are the saved profile a
+    // ConnectionUp brings up, and are empty for the Connect paths, whose
+    // profile `device wifi connect` names after the SSID.
+    struct JoinTarget {
+        QString ssid;
+        QString profileName;
+        QString profileUuid;
+    };
+    // The name of the profile a join of target by command brings up or
+    // creates: the saved profile's name for ConnectionUp, the SSID for the
+    // Connect paths. What the join snapshot and the start profile, which are
+    // both lists of profile names, are compared against.
+    static QString joinProfileName(const JoinTarget& target, JoinCommand command);
 
     // Starts `nmcli <args>` in a QProcess owned by this object, with a
     // watchdog that kills it after watchdogMs. Returns false, without calling
@@ -243,10 +322,17 @@ class WifiSettings : public QObject {
     // before calling this. The in-flight slot is already free when the
     // callback runs, so a callback may start the next op.
     bool runNmcli(const QStringList& args, int watchdogMs, NmcliCallback callback);
-    // The single terminating path of an async op: stops the watchdog,
-    // disconnects and reaps the process, frees the slot, then calls back.
-    // Ignores a process that is not the one in flight.
+    // The terminating path of an async op run in a real process: disconnects
+    // and reaps the process, then hands over to finishOp(). Ignores a process
+    // that is not the one in flight.
     void completeOp(QProcess* pProcess, const NmcliResult& result);
+    // The part of ending an op that every op shares, whether it ran in a
+    // process or in the test seam: stops the watchdog, frees the slot, then
+    // calls back.
+    void finishOp(const NmcliResult& result);
+    // Ends the in-flight op with result, by whichever of the two paths above
+    // fits it. No-op when nothing is in flight.
+    void endOp(const NmcliResult& result);
     // Ends the in-flight op as cancelled. No-op when nothing is in flight.
     void abortOp();
     // Frees the op slot for a user action (join, disconnect, forget, radio
@@ -260,25 +346,49 @@ class WifiSettings : public QObject {
     // Synchronous status read (device, radio, IPv4). The three reads share one
     // 2 s budget rather than each having their own, and the first that fails,
     // or that finds the budget spent, short-circuits to state 4. So one
-    // refresh blocks the GUI for about 2 s at worst whether the reads fail or
-    // merely answer slowly, which matters: this runs on the 10 s tick, on
-    // showEvent, and before every page 3 action.
+    // refresh blocks the GUI for about 3 s at worst whether the reads fail or
+    // merely answer slowly: the 2 s budget, plus up to 1 s reaping a read
+    // that timed out and was killed. That matters: this runs on the 10 s
+    // tick, on showEvent, and before every page 3 action.
     void refreshStatus();
     // Records one status read and reacts to what changed. connection (the
-    // profile name) and ipv4 only mean anything in state 1. A change of state
-    // or of the connected network drops pages 1 and 3 where they no longer
-    // apply and, while a client is visible, rescans so the rows' active flag
-    // catches up.
+    // profile name), ipv4 and uuid (the active connection's UUID, empty when
+    // that read failed) only mean anything in state 1. A change of state or
+    // of the connected network (its name, or between two known UUIDs, which
+    // catches a move between two profiles of one name) drops page 3, and
+    // drops page 1 when the adapter or the radio is gone, and, while a
+    // client is visible, rescans so the rows' active flag catches up. Page 1
+    // survives state 4: one slow status read must not throw away what the DJ
+    // has typed, and submitJoin() refuses outside states 0 and 1 anyway.
     void applyStatus(int state,
             const QString& connection = QString(),
-            const QString& ipv4 = QString());
+            const QString& ipv4 = QString(),
+            const QString& uuid = QString());
     // Rebuilds the status line from the state, connection and rows, and emits
     // statusChanged when it or the state changed.
     void updateStatusLine(bool stateChanged);
     // The connected network's SSID: that of the active row when the rows were
-    // scanned on the current connection, else the profile name (which is the
-    // SSID for every profile `device wifi connect` creates).
+    // scanned on the current connection, else connectedProfileSsid().
     QString connectedSsid() const;
+    // The SSID the connected profile joins: looked up by m_connectedUuid
+    // first, which is exact even when two saved profiles share a name, then
+    // by ssidOfProfile(m_connectedProfile).
+    QString connectedProfileSsid() const;
+    // The SSID of the saved profile called name, from the last scan's saved
+    // profiles (the first, if two share the name, which is why the UUID is
+    // asked first wherever it is known). Falls back to name itself when no
+    // saved profile has it, which is right for every profile
+    // `device wifi connect` creates, since it names them after the SSID.
+    QString ssidOfProfile(const QString& name) const;
+    // How many saved profiles are called name.
+    int savedProfileNameCount(const QString& name) const;
+    // The first saved profile for ssid, or nullptr when none is saved.
+    const SavedProfile* savedProfileForSsid(const QString& ssid) const;
+    // The UUID of the saved profile called name when exactly one saved
+    // profile has that name, else empty: with two of the same name there is
+    // no telling from the name which one the box is on.
+    QString uniqueUuidOfProfile(const QString& name) const;
+    QStringList savedSsids() const;
     // Rescans when a client is visible and the rows are stale: marked so
     // (m_rowsStale), or scanned on another connection than the current one.
     // Called at the ends of ops that held the slot while a rescan could have
@@ -286,18 +396,23 @@ class WifiSettings : public QObject {
     // by the next refresh at the latest.
     void rescanIfRowsStale();
     // Re-reads status before a page 3 action and checks that page 3 still
-    // shows the network the box is on. Otherwise returns to the list and
-    // returns false, so Disconnect never acts on one network while naming
-    // another.
+    // shows the network the box is on, by SSID. Otherwise returns to the list
+    // and returns false, so Disconnect never acts on one network while naming
+    // another. A refresh that ends in state 4 refuses too, and says the
+    // service is not answering rather than that the link has gone.
     bool manageTargetStillConnected();
     bool isUsableState() const {
         return m_state == kStateDisconnected || m_state == kStateConnected;
     }
 
-    // Both steps of a scan: saved profile names, then the network list.
-    // Returns whether the scan started. State 0 and 1 only, and refused
+    // All three steps of a scan: the saved Wi-Fi profiles, their SSIDs (one
+    // call for all of them, skipped when there are none), then the network
+    // list. Returns whether the scan started. State 0 and 1 only, and refused
     // (silently) while any op or a starting join holds the slot.
     bool startScan(bool explicitRescan);
+    // The scan's last step, the network list, with the saved profiles
+    // already in m_savedProfiles.
+    void startScanList(const QString& rescan, const QString& connectionAtStart);
     // connectionAtStart is m_connectedProfile when the scan began: the
     // connection the rows' active flag describes.
     void onScanFinished(const NmcliResult& result, const QString& connectionAtStart);
@@ -305,23 +420,29 @@ class WifiSettings : public QObject {
 
     // Returns whether the join started. Refuses (notifies) while an op other
     // than a scan is in flight.
-    // Takes ssid by value: callers pass m_joinTarget, which this rewrites.
-    bool startJoin(QString ssid, JoinCommand command);
-    void onJoinFinished(const QString& ssid, const NmcliResult& result);
-    // Deletes, asynchronously, a profile named exactly ssid if the join
-    // snapshot shows it did not exist before the attempt. Consumes the
+    // Takes target by value: callers build it from m_joinTarget, which this
+    // rewrites.
+    bool startJoin(JoinTarget target, JoinCommand command);
+    void onJoinFinished(const JoinTarget& target, JoinCommand command, const NmcliResult& result);
+    // Deletes, asynchronously, a profile named exactly profileName if the
+    // join snapshot shows it did not exist before the attempt. Consumes the
     // snapshot. Never deletes a profile that was there before. Returns
     // whether it started a delete.
-    bool cleanupResidue(const QString& ssid);
-    // `connection down id <ssid>`, asynchronously: stops NetworkManager
-    // carrying on with an activation whose nmcli was killed by a cancel.
-    void stopActivation(const QString& ssid);
+    bool cleanupResidue(const QString& profileName);
+    // `connection down`, asynchronously, by UUID when it is known and by name
+    // otherwise: stops NetworkManager carrying on with an activation whose
+    // nmcli was killed by a cancel.
+    void stopActivation(const QString& profileName, const QString& profileUuid);
 
     bool startDisconnect();
-    // Deletes the connected profile by its name (m_connectedProfile, just
-    // validated by manageTargetStillConnected()), not by the row's SSID,
+    // Deletes the connected profile (just validated by
+    // manageTargetStillConnected()) by m_connectedUuid; where that read
+    // failed, by the one saved profile of that name's UUID, or by the name
+    // when no saved profile has it, and not at all (a notification instead)
+    // when two saved profiles share the name. Never by the row's SSID,
     // which differs from the profile name for a profile not made by
-    // `device wifi connect`.
+    // `device wifi connect`. Other profiles for the same SSID are left
+    // alone, and the notification says so.
     bool startForget();
     bool startRadioOn();
 
@@ -352,9 +473,11 @@ class WifiSettings : public QObject {
     UserSettingsPointer m_pConfig;
 
     QList<WifiRow> m_rows;
-    // Names of the saved wifi profiles, from the last scan. What each row's
-    // saved flag is computed against.
-    QStringList m_savedWifiNames;
+    // The saved Wi-Fi profiles, from the last scan. Their SSIDs are what each
+    // row's saved flag is computed against; their names are how the
+    // connected profile (which status reads report by name) is mapped to an
+    // SSID; their UUIDs are what joins and forgets address them by.
+    QList<SavedProfile> m_savedProfiles;
     QString m_statusLine;
     int m_state = kStateDisconnected;
     // Interface name from `device status` (wlan0 on bitepi), never hardcoded.
@@ -364,6 +487,11 @@ class WifiSettings : public QObject {
     // unless in state 1.
     QString m_connectedProfile;
     QString m_connectedIpv4;
+    // The active connection's UUID, from the same read as the IPv4. Empty
+    // unless in state 1, and empty in state 1 when that read failed, in
+    // which case everything that needs it falls back to the name, or, where
+    // the name is ambiguous and the action destructive (Forget), refuses.
+    QString m_connectedUuid;
     // m_connectedProfile as it was when the scan behind m_rows began. The
     // rows' active flags describe that connection and no other, so they are
     // only trusted while it still equals m_connectedProfile.
@@ -408,7 +536,7 @@ class WifiSettings : public QObject {
     // that the tap started something that now owns the [Wifi],join CO until
     // it ends.
     bool m_joinInFlight = false;
-    // Whether the op in flight is (either step of) a scan, the one op a user
+    // Whether the op in flight is (any step of) a scan, the one op a user
     // action may pre-empt.
     bool m_scanInFlight = false;
     QTimer m_opWatchdog;
