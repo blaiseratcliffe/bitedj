@@ -395,7 +395,10 @@ void WWifiKeypad::refreshLayout() {
         if (m_currentLayout == kLayoutLetters && m_shiftActive) {
             ch = ch.toUpper();
         }
-        pButton->setText(QString(ch));
+        // A QPushButton reads '&' as a mnemonic marker and would draw the
+        // '&' key blank, so its label is doubled. Label only: what the key
+        // types comes from m_currentChars, which keeps the raw character.
+        pButton->setText(ch == QLatin1Char('&') ? QStringLiteral("&&") : QString(ch));
         pButton->setEnabled(true);
         m_currentChars[i] = ch;
     }

@@ -26,6 +26,7 @@
 #include <QScrollBar>
 #include <QSignalSpy>
 #include <QStyleOptionSlider>
+#include <algorithm>
 #include <memory>
 
 #include "control/controlpushbutton.h"
@@ -247,6 +248,55 @@ TEST_F(WWifiListTest, TapActivatesTheRow) {
     EXPECT_EQ(0, spy.at(0).at(0).toInt());
 }
 
+// A scan landing (networksChanged -> setRows) between press and release
+// replaces the rows, and a reordered list puts a different network under the
+// same point. Releasing there must not activate that network: the DJ pressed
+// NET0, and an open or saved network joins on activation with no further
+// confirm. The control case, the same gesture with no rebuild, is
+// TapActivatesTheRow above.
+TEST_F(WWifiListTest, RebuildBetweenPressAndReleaseCancelsTheTap) {
+    QSignalSpy spy(m_pList.get(), &WWifiList::rowActivated);
+    const QPoint pos = ssidButtonCenter(0);
+
+    press(pos);
+    QList<WifiRow> reordered = makeRows(kRowCount);
+    std::reverse(reordered.begin(), reordered.end());
+    m_pList->setRows(reordered);
+    layOut();
+    // Precondition: the point the finger is on now holds a different
+    // network, and rows are still under it, so a hit-test at release time
+    // would find one.
+    QPushButton* pNowUnderFinger = ssidButtons().at(0);
+    ASSERT_EQ(QStringLiteral("NET%1").arg(kRowCount - 1), pNowUnderFinger->text());
+    ASSERT_TRUE(pNowUnderFinger->rect().contains(pNowUnderFinger->mapFromGlobal(pos)));
+    release(pos);
+
+    EXPECT_EQ(0, spy.count());
+
+    // Only that gesture was cancelled: a fresh tap on the new list works.
+    tap(pos);
+    ASSERT_EQ(1, spy.count());
+    EXPECT_EQ(0, spy.at(0).at(0).toInt());
+}
+
+TEST_F(WWifiListTest, AmpersandInAnSsidIsShownNotEatenAsAMnemonic) {
+    QList<WifiRow> rows = makeRows(1);
+    rows[0].ssid = QStringLiteral("AT&T");
+    m_pList->setRows(rows);
+    layOut();
+
+    // QPushButton drops a lone '&' as a mnemonic marker ("ATT"); "&&" is how
+    // a button is told to draw one literal '&'.
+    ASSERT_EQ(1, ssidButtons().size());
+    EXPECT_EQ(QStringLiteral("AT&&T"), ssidButtons().at(0)->text());
+
+    // Display only: the tap still dispatches by row, unaffected.
+    QSignalSpy spy(m_pList.get(), &WWifiList::rowActivated);
+    tap(ssidButtonCenter(0));
+    ASSERT_EQ(1, spy.count());
+    EXPECT_EQ(0, spy.at(0).at(0).toInt());
+}
+
 TEST_F(WWifiListTest, TapActivatesTheRowScrolledUnderTheFinger) {
     scrollBar()->setValue(scrollBar()->maximum());
     layOut();
@@ -361,8 +411,11 @@ TEST_F(WWifiListTest, SignalGlyphMatchesTheDocumentedThresholds) {
 }
 
 TEST(WWifiListNoSingletonTest, ConstructingWithoutWifiSettingsRendersAnInertPlaceholder) {
-    // WifiSettings is never constructed in this test binary, so this also
-    // covers the real stock-Mixxx fallback: tryInstance() == nullptr.
+    // No WifiSettings exists while this test runs: WifiSettingsStateTest, in
+    // the same binary, constructs one per test and destroys it before the
+    // test ends, and gtest runs tests one at a time. So this also covers the
+    // real stock-Mixxx fallback: tryInstance() == nullptr.
+    ASSERT_EQ(nullptr, WifiSettings::tryInstance());
     WWifiList list;
     list.resize(kListWidth, kListHeight);
     list.show();

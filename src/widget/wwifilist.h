@@ -2,6 +2,7 @@
 
 #include <QList>
 #include <QPointF>
+#include <QPointer>
 #include <QPushButton>
 #include <QString>
 
@@ -156,6 +157,15 @@ class WWifiList : public WWidget {
     // Press and last-seen positions in global coordinates, which stay valid
     // while the content underneath us scrolls away.
     QPointF m_pressGlobalPos;
+    // The row frame the press landed on, or null if it landed on none. A tap
+    // acts on this row and only this row: rows are rebuilt whenever a scan
+    // lands (networksChanged), which can happen between press and release
+    // and put a different network under the same point, so the release
+    // hit-test alone would activate a row the DJ never pressed -- and an open
+    // or saved network joins straight away. A QPointer because rebuildRows
+    // deleteLater()s the old frames; it clears itself once one is gone, and
+    // rebuildRows clears it immediately anyway (see there).
+    QPointer<QWidget> m_pPressedFrame;
     qreal m_lastGlobalY;
     // Sub-pixel remainder of the movement not yet applied to the scroll bar.
     qreal m_remainingDy;

@@ -67,6 +67,17 @@ QString signalGlyph(int percent) {
     }
     return glyph;
 }
+
+// QPushButton reads '&' in its text as a mnemonic marker: it drops the '&'
+// and underlines the next character, so an SSID "AT&T" would show as "ATT".
+// SSIDs are whatever the broadcaster chose, so double every '&' to show it
+// literally. Display only: nothing reads the text back, dispatch goes by row
+// index.
+QString buttonTextFor(const QString& ssid) {
+    QString text = ssid;
+    text.replace(QLatin1Char('&'), QStringLiteral("&&"));
+    return text;
+}
 } // namespace
 
 WWifiList::WWifiList(QWidget* parent)
@@ -96,8 +107,9 @@ WWifiList::WWifiList(QWidget* parent)
     // (untrusted, broadcast by anyone nearby); AutoText would let one
     // containing markup render as rich text. The per-row SSID text (below,
     // in rebuildRows()) is a QPushButton's text, not a QLabel's -- a button
-    // draws its text via QStyle as plain text regardless of format, so it
-    // has no equivalent rich-text risk and needs no change here.
+    // never renders markup, so it has no rich-text risk. It is not quite
+    // plain text either: a button reads '&' as a mnemonic marker and drops
+    // it, which rebuildRows() undoes with buttonTextFor().
     m_pStatusLabel->setTextFormat(Qt::PlainText);
     pOuterLayout->addWidget(m_pStatusLabel);
     pOuterLayout->addWidget(m_pScrollArea);
@@ -183,6 +195,7 @@ void WWifiList::mousePressEvent(QMouseEvent* e) {
             pScrollBar->rect().contains(
                     pScrollBar->mapFromGlobal(e->globalPosition().toPoint()))) {
         m_dragState = DragState::ScrollBar;
+        m_pPressedFrame.clear();
         forwardToScrollBar(e);
         e->accept();
         return;
@@ -192,6 +205,8 @@ void WWifiList::mousePressEvent(QMouseEvent* e) {
     // the row activation is dispatched on release.
     m_dragState = DragState::Pending;
     m_pressGlobalPos = e->globalPosition();
+    const int pressedIndex = rowIndexAt(m_pressGlobalPos.toPoint());
+    m_pPressedFrame = pressedIndex >= 0 ? m_rowFrames.at(pressedIndex) : nullptr;
     m_lastGlobalY = m_pressGlobalPos.y();
     m_remainingDy = 0;
     e->accept();
@@ -236,6 +251,8 @@ void WWifiList::mouseMoveEvent(QMouseEvent* e) {
 void WWifiList::mouseReleaseEvent(QMouseEvent* e) {
     const DragState state = m_dragState;
     m_dragState = DragState::Idle;
+    const QPointer<QWidget> pPressedFrame = m_pPressedFrame;
+    m_pPressedFrame.clear();
 
     if (state == DragState::ScrollBar) {
         forwardToScrollBar(e);
@@ -243,10 +260,15 @@ void WWifiList::mouseReleaseEvent(QMouseEvent* e) {
         return;
     }
     if (state == DragState::Pending) {
-        // The finger never moved: a tap after all.
+        // The finger never moved: a tap after all. It counts only if the
+        // row under the finger now is the very frame it went down on. A
+        // rebuild in between already cancelled the gesture (see
+        // rebuildRows), so this is belt and braces: comparing frames rather
+        // than indices means a new list can never pass for the old one, even
+        // if the same index now holds a different network.
         const QPoint globalPos = e->globalPosition().toPoint();
         const int index = rowIndexAt(globalPos);
-        if (index >= 0) {
+        if (index >= 0 && pPressedFrame && m_rowFrames.at(index) == pPressedFrame.data()) {
             activateRowAt(index);
             e->accept();
             return;
@@ -295,6 +317,10 @@ void WWifiList::onRowClicked() {
     // Desktop/mouse path: a real QMouseEvent reaches the child button
     // directly and emits clicked(). (On the touchscreen this never fires;
     // the press and release handlers above do the dispatching instead.)
+    // A mouse press lands on the button itself, so this path is already
+    // tied to the pressed row: if a rebuild replaced the rows mid-click, the
+    // sender is an old, detached button no longer in m_ssidButtons, indexOf
+    // gives -1 and activateRowAt ignores it.
     const int index = m_ssidButtons.indexOf(qobject_cast<QPushButton*>(sender()));
     activateRowAt(index);
 }
@@ -314,6 +340,16 @@ void WWifiList::rebuildRows(const QList<WifiRow>& rows) {
     // deleteLater so Qt can finish dispatching the click event that
     // triggered the rebuild -- see WUsbList::rebuildRows for why a
     // synchronous delete from inside a button's own clicked handler crashes.
+    //
+    // A rebuild mid-gesture cancels a pending tap: the row the finger went
+    // down on is gone, and whatever now sits under it is a network the DJ
+    // never chose. They tap again on the new list. A drag already under way
+    // (Scrolling, ScrollBar) carries on, since it only moves the scroll bar
+    // and activates nothing.
+    if (m_dragState == DragState::Pending) {
+        m_dragState = DragState::Idle;
+    }
+    m_pPressedFrame.clear();
     for (QWidget* pFrame : std::as_const(m_rowFrames)) {
         pFrame->setParent(nullptr);
         pFrame->deleteLater();
@@ -345,7 +381,7 @@ void WWifiList::rebuildRows(const QList<WifiRow>& rows) {
         pRowLayout->setContentsMargins(0, 0, 0, 0);
         pRowLayout->setSpacing(6);
 
-        auto* pSsid = new QPushButton(row.ssid, pFrame);
+        auto* pSsid = new QPushButton(buttonTextFor(row.ssid), pFrame);
         pSsid->setObjectName(kSsidObjectName);
         pSsid->setFocusPolicy(Qt::NoFocus);
         connect(pSsid, &QPushButton::clicked, this, &WWifiList::onRowClicked);

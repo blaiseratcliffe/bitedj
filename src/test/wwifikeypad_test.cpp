@@ -26,6 +26,7 @@
 #include <utility>
 
 #include "control/controlpushbutton.h"
+#include "preferences/wifisettings.h"
 #include "test/mixxxtest.h"
 
 namespace {
@@ -223,6 +224,26 @@ TEST_F(WWifiKeypadTest, SpaceTypesASpaceCharacter) {
     EXPECT_EQ(QChar(' '), spy.at(0).at(0).toChar());
 }
 
+// QPushButton reads a lone '&' as a mnemonic marker and draws nothing for
+// it, which left the '&' key blank. Its label is "&&" (one literal '&' on
+// screen), while what it types is still the single raw character.
+TEST_F(WWifiKeypadTest, AmpersandKeyShowsItsLabelAndTypesARawAmpersand) {
+    QSignalSpy spy(m_pKeypad.get(), &WWifiKeypad::characterTyped);
+    tap(centerOf(namedButton("WifiKeyLayout"))); // -> "123", which holds '&'
+
+    QPushButton* pAmpersand = nullptr;
+    for (QPushButton* pKey : keyButtons()) {
+        if (pKey->text() == QStringLiteral("&&")) {
+            pAmpersand = pKey;
+        }
+    }
+    ASSERT_NE(nullptr, pAmpersand) << "no key labelled \"&&\" in the 123 layout";
+
+    tap(centerOf(pAmpersand));
+    ASSERT_EQ(1, spy.count());
+    EXPECT_EQ(QChar('&'), spy.at(0).at(0).toChar());
+}
+
 TEST_F(WWifiKeypadTest, BackspaceEmitsBackspaceTyped) {
     QSignalSpy spy(m_pKeypad.get(), &WWifiKeypad::backspaceTyped);
     tap(centerOf(namedButton("WifiKeyBackspace")));
@@ -242,8 +263,11 @@ TEST_F(WWifiKeypadTest, CancelAndJoinEmitTheirSignalsWithoutTheSingleton) {
 }
 
 TEST_F(WWifiKeypadTest, InertWithoutTheSingletonStillRendersAndDoesNotCrash) {
-    // WifiSettings is never constructed in this test binary, so this also
-    // covers the real stock-Mixxx fallback: tryInstance() == nullptr.
+    // No WifiSettings exists while this test runs: WifiSettingsStateTest, in
+    // the same binary, constructs one per test and destroys it before the
+    // test ends, and gtest runs tests one at a time. So this also covers the
+    // real stock-Mixxx fallback: tryInstance() == nullptr.
+    ASSERT_EQ(nullptr, WifiSettings::tryInstance());
     QLabel* pTitle = m_pKeypad->findChild<QLabel*>(QStringLiteral("WifiKeypadTitle"));
     QLabel* pField = m_pKeypad->findChild<QLabel*>(QStringLiteral("WifiKeypadField"));
     ASSERT_NE(nullptr, pTitle);
