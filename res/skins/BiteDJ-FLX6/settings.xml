@@ -34,6 +34,10 @@
             <SetVariable name="Text">Waveform</SetVariable>
             <SetVariable name="ConfigKey">waveform</SetVariable>
           </Template>
+          <Template src="skin:templates/setting_subtab_button.xml">
+            <SetVariable name="Text">Network</SetVariable>
+            <SetVariable name="ConfigKey">wifi</SetVariable>
+          </Template>
         </Children>
       </WidgetGroup>
 
@@ -1791,6 +1795,265 @@
                 <ObjectName>SettingsSpacer</ObjectName>
                 <Size>0me,0me</Size>
               </WidgetGroup>
+
+            </Children>
+          </WidgetGroup>
+
+          <!-- Wi-Fi. Appended last so the existing stack child indices (0-5)
+               stay stable; this is child 6. [SettingsTab],wifi is created on
+               demand by this trigger attribute, same as every other sub-tab
+               here, so no C++ registration is needed for the trigger itself,
+               only for the WifiList/WifiStatus tags below, which Phase 2
+               already added to legacyskinparser.cpp next to UsbList.
+
+               The page body is a nested WidgetStack keyed on [Wifi],page,
+               the same idiom as the Power row's confirm stack above
+               (settings.xml:938-1139, [System],power_arm): a plain
+               ControlObject with no behavior attached drives the page index
+               directly, per WWidgetStack::onCurrentPageControlChanged
+               casting the control value straight to slotSetIndex. contract.md
+               pins the four pages: 0 list, 1 password entry, 2 joining, 3
+               manage connected network (WifiSettings::kPageList/
+               kPagePassword/kPageJoining/kPageManage).
+
+               Page 1 is a placeholder label per Ruling 4 in progress.md:
+               Phase 4 swaps it for <WifiKeypad>, which does not exist yet;
+               referencing the tag now would be a check-log.sh warning (an
+               unknown widget silently does not exist) on every intermediate
+               deploy between this phase and that one. -->
+          <WidgetGroup trigger="[SettingsTab],wifi">
+            <ObjectName>SettingsPanel</ObjectName>
+            <Layout>vertical</Layout>
+            <SizePolicy>me,me</SizePolicy>
+            <Children>
+
+              <WidgetStack currentpage="[Wifi],page">
+                <SizePolicy>me,me</SizePolicy>
+                <Children>
+
+                  <!-- Page 0: list. WifiList is WWifiList (src/widget/
+                       wwifilist.h), shaped like UsbList above: a
+                       QScrollArea/QGridLayout content area behind the
+                       ObjectName WifiList wrapper, so #WifiList-scoped QSS
+                       below reaches its scroll bar and background exactly
+                       the way #UsbList's does. -->
+                  <WidgetGroup>
+                    <Layout>vertical</Layout>
+                    <SizePolicy>me,me</SizePolicy>
+                    <Children>
+
+                      <Label>
+                        <ObjectName>SettingsHeader</ObjectName>
+                        <Text>Wi-Fi Networks</Text>
+                        <Size>0me,32f</Size>
+                      </Label>
+
+                      <WifiList>
+                        <ObjectName>WifiList</ObjectName>
+                        <SizePolicy>me,me</SizePolicy>
+                      </WifiList>
+
+                      <!-- 68f, not 52f: this row holds 44f-tall buttons, and
+                           the arithmetic at settings.xml:746-753 (44 plus 8px
+                           margin-bottom plus 8+8px #SettingsRow padding) is
+                           what makes that 68 rather than 60. -->
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,68f</Size>
+                        <Children>
+                          <WidgetGroup>
+                            <Size>0me,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>100f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Scan</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[Wifi],scan</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                            </Connection>
+                          </PushButton>
+                          <WidgetGroup>
+                            <Size>12f,0me</Size>
+                          </WidgetGroup>
+                          <!-- Visible only in state 3 (radio off), the one
+                               state where turning the radio on is a useful
+                               action. Same BindProperty visible / Transform
+                               IsEqual idiom deckstrip.xml uses for its
+                               eject-arm chips (deckstrip.xml:162,:198) and
+                               effect_param_row.xml uses for its units label
+                               (effect_param_row.xml:118-123).
+                               ConnectValueFromWidget is false on this
+                               visibility Connection; without it, this
+                               PushButton's own click behaviour below (which
+                               writes [Wifi],radio_on) would be overwritten by
+                               [Wifi],state, the same reasoning the Audio
+                               page's Apply/Rescan enabled-binding comment
+                               gives (settings.xml:1300-1307). -->
+                          <PushButton>
+                            <ObjectName>SettingsPrimaryButton</ObjectName>
+                            <Size>0me,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Turn Wi-Fi On</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[Wifi],radio_on</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                            </Connection>
+                            <Connection>
+                              <ConnectValueFromWidget>false</ConnectValueFromWidget>
+                              <ConfigKey>[Wifi],state</ConfigKey>
+                              <BindProperty>visible</BindProperty>
+                              <Transform><IsEqual>3</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+
+                    </Children>
+                  </WidgetGroup>
+
+                  <!-- Page 1: password entry. WifiKeypad is WWifiKeypad
+                       (src/widget/wwifikeypad.h), the in-skin keyboard for
+                       [Wifi],page == kPagePassword (Ruling 4's placeholder,
+                       now filled). It owns its own title, masked field, key
+                       grid and Cancel/Join row (one QGridLayout, 10x7), so
+                       this page needs nothing else: no header Label, no
+                       separate button row. Its own header comment gives the
+                       size budget: about 1280x360-410 for the FLX6 body,
+                       comfortably inside the ~1280x560-600 this page has to
+                       give it. -->
+                  <WifiKeypad>
+                    <ObjectName>WifiKeypad</ObjectName>
+                    <SizePolicy>me,me</SizePolicy>
+                  </WifiKeypad>
+
+                  <!-- Page 2: joining. Deliberately not routed through
+                       Notifications::setBusy() (phase-3-brief.md); that
+                       suppresses taps app-wide for the operation's duration,
+                       and an nmcli wait-30 join must not freeze the decks
+                       mid-set. Cancel stays live the whole time. -->
+                  <WidgetGroup>
+                    <Layout>vertical</Layout>
+                    <SizePolicy>me,me</SizePolicy>
+                    <Children>
+
+                      <WifiStatus>
+                        <ObjectName>WifiStatus</ObjectName>
+                        <SizePolicy>me,me</SizePolicy>
+                      </WifiStatus>
+
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,68f</Size>
+                        <Children>
+                          <WidgetGroup>
+                            <Size>0me,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Cancel</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[Wifi],cancel</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+
+                    </Children>
+                  </WidgetGroup>
+
+                  <!-- Page 3: manage connected network. Only Forget is
+                       SettingsDangerButton, matching the Power row's
+                       convention (settings.xml:934-937) that red marks the
+                       one irreversible action on a row, not every action on
+                       it: Disconnect is reversible (join again), Forget
+                       deletes the saved profile. -->
+                  <WidgetGroup>
+                    <Layout>vertical</Layout>
+                    <SizePolicy>me,me</SizePolicy>
+                    <Children>
+
+                      <WifiStatus>
+                        <ObjectName>WifiStatus</ObjectName>
+                        <SizePolicy>me,me</SizePolicy>
+                      </WifiStatus>
+
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,68f</Size>
+                        <Children>
+                          <WidgetGroup>
+                            <Size>0me,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Disconnect</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[Wifi],disconnect</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                            </Connection>
+                          </PushButton>
+                          <WidgetGroup>
+                            <Size>12f,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsDangerButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Forget</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[Wifi],forget</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                            </Connection>
+                          </PushButton>
+                          <WidgetGroup>
+                            <Size>12f,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Cancel</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[Wifi],cancel</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+
+                    </Children>
+                  </WidgetGroup>
+
+                </Children>
+              </WidgetStack>
 
             </Children>
           </WidgetGroup>

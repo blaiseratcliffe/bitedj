@@ -4,6 +4,8 @@
 #include <QGuiApplication>
 #include <QScopedPointer>
 #include <QScreen>
+#include <QTextDocument>
+#include <QTextDocumentFragment>
 #include <QThread>
 #include <QtDebug>
 
@@ -170,6 +172,15 @@ void ErrorDialogHandler::errorDialog(ErrorDialogProperties* pProps) {
             QString text = props->m_text;
             if (!props->m_infoText.isEmpty()) {
                 text.append(QStringLiteral(" — ")).append(props->m_infoText);
+            }
+            // Some of these texts are written as HTML upstream, for a
+            // QMessageBox that renders it: whole <html> documents from
+            // RecordingManager and the controller script engine, <b> and <br>
+            // from the broadcasting code. The strip is PlainText, because
+            // notifications elsewhere carry text that came off the air, so
+            // convert the markup here rather than show the DJ its tags.
+            if (Qt::mightBeRichText(text)) {
+                text = QTextDocumentFragment::fromHtml(text).toPlainText().simplified();
             }
             pNotifications->publish(text, severity);
             return;

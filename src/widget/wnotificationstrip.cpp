@@ -23,6 +23,13 @@ WNotificationStrip::WNotificationStrip(QWidget* parent)
     pLayout->setSpacing(0);
 
     m_pLabel->setObjectName("NotificationLabel");
+    // Untrusted text reaches this strip: every Wi-Fi notification carries an
+    // SSID broadcast by whoever is nearby, or nmcli's stderr quoting one. Qt's
+    // default AutoText runs mightBeRichText() over that, so a crafted SSID
+    // could blank or rewrite the line a stranded DJ is reading to get their
+    // network back. Ruling 22 put PlainText on the SSID labels themselves and
+    // missed this path, which every one of them also reaches.
+    m_pLabel->setTextFormat(Qt::PlainText);
     m_pLabel->setAlignment(Qt::AlignCenter);
     m_pLabel->setWordWrap(false);
     pLayout->addWidget(m_pLabel);

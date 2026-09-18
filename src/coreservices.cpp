@@ -30,6 +30,7 @@
 #include "preferences/audiodevicesettings.h"
 #include "preferences/controllersettings.h"
 #include "preferences/systemsettings.h"
+#include "preferences/wifisettings.h"
 #include "preferences/dialog/dlgpreferences.h"
 #include "preferences/settingsmanager.h"
 #ifdef __MODPLUG__
@@ -556,6 +557,14 @@ void CoreServices::initialize(QApplication* pApp) {
     m_pSystemSettings = std::make_unique<SystemSettings>(
             pConfig, m_pPlayerManager, m_pRecordingManager);
 
+    // Bite DJ: backs the in-skin Settings -> Network sub-page (scan, join,
+    // disconnect and forget Wi-Fi networks through nmcli). Constructed after
+    // Notifications, which it reports through, and before the skin parses, so
+    // the [Wifi] controls the Network page binds to already exist and its
+    // widgets can subscribe at construction. Runs no nmcli here; it defers
+    // one status read to the first turn of the event loop.
+    m_pWifiSettings = std::make_unique<WifiSettings>(pConfig);
+
     // Bite DJ: the samplers are filled from one USB drive the DJ picks on the
     // Samplers tab. Constructed after SystemSettings (which enumerates the
     // drives and reports every plug and unplug) and before the skin parses, so
@@ -730,6 +739,8 @@ void CoreServices::finalize() {
     // further below); drop it here. Its destructor also stops a per-drive
     // recording, which needs both of them alive.
     m_pSystemSettings.reset();
+    // Kills any nmcli it still has running; depends on nothing torn down below.
+    m_pWifiSettings.reset();
 
     // SoundManager depend on Engine and Config
     qDebug() << t.elapsed(false).debugMillisWithUnit() << "deleting SoundManager";
