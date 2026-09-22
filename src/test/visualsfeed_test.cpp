@@ -1,8 +1,10 @@
 // The visuals feed driven the way the sidechain thread drives it: interleaved
 // stereo buffers in, a JSON frame out. What it is here to catch is a band
 // filter wired to the wrong corner, a frame whose shape drifts from what
-// res/visuals/feed.js parses, and a deck proxy created for a deck that does
-// not exist (which logs a fault the appliance's log check fails on).
+// res/visuals/feed.js parses, a deck proxy created for a deck that does not
+// exist (which logs a fault the appliance's log check fails on), a deck count
+// that goes stale after [App],num_decks changes, and a visuals_enabled control
+// that shows up after this worker is already constructed.
 #include "engine/sidechain/visualsfeed.h"
 
 #include <gtest/gtest.h>
@@ -26,6 +28,10 @@ namespace {
 constexpr int kSampleRate = 44100;
 constexpr int kFramesPerBuffer = 1024;
 constexpr int kDecks = 2;
+// The fixture backs this many decks with real controls, so that a test can
+// raise [App],num_decks up to this count without VisualsFeed logging a fault
+// for a channel that does not exist.
+constexpr int kMaxTestDecks = 4;
 
 class VisualsFeedTest : public MixxxTest {
   protected:
@@ -41,7 +47,7 @@ class VisualsFeedTest : public MixxxTest {
         m_pEnabled->set(1.0);
         m_pCrossfader = std::make_unique<ControlObject>(
                 ConfigKey(QStringLiteral("[Master]"), QStringLiteral("crossfader")));
-        for (int i = 1; i <= kDecks; ++i) {
+        for (int i = 1; i <= kMaxTestDecks; ++i) {
             const QString group = QStringLiteral("[Channel%1]").arg(i);
             for (const char* key : {"play", "bpm", "beat_active", "beat_distance", "vu_meter"}) {
                 m_deckControls.push_back(std::make_unique<ControlObject>(
@@ -125,10 +131,23 @@ TEST_F(VisualsFeedTest, PeakTracksAmplitude) {
 }
 
 // The FIFO can hand the sidechain an odd sample count after a partial write.
+// The analysis must still be correct, not just crash-free: feed the same
+// bass sine as BassSineLandsInBandZero, but in buffers whose length is odd.
 TEST_F(VisualsFeedTest, OddSampleCountIsSafe) {
-    std::vector<CSAMPLE> buffer(2047, 0.25f);
-    m_pFeed->process(buffer.data(), static_cast<int>(buffer.size()));
-    SUCCEED();
+    constexpr int kOddBufferSize = 2047;
+    std::vector<CSAMPLE> buffer(kOddBufferSize);
+    double phase = 0.0;
+    const double step = 2.0 * M_PI * 60.0 / kSampleRate;
+    for (int b = 0; b < 100; ++b) {
+        for (int i = 0; i + 1 < kOddBufferSize; i += 2) {
+            const CSAMPLE v = static_cast<CSAMPLE>(0.5 * std::sin(phase));
+            buffer[i] = v;
+            buffer[i + 1] = v;
+            phase += step;
+        }
+        m_pFeed->process(buffer.data(), static_cast<int>(buffer.size()));
+    }
+    EXPECT_EQ(0, dominantBand());
 }
 
 TEST_F(VisualsFeedTest, FrameHasDocumentedShape) {
@@ -169,6 +188,63 @@ TEST_F(VisualsFeedTest, DisabledProducesNoFrames) {
         QTest::qWait(20);
     }
     EXPECT_GT(spy.count(), 0);
+}
+
+// [App],num_decks can change after construction (a controller reconfiguration,
+// or the FLX6 profile switching deck count). buildFrame() must notice and
+// rebuild the deck proxy list rather than serving a stale count forever.
+TEST_F(VisualsFeedTest, DeckCountFollowsNumDecks) {
+    QJsonObject frame = QJsonDocument::fromJson(m_pFeed->buildFrame()).object();
+    EXPECT_EQ(kDecks, frame.value("decks").toArray().size());
+
+    m_pNumDecks->set(4);
+    frame = QJsonDocument::fromJson(m_pFeed->buildFrame()).object();
+    EXPECT_EQ(4, frame.value("decks").toArray().size());
+
+    m_pNumDecks->set(0);
+    frame = QJsonDocument::fromJson(m_pFeed->buildFrame()).object();
+    EXPECT_EQ(0, frame.value("decks").toArray().size());
+}
+
+// If [BiteDJ],visuals_enabled does not exist yet when VisualsFeed is
+// constructed, it must not stay dead forever: the appliance's own startup
+// order is not guaranteed to create it first.
+TEST_F(VisualsFeedTest, EnabledControlIsPickedUpAfterConstruction) {
+    // The shared fixture already built a feed with the control present.
+    // Tear both down and rebuild in the order this test actually needs: the
+    // feed constructed first, the control created only afterward.
+    m_pFeed.reset();
+    m_pEnabled.reset();
+
+    m_pFeed = std::make_unique<VisualsFeed>();
+    QSignalSpy spy(m_pFeed.get(), &VisualsFeed::frameReady);
+
+    QTest::qWait(100);
+    EXPECT_EQ(0, spy.count());
+
+    m_pEnabled = std::make_unique<ControlObject>(
+            ConfigKey(QStringLiteral("[BiteDJ]"), QStringLiteral("visuals_enabled")));
+    m_pEnabled->set(1.0);
+
+    for (int i = 0; i < 10; ++i) {
+        QTest::qWait(20);
+    }
+    EXPECT_GT(spy.count(), 0);
+}
+
+TEST_F(VisualsFeedTest, ShutdownStopsTheTimer) {
+    QSignalSpy spy(m_pFeed.get(), &VisualsFeed::frameReady);
+    m_pFeed->shutdown();
+    m_pEnabled->set(1.0);
+    QTest::qWait(150);
+    EXPECT_EQ(0, spy.count());
+}
+
+TEST_F(VisualsFeedTest, FrameTimeIsMonotonic) {
+    const QJsonObject first = QJsonDocument::fromJson(m_pFeed->buildFrame()).object();
+    QTest::qWait(20);
+    const QJsonObject second = QJsonDocument::fromJson(m_pFeed->buildFrame()).object();
+    EXPECT_GE(second.value("t").toDouble(), first.value("t").toDouble());
 }
 
 } // namespace

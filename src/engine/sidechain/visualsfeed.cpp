@@ -25,17 +25,23 @@ const QString kBiteDjGroup = QStringLiteral("[BiteDJ]");
 
 } // namespace
 
-VisualsFeed::VisualsFeed(QObject* pParent)
-        : QObject(pParent),
-          m_sampleRateControl(kAppGroup, QStringLiteral("samplerate")),
-          m_enabledControl(kBiteDjGroup,
-                  QStringLiteral("visuals_enabled"),
+VisualsFeed::VisualsFeed()
+        : QObject(nullptr),
+          m_sampleRateControl(kAppGroup,
+                  QStringLiteral("samplerate"),
                   ControlFlag::AllowMissingOrInvalid | ControlFlag::NoWarnIfMissing),
           m_sampleRate(mixxx::audio::SampleRate::fromDouble(m_sampleRateControl.get())),
           m_pScratch(SampleUtil::alloc(EngineSideChain::SIDECHAIN_BUFFER_SIZE)),
           m_sumSquares{0.0, 0.0, 0.0, 0.0},
           m_peak(0.0f),
-          m_framesAccumulated(0) {
+          m_framesAccumulated(0),
+          m_enabledFlag(false),
+          m_enabledControl(kBiteDjGroup,
+                  QStringLiteral("visuals_enabled"),
+                  ControlFlag::AllowMissingOrInvalid | ControlFlag::NoWarnIfMissing),
+          m_numDecksControl(kAppGroup,
+                  QStringLiteral("num_decks"),
+                  ControlFlag::AllowMissingOrInvalid | ControlFlag::NoWarnIfMissing) {
     if (!m_sampleRate.isValid()) {
         m_sampleRate = mixxx::audio::SampleRate(44100);
     }
@@ -50,23 +56,8 @@ VisualsFeed::VisualsFeed(QObject* pParent)
     m_pMid->assumeSettled();
     m_pHigh->assumeSettled();
 
-    // Deck proxies only for decks that exist. A proxy on [Channel3] when the
-    // engine has two decks logs "getControl returning NULL", which
-    // toolchain/skin/check-log.sh reports as a fault.
-    PollingControlProxy numDecks(kAppGroup,
-            QStringLiteral("num_decks"),
-            ControlFlag::AllowMissingOrInvalid | ControlFlag::NoWarnIfMissing);
-    const int deckCount = numDecks.valid() ? static_cast<int>(numDecks.get()) : 0;
-    for (int i = 1; i <= deckCount; ++i) {
-        const QString group = QStringLiteral("[Channel%1]").arg(i);
-        Deck deck;
-        deck.play = std::make_unique<ControlProxy>(group, QStringLiteral("play"), this);
-        deck.bpm = std::make_unique<ControlProxy>(group, QStringLiteral("bpm"), this);
-        deck.beatActive = std::make_unique<ControlProxy>(group, QStringLiteral("beat_active"), this);
-        deck.beatDistance = std::make_unique<ControlProxy>(group, QStringLiteral("beat_distance"), this);
-        deck.vuMeter = std::make_unique<ControlProxy>(group, QStringLiteral("vu_meter"), this);
-        m_decks.push_back(std::move(deck));
-    }
+    rebuildDecks(m_numDecksControl.valid() ? static_cast<int>(m_numDecksControl.get()) : 0);
+
     m_pCrossfader = std::make_unique<ControlProxy>(kMasterGroup,
             QStringLiteral("crossfader"),
             this,
@@ -75,6 +66,9 @@ VisualsFeed::VisualsFeed(QObject* pParent)
     m_clock.start();
     m_timer.setInterval(1000 / kFramesPerSecond);
     connect(&m_timer, &QTimer::timeout, this, &VisualsFeed::onTick);
+    // Seed m_enabledFlag before the sidechain thread's first process() call;
+    // this also makes the first re-resolve attempt if the CO is not up yet.
+    enabled();
     m_timer.start();
 }
 
@@ -88,7 +82,17 @@ void VisualsFeed::shutdown() {
 }
 
 bool VisualsFeed::enabled() const {
-    return m_enabledControl.valid() && m_enabledControl.toBool();
+    if (!m_enabledControl.valid()) {
+        // Not bound to a real CO yet, either because construction ran before
+        // [BiteDJ],visuals_enabled existed, or it still does not exist.
+        // Try again; a PollingControlProxy never repoints itself once made.
+        m_enabledControl = PollingControlProxy(kBiteDjGroup,
+                QStringLiteral("visuals_enabled"),
+                ControlFlag::AllowMissingOrInvalid | ControlFlag::NoWarnIfMissing);
+    }
+    const bool value = m_enabledControl.valid() && m_enabledControl.toBool();
+    m_enabledFlag.store(value, std::memory_order_relaxed);
+    return value;
 }
 
 VisualsFeed::Bands VisualsFeed::latestBands() const {
@@ -103,8 +107,28 @@ void VisualsFeed::retune(mixxx::audio::SampleRate sampleRate) {
     m_pHigh->setFrequencyCorners(sampleRate, kMidCorner);
 }
 
+void VisualsFeed::rebuildDecks(int count) {
+    count = std::max(0, count);
+    m_decks.clear();
+    for (int i = 1; i <= count; ++i) {
+        const QString group = QStringLiteral("[Channel%1]").arg(i);
+        Deck deck;
+        deck.play = std::make_unique<ControlProxy>(group, QStringLiteral("play"), this);
+        deck.bpm = std::make_unique<ControlProxy>(group, QStringLiteral("bpm"), this);
+        deck.beatActive = std::make_unique<ControlProxy>(group, QStringLiteral("beat_active"), this);
+        deck.beatDistance = std::make_unique<ControlProxy>(group, QStringLiteral("beat_distance"), this);
+        deck.vuMeter = std::make_unique<ControlProxy>(group, QStringLiteral("vu_meter"), this);
+        m_decks.push_back(std::move(deck));
+    }
+}
+
 void VisualsFeed::process(const CSAMPLE* pBuffer, const int iBufferSize) {
-    if (!enabled()) {
+    if (!m_enabledFlag.load(std::memory_order_relaxed)) {
+        for (int b = 0; b < kBandCount; ++b) {
+            m_sumSquares[b] = 0.0;
+        }
+        m_peak = 0.0f;
+        m_framesAccumulated = 0;
         return;
     }
     // Interleaved stereo, and the FIFO can hand over an odd count after a
@@ -132,12 +156,13 @@ void VisualsFeed::process(const CSAMPLE* pBuffer, const int iBufferSize) {
     for (int i = 0; i < count; ++i) {
         m_peak = std::max(m_peak, std::abs(pBuffer[i]));
     }
-    m_framesAccumulated += count / 2;
+    m_framesAccumulated += count / mixxx::kEngineChannelCount;
 
     const int framesPerPublish = m_sampleRate.value() / kFramesPerSecond;
     if (m_framesAccumulated >= framesPerPublish) {
         Bands bands;
-        const double samples = static_cast<double>(m_framesAccumulated) * 2.0;
+        const double samples = static_cast<double>(m_framesAccumulated) *
+                static_cast<double>(mixxx::kEngineChannelCount);
         for (int b = 0; b < kBandCount; ++b) {
             bands.rms[b] = static_cast<float>(std::sqrt(m_sumSquares[b] / samples));
             m_sumSquares[b] = 0.0;
@@ -150,6 +175,11 @@ void VisualsFeed::process(const CSAMPLE* pBuffer, const int iBufferSize) {
 }
 
 QByteArray VisualsFeed::buildFrame() {
+    const int deckCount = m_numDecksControl.valid() ? static_cast<int>(m_numDecksControl.get()) : 0;
+    if (deckCount != static_cast<int>(m_decks.size())) {
+        rebuildDecks(deckCount);
+    }
+
     const Bands bands = m_bands.getValue();
     QJsonObject frame;
     frame.insert(QStringLiteral("t"), static_cast<double>(m_clock.elapsed()));

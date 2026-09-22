@@ -4,6 +4,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 #include <QTimer>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -29,11 +30,20 @@ class EngineFilterBessel4High;
 /// the visuals page over loopback.
 ///
 /// Threads. process() runs on the sidechain thread and touches nothing but the
-/// filters, a scratch buffer and one lock-free slot. The QTimer runs on the
-/// main thread, where ControlProxy is allowed, and is the only place the frame
-/// is built. shutdown() runs on the main thread from ~EngineSideChain, which
-/// also deletes this object; the sidechain owns its workers, so nothing else
-/// may hold a unique_ptr to one.
+/// filters, a scratch buffer and two lock-free slots, m_enabledFlag and
+/// m_bands. The QTimer runs on the main thread, where ControlProxy is
+/// allowed, and is the only place the frame is built. shutdown() runs on the
+/// main thread from ~EngineSideChain, which also deletes this object; the
+/// sidechain owns its workers, so nothing else may hold a unique_ptr to one,
+/// and this object must never be given a Qt parent, or the sidechain's delete
+/// would race a parent's delete of the same object.
+///
+/// `[BiteDJ],visuals_enabled` is expected to exist by the time this worker is
+/// constructed, but construction order in the appliance is not guaranteed. If
+/// the control does not exist yet, enabled() keeps re-resolving it, on the
+/// main thread, every time it is called, until the control appears. The
+/// sidechain thread never touches that control; process() only reads the
+/// atomic flag enabled() publishes.
 class VisualsFeed : public QObject, public SideChainWorker {
     Q_OBJECT
   public:
@@ -45,7 +55,7 @@ class VisualsFeed : public QObject, public SideChainWorker {
         float peak = 0.0f;
     };
 
-    explicit VisualsFeed(QObject* pParent = nullptr);
+    VisualsFeed();
     ~VisualsFeed() override;
 
     void process(const CSAMPLE* pBuffer, const int iBufferSize) override;
@@ -53,6 +63,7 @@ class VisualsFeed : public QObject, public SideChainWorker {
 
     bool enabled() const;
     Bands latestBands() const;
+    // Main thread only; reads ControlProxy objects.
     QByteArray buildFrame();
 
   signals:
@@ -71,10 +82,13 @@ class VisualsFeed : public QObject, public SideChainWorker {
     };
 
     void retune(mixxx::audio::SampleRate sampleRate);
+    // Main thread only. Replaces m_decks with `count` fresh deck proxy
+    // bundles. Called from the constructor and again from buildFrame()
+    // whenever [App],num_decks has moved since the last rebuild.
+    void rebuildDecks(int count);
 
     // Sidechain-thread state.
     PollingControlProxy m_sampleRateControl;
-    PollingControlProxy m_enabledControl;
     mixxx::audio::SampleRate m_sampleRate;
     std::unique_ptr<EngineFilterBessel4Low> m_pLow;
     std::unique_ptr<EngineFilterBessel4Band> m_pLowMid;
@@ -85,10 +99,18 @@ class VisualsFeed : public QObject, public SideChainWorker {
     float m_peak;
     int m_framesAccumulated;
 
-    // The one shared slot.
+    // The two shared, single-writer slots. m_enabledFlag is written by
+    // enabled() on the main thread and read by process() on the sidechain
+    // thread; m_bands is written by process() on the sidechain thread and
+    // read by latestBands() and buildFrame() on the main thread.
+    mutable std::atomic<bool> m_enabledFlag;
     ControlValueAtomic<Bands> m_bands;
 
     // Main-thread state.
+    // Mutable: enabled() re-resolves this in place, from a const method,
+    // whenever the control has not yet bound to a real CO.
+    mutable PollingControlProxy m_enabledControl;
+    PollingControlProxy m_numDecksControl;
     QTimer m_timer;
     QElapsedTimer m_clock;
     std::vector<Deck> m_decks;
