@@ -6,10 +6,37 @@
 // until the next beat arrives. Nobody is watching an idle screen, and
 // swapping sketches on a timer only spent GPU on an empty room.
 //
+// Outputs. o0 is the sketch, o1 is the sketch's own scratch, and o2 and o3
+// are reserved by this file for the crossfade: nothing in sketches.js may
+// write to either, and neither may s3, which holds the frozen frame. A switch
+// used to be a 125 ms dip to black through a CSS opacity transition, which
+// read as a cut with a hole in it. Now the outgoing frame is frozen, the new
+// sketch starts straight away in o0, and o2 shows a mix of the two for two
+// seconds while the frozen frame is pulled apart by a slow noise. Because the
+// frozen frame is a still, the modulate is what makes it melt rather than
+// fade. When the mix reaches the new sketch the display goes back to o0 and
+// o2 is dropped to a blank chain, so the steady state pays for nothing but
+// the sketch.
+//
+// The still is a copy of the canvas taken in afterUpdate and pushed into s3
+// as a static source, not an output frozen on itself. The output version was
+// written first and it came out as a two second fade up from black, because
+// src(oN) samples the output's *previous* frame (Output.getTexture returns
+// the fbo that is not the one just written) and the four outputs are drawn in
+// order 0 to 3 within a tick. Freezing o3 with src(o3) therefore copies
+// whatever o3 held a frame earlier, and o2, which is drawn before o3, reads
+// o3 a frame later still. Getting a still out of that is a question of which
+// fbo of a ping-pong pair is current at which point of a tick, which is not
+// a thing to build a crossfade on. afterUpdate runs immediately after the
+// frame is drawn and before the compositor clears the drawing buffer, which
+// is the one moment the canvas can be read, so the copy there is exact and
+// needs no reasoning about ping-pong at all. It also snapshots whatever is on
+// screen, so a switch during a melt freezes the mix with no special case.
+//
 // The webcam is opened on demand rather than at load: s0.initCam(0) runs when
 // a cam sketch is about to start and s0.clear() when the rotation leaves one,
 // so the camera LED is dark through the thirteen sketches that never look at
-// it. hush() is still never called anywhere, for the reason by clearOutputs().
+// it. hush() is still never called anywhere, for the reason by clearScratch().
 //
 // Sketches drive their own per-frame work through window.sketchUpdate(dt),
 // which this file calls every rendered frame; a sketch must never assign
@@ -21,7 +48,7 @@
   const BEATS_PER_SWITCH = 256;     // 64 bars at 4/4
   const MIN_SKETCH_MS = 60000;
   const IDLE_AFTER_MS = 20000;      // no beat for this long: idle sketch
-  const DIP_MS = 125;               // half of the ~250ms total not-visible budget
+  const MELT_MS = 2000;             // length of the crossfade
   const LOG_EVERY_MS = 10000;
 
   const canvas = document.getElementById('stage');
@@ -64,11 +91,25 @@
   // Rotation.
   let current = null, currentSince = 0, lastBeatAt = performance.now(), idle = false;
   let history = [];
-  // setTimeout id of a dip in flight, so a second show() call before the
-  // first one lands restarts the wait instead of racing it.
-  let pendingSwitch = null;
   // Whether s0 currently holds an open camera stream. Only show() moves this.
   let camInit = false;
+
+  // Crossfade. `melt` is 1 the moment a new sketch starts and eases to 0 over
+  // MELT_MS; `pending` holds a sketch whose snapshot frame has been armed but
+  // not yet captured, and is the re-entrancy guard: a second show() before the
+  // first lands replaces the target rather than racing it.
+  //
+  // `grabbing` is set by show() and cleared by the afterUpdate hook that
+  // takes the still; `swapNext` is then read by the driveFrame after it, so
+  // the new sketch starts on the first tick that has a still to melt out of.
+  let melt = 0, meltElapsed = 0, melting = false, pending = null;
+  let grabbing = false, swapNext = false;
+
+  // The frozen frame. 960x540 like the render target, so the copy is one to
+  // one and s3 needs no aspect correction.
+  const still = document.createElement('canvas');
+  still.width = RENDER_W; still.height = RENDER_H;
+  const stillCtx = still.getContext('2d');
 
   // hydra resolves the camera asynchronously and swallows the rejection, so
   // probe the device list ourselves to know whether camera sketches are
@@ -113,11 +154,24 @@
   // window.update, not hydra.synth.update: same makeGlobal mirroring as
   // fps above (EvalSandbox.tick() copies window.update onto synth.update
   // every frame), so this is the assignment that has to stick. It both
-  // counts frames for the fps log and drives whatever the current sketch
-  // has put on window.sketchUpdate.
+  // counts frames for the fps log, carries out an armed switch, advances the
+  // crossfade and drives whatever the current sketch has put on
+  // window.sketchUpdate. It runs before the outputs are drawn for the frame,
+  // which is what makes the two-tick freeze above work.
   let frames = 0;
   function driveFrame(dt) {
     frames += 1;
+    if (swapNext) {
+      swapNext = false;
+      startPending();
+    } else if (melting) {
+      meltElapsed += dt;
+      const u = Math.min(1, meltElapsed / MELT_MS);
+      // Ease in and out, so the mix neither starts nor ends with a visible
+      // rate change. Linear here reads as a wipe that stops dead.
+      melt = 1 - u * u * (3 - 2 * u);
+      if (u >= 1) endMelt();
+    }
     if (typeof window.sketchUpdate === 'function') {
       try { window.sketchUpdate(dt); } catch (e) { console.error('visuals: sketchUpdate failed', e); }
     }
@@ -127,14 +181,13 @@
   // every source (s0-s3): that stops the webcam's tracks and replaces the
   // wordmark/boot-logo textures (s1/s2) with 1x1 blanks, so every camera or
   // logo sketch would come up blank after the very first switch. This does
-  // the safe subset of what hush() does: it clears the four outputs (what a
-  // sketch actually draws into) without touching the sources.
-  function clearOutputs() {
-    solid(0, 0, 0, 0).out(o0);
+  // the safe subset: it drops the outgoing sketch's scratch chain, so a
+  // sketch that never touches o1 does not keep paying for the noise field the
+  // last one left running there. o0 is not cleared because the incoming
+  // sketch overwrites its chain in the same tick, and o2 and o3 belong to the
+  // crossfade.
+  function clearScratch() {
     solid(0, 0, 0, 0).out(o1);
-    solid(0, 0, 0, 0).out(o2);
-    solid(0, 0, 0, 0).out(o3);
-    render(o0);
   }
 
   function eligible() {
@@ -162,15 +215,14 @@
 
   function show(sketch) {
     if (!sketch) { console.log('visuals: no sketch to show'); return; }
-    if (pendingSwitch) { clearTimeout(pendingSwitch); pendingSwitch = null; }
     // Camera lifecycle, decided here because this is the only place that sees
-    // the switch itself. Done before the dip timer so the stream has the dip
-    // to come up in. Both tests are the camInit flag against the incoming
-    // sketch, deliberately not `current.cam`: `current` only updates inside
-    // the dip timer below, so show(camSketch) followed within DIP_MS by
-    // show(nonCamSketch), which is exactly what the devicechange path does,
-    // would still see the previous non-cam `current`, skip the release, and
-    // leave camInit stuck true with the stream open. No later cam sketch
+    // the switch itself. Done before the switch lands so the stream has the
+    // crossfade to come up in. Both tests are the camInit flag against the
+    // incoming sketch, deliberately not `current.cam`: `current` only updates
+    // once the switch lands below, so show(camSketch) followed a frame later
+    // by show(nonCamSketch), which is exactly what the devicechange path
+    // does, would still see the previous non-cam `current`, skip the release,
+    // and leave camInit stuck true with the stream open. No later cam sketch
     // could re-init after that.
     if (sketch.cam && !camInit) {
       try {
@@ -188,30 +240,87 @@
       camInit = false;
       console.log('visuals: camera released');
     }
-    canvas.classList.add('dip');
-    pendingSwitch = setTimeout(() => {
-      pendingSwitch = null;
-      clearOutputs();
-      window.update = driveFrame;
-      feed.clearBeatListeners();
-      window.sketchUpdate = null;
-      try {
-        sketch.run();
-      } catch (e) {
-        console.error('visuals: sketch failed', sketch && sketch.name, e);
-      }
-      canvas.classList.remove('dip');
-      current = sketch; currentSince = performance.now();
-      history.push(sketch); if (history.length > 8) history.shift();
-      console.log('visuals: sketch', sketch.name);
-    }, DIP_MS);
+    // Arm the snapshot. The next rendered frame is copied into s3 by
+    // grabStill() below and the switch happens on the frame after that.
+    // Asking for a switch mid-melt snapshots the mix itself, so the picture
+    // the new sketch melts out of is the one the eye was already on.
+    pending = sketch;
+    grabbing = true;
+  }
+
+  // window.afterUpdate, like window.update above, is mirrored onto the synth
+  // every frame by the sandbox, and hydra calls it immediately after the
+  // frame has been drawn. That is the only moment the canvas can be read: the
+  // drawing buffer is not preserved, so a copy taken from a timer or a plain
+  // rAF callback comes back empty, which is what a black crossfade looks
+  // like. Nothing else in the page may take this property.
+  function grabStill() {
+    if (!grabbing) return;
+    grabbing = false;
+    try {
+      stillCtx.drawImage(canvas, 0, 0, still.width, still.height);
+      // dynamic false, so the texture is uploaded once here and then held:
+      // a source that re-uploaded every frame would track the new sketch and
+      // there would be nothing to melt out of.
+      s3.init({ src: still, dynamic: false });
+      swapNext = true;
+    } catch (e) {
+      console.error('visuals: snapshot failed', e);
+      // Without a still there is nothing to melt, but the switch still has to
+      // happen, so let startPending run and the mix will simply come up on
+      // whatever s3 last held.
+      swapNext = true;
+    }
+  }
+  window.afterUpdate = grabStill;
+
+  // The second half of show(), one rendered frame later, with the outgoing
+  // frame now sitting in s3.
+  function startPending() {
+    const sketch = pending;
+    pending = null;
+    if (!sketch) return;
+    clearScratch();
+    window.update = driveFrame;
+    feed.clearBeatListeners();
+    window.sketchUpdate = null;
+    try {
+      sketch.run();
+    } catch (e) {
+      console.error('visuals: sketch failed', sketch && sketch.name, e);
+    }
+    melt = 1; meltElapsed = 0; melting = true;
+    src(o0)
+      .blend(src(s3).modulate(noise(1.5, 0.08), () => 0.05 * melt), () => melt)
+      .out(o2);
+    render(o2);
+    current = sketch; currentSince = performance.now();
+    history.push(sketch); if (history.length > 8) history.shift();
+    console.log('visuals: sketch', sketch.name);
+  }
+
+  function endMelt() {
+    melting = false;
+    melt = 0;
+    render(o0);
+    // Every output still ticks each frame whatever is on it
+    // (HydraRenderer.tick draws all four), so drop o2 to the cheapest chain
+    // there is rather than leaving a blend and a noise running under a steady
+    // picture. s3 keeps the last still; it costs nothing until it is sampled
+    // again and holding it means a snapshot that fails has something to fall
+    // back on.
+    solid(0, 0, 0, 0).out(o2);
   }
 
   // The rotation logic must survive sketch switches, so it subscribes with
-  // onBeatAlways; onBeat is sketch-scoped and gets wiped by show() above.
+  // onBeatAlways; onBeat is sketch-scoped and gets wiped by startPending().
   feed.onBeatAlways(() => {
     lastBeatAt = performance.now();
     if (idle) { idle = false; show(pickNext()); return; }
+    // Never start a crossfade on top of one that is still running: the
+    // rotation can afford to wait a beat, and restarting a melt from its own
+    // midpoint is for the paths that have no choice, like a camera going away.
+    if (melting || grabbing || swapNext) return;
     if (feed.beats % BEATS_PER_SWITCH === 0 && performance.now() - currentSince > MIN_SKETCH_MS) {
       show(pickNext());
     }
