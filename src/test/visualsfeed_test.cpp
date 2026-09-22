@@ -3,8 +3,16 @@
 // filter wired to the wrong corner, a frame whose shape drifts from what
 // res/visuals/feed.js parses, a deck proxy created for a deck that does not
 // exist (which logs a fault the appliance's log check fails on), a deck count
-// that goes stale after [App],num_decks changes, and a visuals_enabled control
-// that shows up after this worker is already constructed.
+// that goes stale after [App],num_decks changes, a visuals_enabled control
+// that shows up after this worker is already constructed, and the window
+// queue collapsing back into a single latest-value slot, which is what made
+// the feed publish the same 100 ms average three frames running.
+//
+// latestBands() is a drain, not a peek: each call hands over the next queued
+// 33 ms window and only repeats itself once the queue is empty. Tests that
+// feed a long steady tone and then read once are unaffected, because every
+// window of a steady tone is the same; the two drain tests at the bottom are
+// the ones that depend on the ordering.
 #include "engine/sidechain/visualsfeed.h"
 
 #include <gtest/gtest.h>
@@ -249,6 +257,75 @@ TEST_F(VisualsFeedTest, FrameTimeIsMonotonic) {
     QTest::qWait(20);
     const QJsonObject second = QJsonDocument::fromJson(m_pFeed->buildFrame()).object();
     EXPECT_GE(second.value("t").toDouble(), first.value("t").toDouble());
+}
+
+// One sidechain wake-up carries about 100 ms of audio, not one audio buffer:
+// EngineSideChain::run() drains its FIFO every 100 ms, so process() sees
+// roughly 4410 frames at 44.1 kHz. Three 33 ms windows must come back out of
+// it, in order, rather than one average of the lot. The three thirds are the
+// same tone at three amplitudes, so reading three rising peaks back is proof
+// that three separate windows were analysed and queued, and that they were
+// consumed oldest first.
+TEST_F(VisualsFeedTest, OneDrainBatchYieldsThreeDistinctWindows) {
+    constexpr int kFramesPerWindow = kSampleRate / VisualsFeed::kFramesPerSecond;
+    constexpr int kFrames = kFramesPerWindow * 3;
+    const double amplitudes[3] = {0.2, 0.5, 0.8};
+
+    std::vector<CSAMPLE> buffer(kFrames * mixxx::kEngineChannelCount);
+    double phase = 0.0;
+    const double step = 2.0 * M_PI * 60.0 / kSampleRate;
+    for (int f = 0; f < kFrames; ++f) {
+        const double amplitude = amplitudes[f / kFramesPerWindow];
+        const CSAMPLE v = static_cast<CSAMPLE>(amplitude * std::sin(phase));
+        buffer[2 * f] = v;
+        buffer[2 * f + 1] = v;
+        phase += step;
+    }
+    m_pFeed->process(buffer.data(), static_cast<int>(buffer.size()));
+
+    const float first = m_pFeed->latestBands().peak;
+    const float second = m_pFeed->latestBands().peak;
+    const float third = m_pFeed->latestBands().peak;
+    EXPECT_NEAR(0.2f, first, 0.06f);
+    EXPECT_NEAR(0.5f, second, 0.06f);
+    EXPECT_NEAR(0.8f, third, 0.06f);
+    EXPECT_LT(first, second);
+    EXPECT_LT(second, third);
+}
+
+// The other half of the same bargain: a stall on the main thread must not
+// turn into a lasting delay. Twenty windows arrive at once, far more than the
+// 30 Hz timer could ever catch up on at one window per frame, so the first
+// drain throws the backlog away and keeps only the newest few. Three reads
+// then exhaust it and every read after that repeats the last window.
+TEST_F(VisualsFeedTest, BacklogIsBoundedToThreeWindows) {
+    constexpr int kFramesPerWindow = kSampleRate / VisualsFeed::kFramesPerSecond;
+    constexpr int kWindows = 20;
+    constexpr int kFrames = kFramesPerWindow * kWindows;
+
+    std::vector<CSAMPLE> buffer(kFrames * mixxx::kEngineChannelCount);
+    double phase = 0.0;
+    const double step = 2.0 * M_PI * 60.0 / kSampleRate;
+    for (int f = 0; f < kFrames; ++f) {
+        // A different amplitude per window, so a repeated value is visible.
+        const double amplitude = 0.04 * (f / kFramesPerWindow + 1);
+        const CSAMPLE v = static_cast<CSAMPLE>(amplitude * std::sin(phase));
+        buffer[2 * f] = v;
+        buffer[2 * f + 1] = v;
+        phase += step;
+    }
+    m_pFeed->process(buffer.data(), static_cast<int>(buffer.size()));
+
+    std::vector<float> peaks;
+    for (int i = 0; i < 6; ++i) {
+        peaks.push_back(m_pFeed->latestBands().peak);
+    }
+    // Three reads move, the rest do not: the drain left three windows.
+    EXPECT_LT(peaks[0], peaks[1]);
+    EXPECT_LT(peaks[1], peaks[2]);
+    EXPECT_FLOAT_EQ(peaks[2], peaks[3]);
+    EXPECT_FLOAT_EQ(peaks[2], peaks[4]);
+    EXPECT_FLOAT_EQ(peaks[2], peaks[5]);
 }
 
 class VisualsServerTest : public VisualsFeedTest {

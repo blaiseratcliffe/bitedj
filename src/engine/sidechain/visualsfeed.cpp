@@ -36,6 +36,7 @@ VisualsFeed::VisualsFeed()
           m_peak(0.0f),
           m_framesAccumulated(0),
           m_enabledFlag(false),
+          m_bandQueue(kQueueCapacity),
           m_enabledControl(kBiteDjGroup,
                   QStringLiteral("visuals_enabled"),
                   ControlFlag::AllowMissingOrInvalid | ControlFlag::NoWarnIfMissing),
@@ -95,8 +96,24 @@ bool VisualsFeed::enabled() const {
     return value;
 }
 
-VisualsFeed::Bands VisualsFeed::latestBands() const {
-    return m_bands.getValue();
+void VisualsFeed::drainBands() {
+    // Only trim once the backlog is clearly a stall, not ordinary batch
+    // jitter: a fresh ~100 ms batch leaves three windows queued and must be
+    // played out in full.
+    if (m_bandQueue.size() > kQueueHighWater) {
+        while (m_bandQueue.size() > kQueueTrimTo) {
+            m_bandQueue.pop();
+        }
+    }
+    if (Bands* pFront = m_bandQueue.front()) {
+        m_lastBands = *pFront;
+        m_bandQueue.pop();
+    }
+}
+
+VisualsFeed::Bands VisualsFeed::latestBands() {
+    drainBands();
+    return m_lastBands;
 }
 
 void VisualsFeed::retune(mixxx::audio::SampleRate sampleRate) {
@@ -143,34 +160,60 @@ void VisualsFeed::process(const CSAMPLE* pBuffer, const int iBufferSize) {
         retune(sampleRate);
     }
 
+    // The sidechain thread drains its FIFO about every 100 ms, so `count` is
+    // typically four thousand-odd frames rather than one audio buffer. Folding
+    // all of that into one published value would give the 30 Hz timer the same
+    // 100 ms average three frames running, which is what this loop exists to
+    // avoid: walk the buffer in 33 ms windows and queue one Bands per window,
+    // carrying whatever does not fill a window over to the next call in the
+    // same accumulators. The filters are stateful and are stepped over each
+    // slice in order, so slicing changes nothing about their output.
+    const int framesPerPublish =
+            std::max(1, static_cast<int>(m_sampleRate.value()) / kFramesPerSecond);
+    const int samplesPerPublish = framesPerPublish * mixxx::kEngineChannelCount;
+
     EngineFilterIIRBase* filters[kBandCount] = {
             m_pLow.get(), m_pLowMid.get(), m_pMid.get(), m_pHigh.get()};
-    for (int b = 0; b < kBandCount; ++b) {
-        filters[b]->process(pBuffer, m_pScratch, count);
-        double sum = 0.0;
-        for (int i = 0; i < count; ++i) {
-            sum += static_cast<double>(m_pScratch[i]) * m_pScratch[i];
-        }
-        m_sumSquares[b] += sum;
-    }
-    for (int i = 0; i < count; ++i) {
-        m_peak = std::max(m_peak, std::abs(pBuffer[i]));
-    }
-    m_framesAccumulated += count / mixxx::kEngineChannelCount;
 
-    const int framesPerPublish = m_sampleRate.value() / kFramesPerSecond;
-    if (m_framesAccumulated >= framesPerPublish) {
-        Bands bands;
-        const double samples = static_cast<double>(m_framesAccumulated) *
-                static_cast<double>(mixxx::kEngineChannelCount);
+    int offset = 0;
+    while (offset < count) {
+        // Every term here is even: count is masked even, samplesPerPublish is
+        // a frame count doubled, and m_framesAccumulated counts whole frames.
+        // So the filters never see a half frame.
+        const int accumulated = m_framesAccumulated * mixxx::kEngineChannelCount;
+        const int chunk = std::min(count - offset, samplesPerPublish - accumulated);
         for (int b = 0; b < kBandCount; ++b) {
-            bands.rms[b] = static_cast<float>(std::sqrt(m_sumSquares[b] / samples));
-            m_sumSquares[b] = 0.0;
+            filters[b]->process(pBuffer + offset, m_pScratch, chunk);
+            double sum = 0.0;
+            for (int i = 0; i < chunk; ++i) {
+                sum += static_cast<double>(m_pScratch[i]) * m_pScratch[i];
+            }
+            m_sumSquares[b] += sum;
         }
-        bands.peak = m_peak;
-        m_peak = 0.0f;
-        m_framesAccumulated = 0;
-        m_bands.setValue(bands);
+        for (int i = offset; i < offset + chunk; ++i) {
+            m_peak = std::max(m_peak, std::abs(pBuffer[i]));
+        }
+        m_framesAccumulated += chunk / mixxx::kEngineChannelCount;
+        offset += chunk;
+
+        if (m_framesAccumulated >= framesPerPublish) {
+            Bands bands;
+            const double samples = static_cast<double>(m_framesAccumulated) *
+                    static_cast<double>(mixxx::kEngineChannelCount);
+            for (int b = 0; b < kBandCount; ++b) {
+                bands.rms[b] = static_cast<float>(std::sqrt(m_sumSquares[b] / samples));
+                m_sumSquares[b] = 0.0;
+            }
+            bands.peak = m_peak;
+            m_peak = 0.0f;
+            m_framesAccumulated = 0;
+            // try_push, not push: if the main thread has stopped popping the
+            // sidechain drops the window and carries on. Blocking here would
+            // stall the thread that also feeds the recorder. A dropped window
+            // is a dropped animation frame and nothing more, so the result is
+            // deliberately ignored.
+            static_cast<void>(m_bandQueue.try_push(bands));
+        }
     }
 }
 
@@ -180,7 +223,10 @@ QByteArray VisualsFeed::buildFrame() {
         rebuildDecks(deckCount);
     }
 
-    const Bands bands = m_bands.getValue();
+    // One window per frame, so the page sees 30 distinct 33 ms analyses a
+    // second instead of the same batch average three times running.
+    drainBands();
+    const Bands bands = m_lastBands;
     QJsonObject frame;
     frame.insert(QStringLiteral("t"), static_cast<double>(m_clock.elapsed()));
     QJsonArray bandArray;

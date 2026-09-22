@@ -227,8 +227,10 @@ SystemSettings::SystemSettings(UserSettingsPointer pConfig,
             &SystemSettings::onVinylBrakeChanged);
 
     // HDMI visuals on/off (System settings tab). VisualsFeed reads this CO on
-    // the sidechain thread to decide whether to analyse and emit frames, and
-    // pi/bin/bitedj-visuals reads it through VisualsServer's /status.
+    // the main thread, from its own timer, and publishes the result to the
+    // sidechain thread as an atomic flag, which is what decides whether the
+    // mix is analysed and frames are emitted. pi/bin/bitedj-visuals reads the
+    // same value through VisualsServer's /status.
     const ConfigKey visualsKey(kBiteDj, QStringLiteral("visuals_enabled"));
     m_pCoVisualsEnabled = std::make_unique<ControlObject>(visualsKey);
     m_pCoVisualsEnabled->set(m_pConfig->getValue(visualsKey, kVisualsEnabledDefault));

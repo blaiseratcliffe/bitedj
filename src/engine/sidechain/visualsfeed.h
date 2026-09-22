@@ -9,9 +9,9 @@
 #include <vector>
 
 #include "audio/types.h"
-#include "control/controlvalue.h"
 #include "control/pollingcontrolproxy.h"
 #include "engine/sidechain/sidechainworker.h"
+#include "rigtorp/SPSCQueue.h"
 #include "util/types.h"
 
 class ControlProxy;
@@ -29,9 +29,20 @@ class EngineFilterBessel4High;
 /// crossfader) into one small JSON frame. VisualsServer pushes those frames to
 /// the visuals page over loopback.
 ///
+/// Timing, which is the thing to know before reading a band value. The
+/// sidechain does not hand the mix over a buffer at a time: EngineSideChain's
+/// thread wakes about every 100 ms and drains its FIFO in one go, so a single
+/// process() call carries roughly 100 ms of audio. process() therefore slices
+/// what it is given into 33 ms windows and queues one Bands per window; the
+/// 30 Hz timer pops one per frame. Every frame consequently carries a
+/// distinct window rather than the same batch average repeated, but the band
+/// values still trail the beat controls the timer reads live by about 100 ms,
+/// plus whatever jitter the drain adds. A sketch that needs a tight beat
+/// should key off the deck's beat_active, not off a band rising.
+///
 /// Threads. process() runs on the sidechain thread and touches nothing but the
-/// filters, a scratch buffer and two lock-free slots, m_enabledFlag and
-/// m_bands. The QTimer runs on the main thread, where ControlProxy is
+/// filters, a scratch buffer, the enabled flag and the producer end of
+/// m_bandQueue. The QTimer runs on the main thread, where ControlProxy is
 /// allowed, and is the only place the frame is built. shutdown() runs on the
 /// main thread from ~EngineSideChain, which also deletes this object; the
 /// sidechain owns its workers, so nothing else may hold a unique_ptr to one,
@@ -49,6 +60,16 @@ class VisualsFeed : public QObject, public SideChainWorker {
   public:
     static constexpr int kFramesPerSecond = 30;
     static constexpr int kBandCount = 4;
+    // Half a second of windows. Big enough that a normal ~100 ms batch (three
+    // windows) never meets a full queue, small enough that a consumer that
+    // has stopped popping cannot hold half a minute of stale audio.
+    static constexpr int kQueueCapacity = 16;
+    // Trim point and target for drainBands(). Three windows is 100 ms, one
+    // sidechain batch, so a backlog is cut back to the newest batch rather
+    // than to nothing: popping to empty would stutter every time the drain
+    // and the push interleave badly.
+    static constexpr size_t kQueueHighWater = 6;
+    static constexpr size_t kQueueTrimTo = 3;
 
     struct Bands {
         float rms[kBandCount] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -62,7 +83,11 @@ class VisualsFeed : public QObject, public SideChainWorker {
     void shutdown() override;
 
     bool enabled() const;
-    Bands latestBands() const;
+    // Main thread only. Drains the window queue by one and returns that
+    // window, or the previous one when no new window has arrived. This is
+    // not a peek: two calls in a row return two different windows while the
+    // queue has them, which is what the three-window drain test relies on.
+    Bands latestBands();
     // Main thread only; reads ControlProxy objects.
     QByteArray buildFrame();
 
@@ -82,6 +107,12 @@ class VisualsFeed : public QObject, public SideChainWorker {
     };
 
     void retune(mixxx::audio::SampleRate sampleRate);
+    // Main thread only. Pops the window queue down to at most kQueueHighWater
+    // entries, then takes one more into m_lastBands if one is there. The trim
+    // is what stops a scheduling stall from turning into a lasting delay:
+    // without it the timer would spend the next second walking through a
+    // backlog it can never catch up on at one window per frame.
+    void drainBands();
     // Main thread only. Replaces m_decks with `count` fresh deck proxy
     // bundles. Called from the constructor and again from buildFrame()
     // whenever [App],num_decks has moved since the last rebuild.
@@ -99,12 +130,16 @@ class VisualsFeed : public QObject, public SideChainWorker {
     float m_peak;
     int m_framesAccumulated;
 
-    // The two shared, single-writer slots. m_enabledFlag is written by
+    // The two things the two threads share. m_enabledFlag is written by
     // enabled() on the main thread and read by process() on the sidechain
-    // thread; m_bands is written by process() on the sidechain thread and
-    // read by latestBands() and buildFrame() on the main thread.
+    // thread. m_bandQueue is a single-producer single-consumer ring: process()
+    // pushes one entry per 33 ms window from the sidechain thread and the
+    // main thread pops. A latest-value slot was what this used to be, and it
+    // threw away two windows out of every three because the sidechain arrives
+    // in ~100 ms batches; the queue is what makes each 30 Hz frame a
+    // different window.
     mutable std::atomic<bool> m_enabledFlag;
-    ControlValueAtomic<Bands> m_bands;
+    rigtorp::SPSCQueue<Bands> m_bandQueue;
 
     // Main-thread state.
     // Mutable: enabled() re-resolves this in place, from a const method,
@@ -113,6 +148,9 @@ class VisualsFeed : public QObject, public SideChainWorker {
     PollingControlProxy m_numDecksControl;
     QTimer m_timer;
     QElapsedTimer m_clock;
+    // The window the last drain handed over, held so a frame built when no
+    // new window has arrived repeats the previous one rather than zeroing.
+    Bands m_lastBands;
     std::vector<Deck> m_decks;
     std::unique_ptr<ControlProxy> m_pCrossfader;
 };
