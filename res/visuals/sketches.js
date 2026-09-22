@@ -125,6 +125,13 @@
   // fire once in a blue moon and never respectively.
   const BASS_LOUD = 0.62;
 
+  // osc(freq) is sin(st * freq), so the number of lines across the coordinate
+  // is freq / TAU. Every line count below is written as COUNT * TAU, because
+  // a bare frequency is impossible to read as a line count and the first
+  // versions of the ridge and terrain sketches came out at a quarter of the
+  // density they were meant to have.
+  const TAU = 2 * Math.PI;
+
   const monochrome = [
 
     // 1. The wordmark breathing on the bass, brightness riding the peak, and
@@ -137,29 +144,33 @@
           .out(o0);
     } },
 
-    // 2. The wordmark mirrored through kaleid(4). The rotation creeps on its
-    // own and every beat kicks the angle on, with a short scale punch so the
-    // kick still reads when the angle happens to land somewhere symmetric.
+    // 2. The logotype mirrored four ways around the centre, letters readable,
+    // turning slowly with a kick on every beat and the ring breathing out on
+    // the bass.
     //
-    // The fold goes into o1 and the edge detector runs on that, rather than
-    // the fold going straight to screen. kaleid(4) squeezes a full turn into
-    // a 45 degree wedge and so stretches everything eight times tangentially,
-    // which turns letterforms into solid white slabs; reducing the slabs back
-    // to their outlines is what keeps this in the same thin line family as
-    // the rest, and it is the mirrored outlined logotype of the reference.
-    // No tile mask here: the repeats the fold picks up are more mirror
-    // structure, and the mask is cut in source coordinates that kaleid has
-    // already thrown most of the way outside the square.
+    // Built out of four placed copies, not out of kaleid(). kaleid(4) squeezes
+    // a full turn into a 45 degree wedge, which stretches everything eight
+    // times tangentially: letterforms come out as solid white slabs and the
+    // wordmark is not recognisable at all. Four copies of a single wordmark,
+    // pushed off centre and rotated a quarter turn apart, give the same
+    // fourfold symmetry with the type still legible.
+    //
+    // The base of the stack is solid(0,0,0,0) rather than the first copy.
+    // layer(c0, c1) mixes by c1's alpha only, so whatever sits at the bottom
+    // contributes its rgb unweighted, and the wordmark's soft glow would come
+    // through as a solid white slab where the layers above are transparent.
     { name: 'logo-kaleid', cam: false, mono: true, run() {
         let angle = 0, kick = 0;
-        feed.onBeat(() => { angle += Math.PI / 8; kick = 1; });
+        feed.onBeat(() => { angle += Math.PI / 12; kick = 1; });
         window.sketchUpdate = (dt) => { kick = Math.max(0, kick - dt / 260); };
-        src(s1).scale(() => 0.3 + 0.06 * kick, MARK_X, 1)
-          .kaleid(4)
-          .rotate(() => angle * 0.5 + hydra.synth.time * 0.05)
-          .out(o1);
-        trail(0.7, 1.006)
-          .layer(edges(() => src(o1), () => 3 + 3 * feed.peak))
+        wordmark(() => 0.26 + 0.015 * kick).out(o1);
+        const arm = (a) => src(o1).scrollY(() => -0.28 - 0.035 * feed.bass).rotate(a);
+        solid(0, 0, 0, 0)
+          .layer(arm(0))
+          .layer(arm(Math.PI / 2))
+          .layer(arm(Math.PI))
+          .layer(arm(-Math.PI / 2))
+          .rotate(() => angle * 0.5 + hydra.synth.time * 0.03)
           .out(o0);
     } },
 
@@ -188,28 +199,46 @@
           .out(o0);
     } },
 
-    // 4. Joy Division ridges: dense horizontal lines pushed around by a slow
-    // noise field, the push scaled by the bass so the ridges heave on the
-    // kick. thresh comes after the displacement so the lines stay crisp.
+    // 4. Joy Division ridges: sixty thin horizontal lines, evenly spaced and
+    // mostly flat, with local bumps where the field pushes them up. The bass
+    // scales the bump height, so the ridges heave on the kick.
+    //
+    // Three things make this read as ridges rather than as marbling. The
+    // oscillator frequency is in radians across the coordinate, so LINES * TAU
+    // is the honest way to ask for a given number of lines; a bare osc(110)
+    // is 17 lines, thick and few. The threshold is fixed and tight, which
+    // holds the lines at a couple of pixels instead of letting them swell into
+    // bands. And the displacement field is gated by a thresholded second noise
+    // so it is near zero over most of the frame: an ungated field bends every
+    // line everywhere and the result is contour soup, not a ridge plot.
+    //
+    // The modulator's red channel is zeroed, so the displacement is in y only
+    // and the lines never slide along their own length.
     { name: 'ridge-lines', cam: false, mono: true, run() {
-        osc(110, 0, 0).rotate(Math.PI / 2)
-          .modulate(noise(2.5, 0.08), () => 0.04 + 0.35 * feed.bass)
-          .thresh(() => 0.94 - 0.06 * feed.peak, 0.012)
+        const bumps = () => noise(4.5, 0.06)
+          .mult(noise(2.2, 0.05).thresh(0.3, 0.3))
+          .mult(solid(0, 1, 0, 1));
+        osc(60 * TAU, 0, 0).rotate(Math.PI / 2)
+          .modulate(bumps(), () => 0.015 + 0.13 * feed.bass)
+          .thresh(0.93, 0.01)
           .out(o0);
     } },
 
-    // 5. A bundle of near-parallel lines bent by noise, laid over a slow
-    // feedback smear so the bundle reads as ribbon rather than as fence. The
-    // smear has to stay short: at fade 0.84 and grow 1.005 the copies pile up
-    // into fat white bands and the frame goes two thirds white, which is the
-    // opposite of the look. Thin lines, a half-life of a couple of frames and
-    // barely any growth keep the bright edge with a grey body behind it.
+    // 5. A bundle of some forty-five thin lines bending together, laid over a
+    // slow feedback smear so the bundle reads as ribbon rather than as fence.
+    //
+    // Two numbers do all the work. The count: osc(60) is not sixty lines, it
+    // is sixty radians, which is nine and a half, and nine fat bands is not a
+    // bundle. And the smear: at fade 0.84 and grow 1.005 the copies pile up
+    // into fat white bands and the frame goes two thirds white, the opposite
+    // of the look, so the half-life is a couple of frames and the growth is
+    // almost nothing. The bright line with a grey body behind it is the point.
     { name: 'ribbons', cam: false, mono: true, run() {
-        trail(0.5, 1.0008)
-          .layer(keyed(osc(60, 0.05, 0)
-            .modulate(noise(1.4, 0.04), () => 0.1 + 0.35 * feed.bass)
+        trail(0.45, 1.0008)
+          .layer(keyed(osc(45 * TAU, 0.05, 0)
+            .modulate(noise(1.4, 0.04), () => 0.06 + 0.2 * feed.bass)
             .rotate(0.35)
-            .thresh(0.96, 0.01)))
+            .thresh(0.94, 0.008)))
           .out(o0);
     } },
 
@@ -242,16 +271,29 @@
           .out(o0);
     } },
 
-    // 8. Wireframe terrain: a grid of thin lines warped by noise, scrolling
-    // away from the viewer, with a y-dependent zoom standing in for
-    // perspective. modulateScale is last in the chain, so it works on the
-    // screen coordinate and the whole grid converges toward the horizon.
+    // 8. Wireframe terrain: a forty by twenty-five mesh of single pixel lines
+    // warped by a smooth field and compressing toward the horizon.
+    //
+    // The warp amplitude is the thing to keep small. At 0.22 the coordinate
+    // gradient folds over in places and whole cells collapse into white
+    // blobs; a tenth of that bends the mesh without ever folding it.
+    //
+    // The rows scroll away on the oscillator's own sync argument rather than
+    // on scrollY. scrollY ends in fract(st), and although the grid itself is
+    // exactly periodic the noise warp sampled either side of the wrap is not,
+    // so a hard seam of torn cells crossed the frame once a second.
+    //
+    // modulateScale is last in the chain, so it works on the screen
+    // coordinate. Its ramp comes from a rotated gradient rather than from a
+    // low frequency oscillator: gradient gives a true 0 to 1 in red, which is
+    // the channel modulateScale reads, where osc(1) only covers 0.5 to 0.92
+    // and barely leans the grid at all.
     { name: 'wire-terrain', cam: false, mono: true, run() {
-        osc(70, 0, 0).thresh(0.978, 0.008)
-          .add(osc(70, 0, 0).rotate(Math.PI / 2).thresh(0.978, 0.008))
-          .modulate(noise(2.2, 0.05), () => 0.04 + 0.22 * feed.bass)
-          .scrollY(0, 0.05)
-          .modulateScale(osc(1, 0, 0).rotate(Math.PI / 2), 1.1, 0.45)
+        const yRamp = () => gradient(0).rotate(Math.PI / 2);
+        osc(40 * TAU, 0, 0).thresh(0.984, 0.006)
+          .add(osc(25 * TAU, 0.012, 0).rotate(Math.PI / 2).thresh(0.984, 0.006))
+          .modulate(noise(1.6, 0.04), () => 0.02 + 0.06 * feed.bass)
+          .modulateScale(yRamp(), 1.4, 1.0)
           .out(o0);
     } },
 
@@ -283,25 +325,35 @@
 
   const colour = [
 
-    // 11. The boot logo over a deep field, scaled on the bass. kaleid(2) is a
-    // hard cut rather than a constant fold: two separate chains crossfaded by
-    // a 0 or 1 amount, because kaleid has no identity value of nSides that
-    // would let a single chain switch itself off.
+    // 11. The boot logo, centred and readable across about eighty percent of
+    // the width, bouncing on the bass over a palette field that folds through
+    // kaleid(2) while the bass is over BASS_LOUD.
+    //
+    // The fold is on the field, never on the logo. kaleid returns
+    // r * vec2(cos a, sin a), a radial remap centred on 0 rather than on 0.5,
+    // so folding a wide horizontal logotype throws it off the quad and stands
+    // what is left of it on its side against the two edges: the logo was
+    // unreadable on every frame the gate was open. Folding only the field
+    // keeps the accent and keeps the type.
     //
     // The gate is BASS_LOUD, not the 0.7 of the spec. Measured on the mock
     // 174 BPM feed, feed.bass runs 0.29 to 0.749: feed.js chases the
     // AGC-normalised value at ATTACK 0.6 per frame while the kick envelope is
     // already decaying, so the smoothed band never gets near its ceiling. A
     // 0.7 gate would open for a frame or two at the very tip of a kick, if at
-    // all, and 0.8 would never open.
+    // all, and 0.8 would never open. It is a hard cut between two separate
+    // chains because kaleid has no value of nSides that is the identity.
     { name: 'logo-colour', cam: false, mono: false, run() {
         const [dr, dg, db] = palette.rgb('deep');
         const [pr, pg, pb] = palette.rgb('purple');
-        const amount = () => 0.19 + 0.06 * feed.bass;
-        const logo = () => src(s2).mask(oneTile()).scale(amount, LOGO_X, 1);
-        solid(dr, dg, db, 1)
-          .add(noise(2, 0.03).color(pr, pg, pb), () => 0.12 + 0.3 * feed.bass)
-          .layer(logo().blend(logo().kaleid(2), () => (feed.bass > BASS_LOUD ? 1 : 0)))
+        const [mr, mg, mb] = palette.rgb('magenta');
+        const field = () => solid(dr, dg, db, 1)
+          .add(noise(2.2, 0.05).color(pr, pg, pb), () => 0.25 + 0.5 * feed.bass)
+          .add(osc(9, 0.05, 0).color(mr, mg, mb), 0.2);
+        field()
+          .blend(field().kaleid(2), () => (feed.bass > BASS_LOUD ? 1 : 0))
+          .layer(src(s2).mask(oneTile())
+            .scale(() => 0.2 + 0.015 * feed.bass, LOGO_X, 1))
           .out(o0);
     } },
 
@@ -336,6 +388,7 @@
         const [pr, pg, pb] = palette.rgb('plum');
         const [dr, dg, db] = palette.rgb('deep');
         const [kr, kg, kb] = palette.rgb('pink');
+        const [wr, wg, wb] = palette.rgb('white');
         let lastFlash = -1e9, flash = 0, wasOver = false;
         window.sketchUpdate = (dt) => {
           const now = performance.now();
@@ -347,7 +400,7 @@
         solid(dr, dg, db, 1)
           .add(noise(2.4, 0.04).color(pr, pg, pb), 0.45)
           .add(osc(6, 0.2, 0).color(kr, kg, kb).kaleid(5), () => flash * 0.9)
-          .add(solid(1, 1, 1, 1), () => flash * flash * 0.5)
+          .add(solid(wr, wg, wb, 1), () => flash * flash * 0.5)
           .out(o0);
     } },
 
@@ -374,6 +427,11 @@
     // the palette magenta right round into orange. Referencing the drift to
     // the target tempo keeps a normal set inside the magenta to violet end of
     // the palette and still pulls the colour when the tempo is unusual.
+    //
+    // feed.bpm is 0, not the current tempo, whenever no deck is the master:
+    // at startup, and for the twenty seconds between a stop and the idle
+    // fallback. Taken literally that is a quarter turn of hue, straight out of
+    // the palette, so a missing tempo falls back to the target instead.
     { name: 'glitch-scan', cam: false, mono: false, run() {
         const [mr, mg, mb] = palette.rgb('magenta');
         const [vr, vg, vb] = palette.rgb('violet');
@@ -382,7 +440,10 @@
         window.sketchUpdate = (dt) => { blocks += (160 - blocks) * Math.min(1, dt / 420); };
         osc(18, 0.05, 0).color(mr, mg, mb)
           .add(noise(3, 0.1).color(vr, vg, vb), 0.4)
-          .hue(() => 0.02 * Math.sin(hydra.synth.time * 0.2) + 0.25 * ((feed.bpm - 174) / 174))
+          .hue(() => {
+            const bpm = feed.bpm > 20 ? feed.bpm : 174;
+            return 0.02 * Math.sin(hydra.synth.time * 0.2) + 0.25 * ((bpm - 174) / 174);
+          })
           .pixelate(() => blocks, () => Math.max(6, blocks * 0.56))
           .mult(osc(180, 0, 0).rotate(Math.PI / 2).posterize(2, 1).brightness(0.35))
           .out(o0);

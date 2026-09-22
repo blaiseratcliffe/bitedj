@@ -17,6 +17,13 @@
 
   const canvas = document.getElementById('stage');
   const hydra = new Hydra({ canvas, width: RENDER_W, height: RENDER_H, detectAudio: false, makeGlobal: true });
+  // The width and height above do nothing when a canvas is supplied:
+  // _initCanvas (vendor/hydra-synth.js:3154-3158) adopts canvas.width and
+  // canvas.height instead and drops the options. #stage is sized in CSS only,
+  // so without this the whole show renders at the canvas element's default
+  // 300x150 and is stretched to the panel. setResolution is the only thing
+  // that actually resizes the canvas and the four output framebuffers.
+  hydra.setResolution(RENDER_W, RENDER_H);
   window.hydra = hydra;
   // makeGlobal mirrors window.fps onto synth.fps on every rendered frame
   // (EvalSandbox.tick() in the vendored bundle, vendor/hydra-synth.js
