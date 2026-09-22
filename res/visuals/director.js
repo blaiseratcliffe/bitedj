@@ -6,11 +6,12 @@
 // until the next beat arrives. Nobody is watching an idle screen, and
 // swapping sketches on a timer only spent GPU on an empty room.
 //
-// Outputs. o0 is the sketch, o1 is the sketch's own scratch, and o2 and o3
-// are reserved by this file for the crossfade: nothing in sketches.js may
-// write to either, and neither may s3, which holds the frozen frame. Sources
-// s4 to s7 belong to patterns.js and a sketch reaches them through
-// patterns.bind() rather than by hand. A switch
+// Outputs. o0 is the sketch, o1 is the sketch's own scratch, and o2 and the
+// source s3 are reserved by this file for the crossfade: nothing in
+// sketches.js may write to either. o3 is not written by anything today and
+// stays reserved here rather than being handed to the sketches, so the
+// crossfade keeps a spare output. Sources s4 to s7 belong to patterns.js and
+// a sketch reaches them through patterns.bind() rather than by hand. A switch
 // used to be a 125 ms dip to black through a CSS opacity transition, which
 // read as a cut with a hole in it. Now the outgoing frame is frozen, the new
 // sketch starts straight away in o0, and o2 shows a mix of the two for two
@@ -42,8 +43,8 @@
 //
 // Sketches drive their own per-frame work through window.sketchUpdate(dt),
 // which this file calls every rendered frame; a sketch must never assign
-// window.update itself, that property belongs to this file (see the notes
-// by the assignments below for why).
+// window.update or window.afterUpdate itself, both of those belong to this
+// file (see the notes by the assignments below for why).
 (function () {
   const RENDER_W = 960, RENDER_H = 540;
   const FPS = 30;
@@ -105,13 +106,13 @@
 
   // Crossfade. `melt` is 1 the moment a new sketch starts and eases to 0 over
   // MELT_MS; `pending` holds a sketch whose snapshot frame has been armed but
-  // not yet captured, and is the re-entrancy guard: a second show() before the
-  // first lands replaces the target rather than racing it.
+  // not yet captured, and `queued` a request that arrived while all that was
+  // in flight.
   //
   // `grabbing` is set by show() and cleared by the afterUpdate hook that
   // takes the still; `swapNext` is then read by the driveFrame after it, so
   // the new sketch starts on the first tick that has a still to melt out of.
-  let melt = 0, meltElapsed = 0, melting = false, pending = null;
+  let melt = 0, meltElapsed = 0, melting = false, pending = null, queued = null;
   let grabbing = false, swapNext = false;
 
   // The frozen frame. 960x540 like the render target, so the copy is one to
@@ -119,6 +120,14 @@
   const still = document.createElement('canvas');
   still.width = RENDER_W; still.height = RENDER_H;
   const stillCtx = still.getContext('2d');
+  // Bind the canvas to s3 once, here, and never again: HydraSource.init
+  // assigns a fresh regl.texture and drops the old one on the floor without
+  // destroying it, and regl keeps every texture it created registered, so a
+  // re-init per switch leaks about two megabytes each time. At 256 beats a
+  // switch that is roughly 85 MB an hour, which a box that runs a whole set
+  // does notice. Every later grab writes into this texture with subimage()
+  // instead; the canvas never changes size, so the shape always matches.
+  s3.init({ src: still, dynamic: false });
 
   // hydra resolves the camera asynchronously and swallows the rejection, so
   // probe the device list ourselves to know whether camera sketches are
@@ -237,8 +246,20 @@
     return candidates[Math.floor(Math.random() * candidates.length)];
   }
 
+  // A switch is in flight from the moment show() arms the snapshot until the
+  // mix lands, about two and a tenth seconds later.
+  function busy() { return melting || grabbing || swapNext; }
+
   function show(sketch) {
     if (!sketch) { console.log('visuals: no sketch to show'); return; }
+    // Nothing may start a crossfade on top of one that is already running.
+    // The freeze, the swap and the mix are one sequence, and restarting it
+    // from its own midpoint on every tick is how a melt turns into a stutter;
+    // the rotation checks this for itself and simply waits a beat, but the
+    // two paths that come in from outside it, the feed returning from idle
+    // and a camera disappearing, are exactly the ones that never retry. So
+    // the request is held rather than dropped and endMelt() runs it.
+    if (busy()) { queued = sketch; return; }
     // Camera lifecycle, decided here because this is the only place that sees
     // the switch itself. Done before the switch lands so the stream has the
     // crossfade to come up in. Both tests are the camInit flag against the
@@ -282,11 +303,30 @@
     if (!grabbing) return;
     grabbing = false;
     try {
+      // Black first, and not clearRect. The stage's drawing buffer carries
+      // alpha and several sketches leave alpha 0 where they are black:
+      // anything ending in edges() takes its alpha from luma(), so contours,
+      // cam-contours, flow-lines and the idle sketch are transparent over
+      // most of the frame. drawImage composites source-over, so without this
+      // fill the still keeps whatever an earlier still left in those pixels,
+      // for as long as the page runs. Black is what the screen showed there,
+      // because the page behind the canvas is black.
+      stillCtx.fillStyle = '#000';
+      stillCtx.fillRect(0, 0, still.width, still.height);
       stillCtx.drawImage(canvas, 0, 0, still.width, still.height);
-      // dynamic false, so the texture is uploaded once here and then held:
-      // a source that re-uploaded every frame would track the new sketch and
-      // there would be nothing to melt out of.
-      s3.init({ src: still, dynamic: false });
+      // subimage, not init: see the note by the s3.init above. This is the
+      // path the vendored regl takes, since its texture objects do carry a
+      // subimage(). The fallback exists because a different build might not,
+      // and there the texture has to be destroyed by hand first, because
+      // HydraSource.init will not do it. s3 stays dynamic false either way,
+      // so hydra never re-uploads it on its own and the still holds until the
+      // next switch rather than tracking the new sketch.
+      if (typeof s3.tex.subimage === 'function') {
+        s3.tex.subimage(still);
+      } else {
+        try { s3.tex.destroy(); } catch (e2) { /* already gone */ }
+        s3.init({ src: still, dynamic: false });
+      }
       swapNext = true;
     } catch (e) {
       console.error('visuals: snapshot failed', e);
@@ -306,6 +346,10 @@
     if (!sketch) return;
     clearScratch();
     window.update = driveFrame;
+    // Re-asserted for the same reason as window.update: a stray assignment
+    // from anywhere else would stop the snapshot being taken and every later
+    // switch would melt out of a stale still, silently.
+    window.afterUpdate = grabStill;
     feed.clearBeatListeners();
     window.sketchUpdate = null;
     // Drop the outgoing sketch's claim on its patterns, so the cache can
@@ -338,6 +382,11 @@
     // again and holding it means a snapshot that fails has something to fall
     // back on.
     solid(0, 0, 0, 0).out(o2);
+    if (queued) {
+      const next = queued;
+      queued = null;
+      show(next);
+    }
   }
 
   // The rotation logic must survive sketch switches, so it subscribes with
@@ -345,10 +394,10 @@
   feed.onBeatAlways(() => {
     lastBeatAt = performance.now();
     if (idle) { idle = false; show(pickNext()); return; }
-    // Never start a crossfade on top of one that is still running: the
-    // rotation can afford to wait a beat, and restarting a melt from its own
-    // midpoint is for the paths that have no choice, like a camera going away.
-    if (melting || grabbing || swapNext) return;
+    // The rotation, unlike the idle and camera paths, has no reason to be
+    // held: it comes round every 256 beats and can simply wait for the next
+    // one rather than queueing behind a melt that is still running.
+    if (busy()) return;
     if (feed.beats % BEATS_PER_SWITCH === 0 && performance.now() - currentSince > MIN_SKETCH_MS) {
       show(pickNext());
     }
@@ -376,6 +425,9 @@
     frames = 0; lastLog = now;
   }, LOG_EVERY_MS);
 
+  // The first switch of the page has nothing behind it: the still is a blank
+  // canvas, so the idle sketch melts up out of black over two seconds. That
+  // is deliberate and is the boot fade; it is not the black crossfade bug.
   show(window.idleSketch);
   idle = true;
 })();
