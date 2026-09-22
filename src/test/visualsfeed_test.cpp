@@ -294,35 +294,64 @@ TEST_F(VisualsFeedTest, OneDrainBatchYieldsThreeDistinctWindows) {
 }
 
 // The other half of the same bargain: a stall on the main thread must not
-// turn into a lasting delay. Twenty windows arrive at once, far more than the
-// 30 Hz timer could ever catch up on at one window per frame, so the first
-// drain throws the backlog away and keeps only the newest few. Three reads
-// then exhaust it and every read after that repeats the last window.
+// turn into a lasting delay. Twenty windows arrive in one call, far more than
+// the 30 Hz timer could catch up on at one window per frame, so two separate
+// bounds apply and this pins both.
+//
+// The producer bound comes first: the queue holds kQueueCapacity entries, so
+// try_push accepts windows 1 to 16 and drops 17 to 20. Window 16 is the
+// newest thing in the queue, and nothing read here can ever be newer.
+//
+// The consumer bound follows: the first read sees 16 queued, which is over
+// kQueueHighWater, trims back to kQueueTrimTo and then takes one. So the
+// readable windows are 14, 15 and 16, at amplitudes 0.56, 0.60 and 0.64, and
+// read four onwards must find the queue empty and repeat window 16 exactly.
+//
+// Pinning the values rather than only their order is deliberate. The first
+// version of the drain popped without going through front(), which left the
+// queue's consumer-side cache stale; reads one to three still looked right,
+// and read four returned a slot that had never been written, as a denormal
+// float. Only an exact-value assertion catches that shape of failure.
 TEST_F(VisualsFeedTest, BacklogIsBoundedToThreeWindows) {
     constexpr int kFramesPerWindow = kSampleRate / VisualsFeed::kFramesPerSecond;
     constexpr int kWindows = 20;
     constexpr int kFrames = kFramesPerWindow * kWindows;
+    constexpr double kAmplitudeStep = 0.04;
 
     std::vector<CSAMPLE> buffer(kFrames * mixxx::kEngineChannelCount);
     double phase = 0.0;
     const double step = 2.0 * M_PI * 60.0 / kSampleRate;
     for (int f = 0; f < kFrames; ++f) {
-        // A different amplitude per window, so a repeated value is visible.
-        const double amplitude = 0.04 * (f / kFramesPerWindow + 1);
+        // A different amplitude per window, so a repeated or stale window is
+        // visible rather than hiding behind an identical value.
+        const double amplitude = kAmplitudeStep * (f / kFramesPerWindow + 1);
         const CSAMPLE v = static_cast<CSAMPLE>(amplitude * std::sin(phase));
         buffer[2 * f] = v;
         buffer[2 * f + 1] = v;
         phase += step;
     }
+    ASSERT_GT(kWindows, VisualsFeed::kQueueCapacity)
+            << "the test only bounds the producer if it overfills the queue";
     m_pFeed->process(buffer.data(), static_cast<int>(buffer.size()));
 
     std::vector<float> peaks;
     for (int i = 0; i < 6; ++i) {
         peaks.push_back(m_pFeed->latestBands().peak);
     }
-    // Three reads move, the rest do not: the drain left three windows.
+
+    // Window numbers are 1-based here, matching the amplitude ramp above.
+    const int newestQueued = VisualsFeed::kQueueCapacity;
+    const int readable = static_cast<int>(VisualsFeed::kQueueTrimTo);
+    ASSERT_EQ(3, readable) << "this test spells out three reads";
+    for (int i = 0; i < readable; ++i) {
+        const float expected =
+                static_cast<float>(kAmplitudeStep * (newestQueued - readable + 1 + i));
+        EXPECT_NEAR(expected, peaks[i], 0.02f) << "read " << i + 1;
+    }
     EXPECT_LT(peaks[0], peaks[1]);
     EXPECT_LT(peaks[1], peaks[2]);
+    // Nothing is left, so every later read repeats the newest queued window.
+    // Exact equality, because a repeat is a copy of the same struct.
     EXPECT_FLOAT_EQ(peaks[2], peaks[3]);
     EXPECT_FLOAT_EQ(peaks[2], peaks[4]);
     EXPECT_FLOAT_EQ(peaks[2], peaks[5]);

@@ -96,19 +96,37 @@ bool VisualsFeed::enabled() const {
     return value;
 }
 
+bool VisualsFeed::takeWindow() {
+    const Bands* pFront = m_bandQueue.front();
+    if (!pFront) {
+        return false;
+    }
+    m_lastBands = *pFront;
+    m_bandQueue.pop();
+    return true;
+}
+
 void VisualsFeed::drainBands() {
+    // Every pop in here goes through takeWindow(), which pops only after
+    // front() has handed back a non-null pointer. That is not defensive
+    // style, it is the queue's contract: rigtorp's front() keeps a
+    // consumer-side cache of the write index and only front() itself
+    // refreshes it, so a bare pop() leaves the cache stale and the next
+    // front() takes its fast path and returns a pointer to a slot that was
+    // never constructed. pop() asserts on this, but the appliance builds with
+    // NDEBUG, so the first version of this function read uninitialised memory
+    // on the Pi instead of failing loudly. Copying through front() also means
+    // nothing is ever read from a slot after it has been popped.
+    //
     // Only trim once the backlog is clearly a stall, not ordinary batch
     // jitter: a fresh ~100 ms batch leaves three windows queued and must be
-    // played out in full.
+    // played out in full. The trimmed windows are copied over rather than
+    // skipped, which costs nothing and keeps one code path.
     if (m_bandQueue.size() > kQueueHighWater) {
-        while (m_bandQueue.size() > kQueueTrimTo) {
-            m_bandQueue.pop();
+        while (m_bandQueue.size() > kQueueTrimTo && takeWindow()) {
         }
     }
-    if (Bands* pFront = m_bandQueue.front()) {
-        m_lastBands = *pFront;
-        m_bandQueue.pop();
-    }
+    takeWindow();
 }
 
 VisualsFeed::Bands VisualsFeed::latestBands() {
@@ -118,6 +136,18 @@ VisualsFeed::Bands VisualsFeed::latestBands() {
 
 void VisualsFeed::retune(mixxx::audio::SampleRate sampleRate) {
     m_sampleRate = sampleRate;
+    // Drop whatever partial window was carried in at the old rate. Its frame
+    // count is measured against a window length that no longer applies, and
+    // the energy in it was filtered at the old corners, so it is meaningless
+    // either way. Leaving it also underflowed the slicing loop: a rate drop
+    // from 48000 to 44100 shortens the window from 1600 frames to 1470, and a
+    // carried partial longer than the new window made the next chunk length
+    // negative, walking the read pointer back off the front of the buffer.
+    for (int b = 0; b < kBandCount; ++b) {
+        m_sumSquares[b] = 0.0;
+    }
+    m_peak = 0.0f;
+    m_framesAccumulated = 0;
     m_pLow->setFrequencyCorners(sampleRate, kBassCorner);
     m_pLowMid->setFrequencyCorners(sampleRate, kBassCorner, kLowMidCorner);
     m_pMid->setFrequencyCorners(sampleRate, kLowMidCorner, kMidCorner);
@@ -181,20 +211,26 @@ void VisualsFeed::process(const CSAMPLE* pBuffer, const int iBufferSize) {
         // a frame count doubled, and m_framesAccumulated counts whole frames.
         // So the filters never see a half frame.
         const int accumulated = m_framesAccumulated * mixxx::kEngineChannelCount;
-        const int chunk = std::min(count - offset, samplesPerPublish - accumulated);
-        for (int b = 0; b < kBandCount; ++b) {
-            filters[b]->process(pBuffer + offset, m_pScratch, chunk);
-            double sum = 0.0;
-            for (int i = 0; i < chunk; ++i) {
-                sum += static_cast<double>(m_pScratch[i]) * m_pScratch[i];
+        // Clamped at zero so a carried partial window that is somehow longer
+        // than the current window cannot drive offset backwards and read
+        // before pBuffer. retune() clearing the accumulators is what stops
+        // that arising; this is the belt to that pair of braces.
+        const int chunk = std::max(0, std::min(count - offset, samplesPerPublish - accumulated));
+        if (chunk > 0) {
+            for (int b = 0; b < kBandCount; ++b) {
+                filters[b]->process(pBuffer + offset, m_pScratch, chunk);
+                double sum = 0.0;
+                for (int i = 0; i < chunk; ++i) {
+                    sum += static_cast<double>(m_pScratch[i]) * m_pScratch[i];
+                }
+                m_sumSquares[b] += sum;
             }
-            m_sumSquares[b] += sum;
+            for (int i = offset; i < offset + chunk; ++i) {
+                m_peak = std::max(m_peak, std::abs(pBuffer[i]));
+            }
+            m_framesAccumulated += chunk / mixxx::kEngineChannelCount;
+            offset += chunk;
         }
-        for (int i = offset; i < offset + chunk; ++i) {
-            m_peak = std::max(m_peak, std::abs(pBuffer[i]));
-        }
-        m_framesAccumulated += chunk / mixxx::kEngineChannelCount;
-        offset += chunk;
 
         if (m_framesAccumulated >= framesPerPublish) {
             Bands bands;
@@ -211,8 +247,16 @@ void VisualsFeed::process(const CSAMPLE* pBuffer, const int iBufferSize) {
             // sidechain drops the window and carries on. Blocking here would
             // stall the thread that also feeds the recorder. A dropped window
             // is a dropped animation frame and nothing more, so the result is
-            // deliberately ignored.
+            // deliberately ignored. Note the accumulators above are reset
+            // before the push and regardless of whether it succeeds, so a
+            // full queue costs exactly the one window and the next one starts
+            // clean rather than inheriting a double-length analysis.
             static_cast<void>(m_bandQueue.try_push(bands));
+        } else if (chunk == 0) {
+            // Unreachable: chunk is only zero when the accumulator already
+            // holds a whole window, which the branch above consumes. Break
+            // rather than spin the sidechain thread if that ever changes.
+            break;
         }
     }
 }

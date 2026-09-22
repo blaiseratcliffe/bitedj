@@ -146,9 +146,15 @@
   function show(sketch) {
     if (!sketch) { console.log('visuals: no sketch to show'); return; }
     if (pendingSwitch) { clearTimeout(pendingSwitch); pendingSwitch = null; }
-    // Camera lifecycle, decided here because this is the only place that
-    // knows both which sketch is leaving and which is arriving. Done before
-    // the dip timer so the stream has the dip to come up in.
+    // Camera lifecycle, decided here because this is the only place that sees
+    // the switch itself. Done before the dip timer so the stream has the dip
+    // to come up in. Both tests are the camInit flag against the incoming
+    // sketch, deliberately not `current.cam`: `current` only updates inside
+    // the dip timer below, so show(camSketch) followed within DIP_MS by
+    // show(nonCamSketch), which is exactly what the devicechange path does,
+    // would still see the previous non-cam `current`, skip the release, and
+    // leave camInit stuck true with the stream open. No later cam sketch
+    // could re-init after that.
     if (sketch.cam && !camInit) {
       try {
         s0.initCam(0);
@@ -157,7 +163,7 @@
       } catch (e) {
         console.error('visuals: initCam failed', e);
       }
-    } else if (!sketch.cam && camInit && current && current.cam) {
+    } else if (!sketch.cam && camInit) {
       // s0.clear() stops the stream's tracks and leaves a 1x1 blank behind.
       // It is safe here, and only here, because no cam sketch is about to
       // draw s0; hush() would do this to s1 and s2 as well.

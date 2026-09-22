@@ -107,11 +107,18 @@ class VisualsFeed : public QObject, public SideChainWorker {
     };
 
     void retune(mixxx::audio::SampleRate sampleRate);
-    // Main thread only. Pops the window queue down to at most kQueueHighWater
-    // entries, then takes one more into m_lastBands if one is there. The trim
-    // is what stops a scheduling stall from turning into a lasting delay:
-    // without it the timer would spend the next second walking through a
-    // backlog it can never catch up on at one window per frame.
+    // Main thread only. Takes one window into m_lastBands and returns true,
+    // or returns false when the queue is empty. Always front() then pop(),
+    // never a bare pop(): see the note on the queue's contract in
+    // drainBands().
+    bool takeWindow();
+    // Main thread only. Once the backlog passes kQueueHighWater entries this
+    // trims it back to kQueueTrimTo, and it then takes one more window into
+    // m_lastBands if one is there. kQueueHighWater is only the trigger; the
+    // target is kQueueTrimTo. The trim is what stops a scheduling stall from
+    // turning into a lasting delay: without it the timer would spend the next
+    // second walking through a backlog it can never catch up on at one window
+    // per frame.
     void drainBands();
     // Main thread only. Replaces m_decks with `count` fresh deck proxy
     // bundles. Called from the constructor and again from buildFrame()
