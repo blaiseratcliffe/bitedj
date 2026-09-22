@@ -300,17 +300,44 @@
     return () => amount * Math.sin(flow() * rate + (phase || 0));
   }
 
-  // Beats per revolution in pattern-grid: 32, which is eight bars and eleven
-  // seconds at 174 BPM.
+  // The beat clock: beats elapsed, integrated on the render clock at the
+  // master deck's tempo, wrapping at TURN_BEATS so the number stays small and
+  // the wrap is exactly one revolution for anything that divides by it.
   //
-  // This number was the suspect when the sketch first measured 7.3 to 9.7
-  // percent frame to frame against a budget of 3, and it was innocent.
-  // Slowing it to 256 beats made the sketch worse, not better: 8.2 to 11.4 on
-  // the same pattern. What was expensive was the pattern, a grid with a fifth
-  // of the frame lit, and the fix was the coverage ceiling in patterns.js
-  // rather than anything here. On a pattern inside that ceiling, at 32 beats a
-  // turn, the same sketch measures 0.6 to 1.3.
-  const TURN_BEATS = 32;
+  // The first version of pattern-grid read `(feed.beats % 32) + feed.phase`
+  // instead, and that is not a clock. feed.beats increments on the beat edge
+  // the deck reports and feed.phase free-runs on the render clock and is
+  // corrected forward by the deck's beat_distance, so the two are not coupled
+  // at all: phase can already be a tenth of a beat past 1 when the integer
+  // arrives, or the integer can arrive first. Either way the sum steps, by up
+  // to a tenth of a beat, which at one revolution per 32 beats is 11 degrees
+  // of a dense grid in a single frame, once a beat, forever. Integrating
+  // through feed.beatMs() gives the same revolutions per bar with nothing to
+  // step: the tempo changes the rate, and a rate change is not a jump.
+  //
+  // 256 beats a revolution, not the 32 the sketch was first written with.
+  // 32 beats is eleven seconds at 174, which moves the corner of the frame
+  // about twelve pixels between rendered frames: on a pattern with two fifths
+  // of the frame lit that measured 2.7 to 3.0 percent frame to frame against
+  // a target of 1.5, and the two ways of buying that back both cost the
+  // picture. A longer trail did meet the number, at 1.3, and what came back
+  // was a grey motion-blurred disc with no line in it anywhere; the
+  // screenshots of both are in the report. At 256 beats, 88 s a revolution,
+  // the same pattern measures 0.8 to 2.5 with a short trail and stays visibly
+  // line work. It reads as a slow lean rather than a spin, which is the
+  // trade: this family is line work first.
+  const TURN_BEATS = 256;
+  let beatT = 0, beatAt = performance.now();
+  function beatTick() {
+    const now = performance.now();
+    const dt = Math.min(100, now - beatAt);
+    beatAt = now;
+    beatT += dt / (window.feed ? feed.beatMs() : 60000 / 174);
+    if (beatT >= TURN_BEATS) beatT -= TURN_BEATS;
+    requestAnimationFrame(beatTick);
+  }
+  requestAnimationFrame(beatTick);
+  const beats = () => beatT;
 
   // No pattern, no black screen: the wordmark is in memory from the first
   // frame the page ever drew.
@@ -589,9 +616,17 @@
     // 12. A grid or isometric pattern turning once every 32 beats, which is
     // eight bars: slow enough that the motion is felt rather than watched, and
     // locked to the tempo rather than to a clock, so it comes round on a bar
-    // line at any BPM. feed.beats % 32 plus feed.phase is a continuous ramp
-    // through the 32 beats, and the step from 31.99 back to 0 is a whole turn,
-    // which is no step at all.
+    // line at any BPM. The angle comes off beats(), the tempo-integrated
+    // accumulator above, for the reason written out there.
+    //
+    // This is the widest spread in the family, 0.8 to 2.5 percent frame to
+    // frame across three runs on the same pattern, and the cause is the
+    // tiling rather than the rotation: the texture is square and the zoom is
+    // 1.3, so the corners sample outside it and hydra's fract() puts a copy
+    // of the artwork there. As the rotation carries a tile boundary across the
+    // frame, a band of the picture changes all at once. Masking to one tile
+    // the way wordmark() does would fix it and would put black corners on a
+    // turning frame, which is a different sketch.
     //
     // modulateScale is last in the chain, so the perspective lean works on the
     // screen coordinate; its ramp is a rotated gradient for the reason given
@@ -604,11 +639,11 @@
         if (!p) { patternFallback(); return; }
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
         const yRamp = () => gradient(0).rotate(Math.PI / 2);
-        const turn = () => 2 * Math.PI * ((feed.beats % TURN_BEATS) + feed.phase) / TURN_BEATS;
+        const turn = () => 2 * Math.PI * beats() / TURN_BEATS;
         smear(sweepPair(0)
           .rotate(turn)
           .scale(() => 1.3 + 0.06 * feed.swell, 1, SQUARE_Y)
-          .modulateScale(yRamp(), () => 0.15 + 0.35 * feed.swell, 1.0), 0.9, 1.0004)
+          .modulateScale(yRamp(), () => 0.15 + 0.35 * feed.swell, 1.0), 0.85, 1.0004)
           .out(o0);
     } },
 
@@ -666,13 +701,24 @@
     // speed. The smear is the file's own smear(), reading o0 rather than the
     // brief's o1, because o1 is scratch that the director blanks on every
     // switch and o0 is where the feedback in this file has always lived.
+    //
+    // The drift and the slow turn were added after the first version was
+    // looked at rather than measured: at 0.02 percent between rendered frames
+    // it was the smoothest thing in the library and it read as a photograph.
+    // A crossfade that takes 40 s is not motion to the eye, whatever the
+    // numbers say, so the frame now also creeps and leans.
     { name: 'pattern-melt', cam: false, mono: true, pattern: true, run() {
         const p = patterns.take([]);
         if (!p) { patternFallback(); return; }
         const wave = () => 0.5 - 0.5 * Math.cos(flow() * 0.22);
-        const base = patterns.base(p), top = patterns.top(p);
+        const base = patterns.base(), top = patterns.top();
         window.sketchUpdate = () => patterns.bindFrames(p, base, top, wave(), 0);
-        smear(sweepPair(0).scale(1, 1, SQUARE_Y), 0.92, 1.004).out(o0);
+        smear(sweepPair(0)
+          .scrollX(driftX(0.03, 0.041))
+          .scrollY(driftX(0.02, 0.029, 2.1))
+          .rotate(() => 0.05 * Math.sin(flow() * 0.017))
+          .scale(() => 1.05 + 0.04 * feed.swell, 1, SQUARE_Y), 0.92, 1.0008)
+          .out(o0);
     } },
 
     // 16. The same edge detector the contour sketches use, run over a pattern
@@ -920,16 +966,26 @@
     } },
 
     // 24. The one pattern sketch in the colour family: any pattern at all,
-    // used as a stencil through a slow violet to pink wash rather than as
-    // white line work. The wash is the whole frame and the pattern multiplies
-    // it, so the lit pixels are the artwork's and everything else is the deep
-    // token at a quarter weight, which is nearly black and still not a hole.
+    // drawn as palette-coloured line work on a dark field rather than as
+    // white.
     //
-    // mult(), not mask(): the pattern canvases are opaque black outside the
-    // line work, so there is no alpha to mask with, and multiplying by a white
-    // on black image is the same stencil with one texture read.
+    // The first version multiplied a wash by the pattern and came out nearly
+    // black. A wash built by adding palette tokens at a weight peaks well
+    // under any one of them, so the brightest line in the frame was about
+    // half of the palette magenta and the screenshot looked like an unlit
+    // room. The lines are now the palette token itself at full value, lifting
+    // from magenta toward pink on the swell, and the field is a separate,
+    // deliberately dim thing underneath: the deep token at a fifth, plus a
+    // slow violet oscillator at a tenth, which is dark enough that the lines
+    // are still the picture.
     //
-    // The osc feeding the wash takes offset 0 for the reason spelt out at
+    // layer(), and luma() to make the alpha it needs. The pattern canvases are
+    // opaque black outside the line work, so there is nothing to composite
+    // with until luma turns luminance into alpha; after that the colour is
+    // laid on at full strength wherever the artwork is lit, instead of being
+    // scaled by whatever the field happened to be there.
+    //
+    // The osc feeding the field takes offset 0 for the reason spelt out at
     // tunnel: at any other offset the three channels are already out of phase,
     // the source is full spectrum before .color() touches it, and the palette
     // violet arrives on screen as blue.
@@ -939,16 +995,22 @@
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
         const [dr, dg, db] = palette.rgb('deep');
         const [vr, vg, vb] = palette.rgb('violet');
+        const [mr, mg, mb] = palette.rgb('magenta');
         const [kr, kg, kb] = palette.rgb('pink');
-        const wash = () => solid(dr, dg, db, 1)
-          .add(osc(5, 0.012, 0).color(vr, vg, vb), () => 0.45 + 0.15 * feed.swell)
-          .add(noise(1.8, 0.015).color(kr, kg, kb), () => 0.15 + 0.2 * feed.energy)
-          .rotate(() => flow() * 0.02);
-        wash()
-          .mult(sweepPair(0)
+        // Magenta at rest, pink through a loud passage, and a few percent on
+        // the beat. Every one of these sits at or above the palette magenta.
+        const lift = () => 0.35 * feed.swell + 0.05 * feed.pulse;
+        const cr = () => mr + (kr - mr) * lift();
+        const cg = () => mg + (kg - mg) * lift();
+        const cb = () => mb + (kb - mb) * lift();
+        const field = () => solid(dr * 0.2, dg * 0.2, db * 0.2, 1)
+          .add(osc(5, 0.012, 0).color(vr, vg, vb).rotate(() => flow() * 0.02), 0.1);
+        field()
+          .layer(sweepPair(0)
             .scrollX(driftX(0.015, 0.04))
-            .scale(() => 1.04 + 0.05 * feed.swell, 1, SQUARE_Y))
-          .add(solid(dr * 0.3, dg * 0.3, db * 0.3, 1))
+            .scale(() => 1.04 + 0.05 * feed.swell, 1, SQUARE_Y)
+            .luma(0.12, 0.08)
+            .color(cr, cg, cb))
           .out(o0);
     } }
 
