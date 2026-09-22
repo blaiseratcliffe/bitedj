@@ -296,6 +296,12 @@ TEST_F(VisualsServerTest, EventsStreamDeliversFrame) {
     EXPECT_TRUE(got.contains("Content-Type: text/event-stream")) << got.constData();
     EXPECT_TRUE(got.contains("Access-Control-Allow-Origin: *")) << got.constData();
     EXPECT_EQ(1, got.count("data: {\"t\":1}\n\n")) << got.constData();
+    // The fixture's feed is enabled with its 33 ms timer running, so real
+    // frames land during the wait alongside the injected one. The feed's
+    // JSON is compact with alphabetical keys, so a real frame begins
+    // `{"bands"`: this is the only check here that the frameReady ->
+    // broadcastFrame connection itself works, not just direct injection.
+    EXPECT_GE(got.count("data: {\"bands\""), 1) << got.constData();
 }
 
 TEST_F(VisualsServerTest, StatusReportsEnabledAndClients) {
@@ -317,7 +323,7 @@ TEST_F(VisualsServerTest, UnknownPathIs404) {
 }
 
 TEST_F(VisualsServerTest, OversizedRequestIsRejected) {
-    const QByteArray got = request(QByteArray(600, 'A'));
+    const QByteArray got = request(QByteArray(5000, 'A'));
     EXPECT_TRUE(got.startsWith("HTTP/1.1 431")) << got.constData();
 }
 

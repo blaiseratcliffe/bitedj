@@ -10,9 +10,12 @@
 
 namespace {
 
-// The request is "GET /events HTTP/1.1" plus a handful of headers; 512 is
-// generous and bounds what a client that never sends the blank line can grow.
-constexpr qsizetype kMaxRequestBytes = 512;
+// The request is "GET /events HTTP/1.1" plus a handful of headers.
+// Chromium's EventSource GET carries User-Agent, sec-ch-ua*, Accept*,
+// Referer and Sec-Fetch-* headers, realistically 600-900 bytes, so the cap
+// has to clear that with room to spare; 4096 still bounds what a client that
+// never sends the blank line can grow, and this listener is loopback only.
+constexpr qsizetype kMaxRequestBytes = 4096;
 // A client that stops reading must be dropped before its unsent frames grow
 // the process. 64 KB is about 300 frames, ten seconds of stall.
 constexpr qint64 kMaxUnsentBytes = 64 * 1024;
@@ -28,6 +31,10 @@ VisualsServer::VisualsServer(VisualsFeed* pFeed, quint16 port, QObject* pParent)
     DEBUG_ASSERT(m_pFeed);
     connect(m_pServer, &QTcpServer::newConnection, this, &VisualsServer::onNewConnection);
     connect(m_pFeed, &VisualsFeed::frameReady, this, &VisualsServer::broadcastFrame);
+    // VisualsFeed is not this object's child (the sidechain owns it, see its
+    // own header), so its lifetime is not tied to ours. If it goes first,
+    // null the pointer rather than leave it dangling for /status to read.
+    connect(m_pFeed, &QObject::destroyed, this, [this]() { m_pFeed = nullptr; });
 
     if (!m_pServer->listen(QHostAddress::LocalHost, port)) {
         qWarning().noquote() << "visuals feed: cannot listen on"
@@ -115,8 +122,9 @@ void VisualsServer::handleRequest(QTcpSocket* pSocket, const QByteArray& request
     }
 
     if (method == "GET" && path == "/status") {
+        const bool enabled = m_pFeed && m_pFeed->enabled();
         const QByteArray body = QByteArray("{\"enabled\":") +
-                (m_pFeed->enabled() ? "1" : "0") +
+                (enabled ? "1" : "0") +
                 ",\"clients\":" + QByteArray::number(clientCount()) + "}";
         pSocket->write(
                 "HTTP/1.1 200 OK\r\n"
@@ -138,10 +146,15 @@ void VisualsServer::broadcastFrame(const QByteArray& json) {
     for (auto it = m_streams.begin(); it != m_streams.end();) {
         QTcpSocket* pSocket = *it;
         if (pSocket->bytesToWrite() > kMaxUnsentBytes) {
-            // Stalled reader. Dropping it is what keeps a wedged Chromium
-            // from growing this process for the rest of the set.
+            // Stalled reader: it is past this threshold precisely because it
+            // never drains its buffer, so disconnectFromHost() would wait on
+            // that same buffer with no timeout and reclaim nothing. abort()
+            // discards the unsent bytes, closes the socket immediately and
+            // emits disconnected() synchronously, which is why the erase
+            // happens first: onDisconnected() runs inside this call and must
+            // not find the socket still in m_streams.
             it = m_streams.erase(it);
-            pSocket->disconnectFromHost();
+            pSocket->abort();
             continue;
         }
         pSocket->write(event);
