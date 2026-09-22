@@ -951,6 +951,11 @@ WBeatSpinBox::up-button {
   min-width: 60px;
 }
 
+#VisualsSegmented #SettingsSegmentLeft,
+#VisualsSegmented #SettingsSegmentRight {
+  min-width: 60px;
+}
+
 #Mp3QualitySegmented #SettingsSegmentLeft,
 #Mp3QualitySegmented #SettingsSegmentMid,
 #Mp3QualitySegmented #SettingsSegmentRight {
