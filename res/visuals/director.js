@@ -8,7 +8,9 @@
 //
 // Outputs. o0 is the sketch, o1 is the sketch's own scratch, and o2 and o3
 // are reserved by this file for the crossfade: nothing in sketches.js may
-// write to either, and neither may s3, which holds the frozen frame. A switch
+// write to either, and neither may s3, which holds the frozen frame. Sources
+// s4 to s7 belong to patterns.js and a sketch reaches them through
+// patterns.bind() rather than by hand. A switch
 // used to be a 125 ms dip to black through a CSS opacity transition, which
 // read as a cut with a hole in it. Now the outgoing frame is frozen, the new
 // sketch starts straight away in o0, and o2 shows a mix of the two for two
@@ -52,7 +54,14 @@
   const LOG_EVERY_MS = 10000;
 
   const canvas = document.getElementById('stage');
-  const hydra = new Hydra({ canvas, width: RENDER_W, height: RENDER_H, detectAudio: false, makeGlobal: true });
+  // numSources 8 rather than the default 4. s0 to s3 are the webcam, the
+  // wordmark, the boot logo and the melt's frozen frame; s4 to s7 are the two
+  // pattern slots, two sources each because a pattern sketch always draws a
+  // blend of two neighbouring sweep frames. makeGlobal defines a window.sN for
+  // each one (EvalSandbox's constructor walks Object.keys(synth), and
+  // _initSources has already run by then), which is why patterns.js can reach
+  // s4 without this file handing it anything.
+  const hydra = new Hydra({ canvas, width: RENDER_W, height: RENDER_H, detectAudio: false, makeGlobal: true, numSources: 8 });
   // The width and height above do nothing when a canvas is supplied:
   // _initCanvas (vendor/hydra-synth.js:3154-3158) adopts canvas.width and
   // canvas.height instead and drops the options. #stage is sized in CSS only,
@@ -190,8 +199,15 @@
     solid(0, 0, 0, 0).out(o1);
   }
 
+  // A pattern sketch with nothing in the pattern cache is exactly a camera
+  // sketch with no camera: it would come up on the wordmark fallback, which is
+  // not what it is for. patterns.ready() goes true a few seconds after the
+  // page loads and stays true, so this only ever excludes them at start-up or
+  // when assets/patterns/ is missing altogether.
   function eligible() {
-    return window.sketches.filter(s => !s.cam || window.camReady);
+    return window.sketches.filter(s =>
+      (!s.cam || window.camReady) &&
+      (!s.pattern || (window.patterns && patterns.ready())));
   }
 
   function pickNext() {
@@ -207,6 +223,14 @@
       if (last.name.startsWith('logo')) {
         const notLogo = candidates.filter(s => !s.name.startsWith('logo'));
         if (notLogo.length) candidates = notLogo;
+      }
+      // Step 3: the same for the pattern family, which is eight of the
+      // twenty-four and would otherwise clump. Two pattern sketches in a row
+      // are also the one pair that can share a cache entry, so the second
+      // would often be the same artwork with a different treatment.
+      if (last.pattern) {
+        const notPattern = candidates.filter(s => !s.pattern);
+        if (notPattern.length) candidates = notPattern;
       }
     }
     if (!candidates.length) candidates = list;
@@ -284,6 +308,10 @@
     window.update = driveFrame;
     feed.clearBeatListeners();
     window.sketchUpdate = null;
+    // Drop the outgoing sketch's claim on its patterns, so the cache can
+    // rotate. The textures it uploaded stay bound until something rebinds
+    // them; this only releases the canvases behind them.
+    if (window.patterns) patterns.release();
     try {
       sketch.run();
     } catch (e) {
