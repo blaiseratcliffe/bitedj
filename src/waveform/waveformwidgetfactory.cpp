@@ -973,6 +973,19 @@ void WaveformWidgetFactory::renderSelf() {
             m_time.start();
             m_frameCnt = m_frameCnt * 1000 / timeCnt.toIntegerMillis(); // latency correction
             emit waveformMeasured(m_frameCnt, m_vsyncThread->droppedFrames());
+
+            // Bite DJ: the only place the dropped-frame counter was visible was
+            // a preferences dialog this keyboardless panel cannot open. One
+            // warning per second at most, only while the count is rising, so
+            // GPU starvation (two waveforms plus the HDMI visuals) shows up in
+            // ~/bitedj.log where check-log.sh can see it.
+            const int dropped = m_vsyncThread->droppedFrames();
+            if (dropped > m_lastReportedDroppedFrames) {
+                qWarning() << "waveform: dropped frames rose to" << dropped
+                           << "at" << m_frameCnt << "fps";
+                m_lastReportedDroppedFrames = dropped;
+            }
+
             m_frameCnt = 0.0;
         }
     }

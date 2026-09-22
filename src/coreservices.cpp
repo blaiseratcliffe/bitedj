@@ -16,6 +16,9 @@
 #include "effects/effectsmanager.h"
 #include "engine/controls/raterangecontrol.h"
 #include "engine/enginemixer.h"
+#include "engine/sidechain/enginesidechain.h"
+#include "engine/sidechain/visualsfeed.h"
+#include "engine/sidechain/visualsserver.h"
 #include "library/coverartcache.h"
 #include "library/library.h"
 #include "library/library_prefs.h"
@@ -594,6 +597,15 @@ void CoreServices::initialize(QApplication* pApp) {
         m_pControlSocket = std::make_unique<ControlSocket>(*controlPort);
     }
 
+    // Bite DJ: HDMI visuals. The feed joins the sidechain the recorder uses
+    // and is owned by it; the server is ours. Constructed after SystemSettings
+    // because the feed reads [BiteDJ],visuals_enabled.
+    if (EngineSideChain* pSidechain = m_pEngine->getSideChain()) {
+        auto* pVisualsFeed = new VisualsFeed();
+        pSidechain->addSideChainWorker(pVisualsFeed);
+        m_pVisualsServer = std::make_unique<VisualsServer>(pVisualsFeed);
+    }
+
     // Load tracks in args.qlMusicFiles (command line arguments) into player
     // 1 and 2:
     const QList<QString>& musicFiles = m_cmdlineArgs.getMusicFiles();
@@ -725,6 +737,10 @@ void CoreServices::finalize() {
     // is torn down, so a client cannot write to a control whose owner has
     // already gone.
     m_pControlSocket.reset();
+
+    // Bite DJ: the visuals server holds a raw pointer to a sidechain worker the
+    // engine will delete below; stop serving first.
+    m_pVisualsServer.reset();
 
     // Bite DJ fork: AudioDeviceSettings / ControllerSettings each hold a
     // shared_ptr to their manager and would otherwise keep it alive past the
