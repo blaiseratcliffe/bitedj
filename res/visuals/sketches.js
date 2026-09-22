@@ -43,8 +43,26 @@
   // so it spans the whole screen at an amount near 0.44 and crops at the
   // sides above that; the sketches sit around 0.33 for a comfortable margin.
   const MARK_X = (1024 / 256) / (960 / 540);
-  // (960 / 135) / (960 / 540). Full width at an amount near 0.25.
-  const LOGO_X = (960 / 135) / (960 / 540);
+  // (964 / 135) / (960 / 540). Full width at an amount near 0.25. The boot
+  // logo PNG is 964 wide, not the 960 of the spec; measured off the IHDR.
+  const LOGO_X = (964 / 135) / (960 / 540);
+
+  // The boot logo PNG is NOT transparent. Every pixel of assets/boot-logo.png
+  // has alpha 255 (read straight out of the IDAT: the alpha histogram is a
+  // single bucket at 255), and the background around the letters is solid
+  // black. Rendering src(s2) over a red field shows no red anywhere, so
+  // layer() has nothing to composite against and the logo arrives as a black
+  // rectangle with type in it.
+  //
+  // So the alpha has to be made rather than used. This keys out the black and
+  // leaves everything else. The threshold sits between pure black, luminance
+  // 0, and the darkest stripe in the artwork, palette deep #240f2d, whose
+  // luminance is 0.2126*36 + 0.7152*15 + 0.0722*45 over 255, about 0.085. At
+  // 0.035 with a tolerance of 0.015 the band runs 0.02 to 0.05: comfortably
+  // above black, comfortably below the darkest thing worth keeping, and
+  // narrow enough that the antialiased edge of the white outline still gets a
+  // soft ramp rather than a hard cut.
+  const LOGO_KEY = [0.035, 0.015];
 
   // Edges of a source: the difference against copies of itself shifted by a
   // pixel in x and y, then a threshold. hydra's custom GLSL cannot sample
@@ -350,9 +368,15 @@
         const field = () => solid(dr, dg, db, 1)
           .add(noise(2.2, 0.05).color(pr, pg, pb), () => 0.25 + 0.5 * feed.bass)
           .add(osc(9, 0.05, 0).color(mr, mg, mb), 0.2);
+        // luma() first to key the black background out (see LOGO_KEY), then
+        // mask() to drop the vertical repeats. Both are needed and they do
+        // different jobs: the key gives the logo an alpha it does not have,
+        // and the tile mask deals with fract(st), which otherwise stacks five
+        // copies of the logo up the frame at this scale. Keying alone leaves
+        // the repeats, masking alone leaves the black rectangle.
         field()
           .blend(field().kaleid(2), () => (feed.bass > BASS_LOUD ? 1 : 0))
-          .layer(src(s2).mask(oneTile())
+          .layer(src(s2).luma(LOGO_KEY[0], LOGO_KEY[1]).mask(oneTile())
             .scale(() => 0.2 + 0.015 * feed.bass, LOGO_X, 1))
           .out(o0);
     } },
