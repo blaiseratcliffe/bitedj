@@ -43,6 +43,14 @@
 //    which the size limit below keeps out of the rotation anyway, so seven
 //    patterns on screen have a flattened sweep end.
 //
+// Which patterns are in the rotation. Two rules, both below with their
+// measurements: a pattern whose biggest single frame passes MAX_FRAME_BYTES
+// costs too long a stall to rasterise, and a pattern whose default frame is
+// lit past COVER_MAX is a filled sheet rather than line work. 54 patterns on
+// disk, 49 inside the size limit, 38 inside both. Membership is decided on the
+// default frame alone; the six sweep frames are measured and logged and gate
+// nothing, so the morph always runs the whole sweep.
+//
 // Cost. Rasterising is not free and the heavy end of the library is very
 // heavy: the timings are in the size limit comment below. Nothing here
 // rasterises on demand. A pattern is pulled into the cache in the background,
@@ -251,19 +259,41 @@
     return sum / (255 * s * s);
   }
 
-  // Coverage is telemetry now, not a gate. An earlier version of this file
-  // used it to reject a pattern that was a solid sheet at every setting and to
-  // trim the degenerate ends off a sweep, on the argument that a frame 40
-  // percent lit is not white line work on black. With the strokes at 2.5 px
-  // that argument cuts the other way: the reference this show is built against
-  // is dense white line work, and a rule tuned against hairlines was throwing
-  // away ten patterns and eighteen sweep ends for being what the show wants.
-  // The `lit` figures still go in the log, because they are the cheapest way
-  // to see what the artwork is doing on a box nobody is standing in front of.
+  // A ceiling on coverage, and nothing else. Some of this artwork is not line
+  // work at any setting of its slider: it is a filled sheet with gaps in it,
+  // and on screen it reads as a lit checkerboard rather than as drawing. The
+  // default frame of every pattern was measured to set this, and at 0.30 the
+  // eleven it removes are, in percent of the frame lit:
   //
-  // What that does leave is the genuinely degenerate end of a slider, where
-  // the artwork is 25 specks on black. That is now on screen, and it is the
-  // one thing about the morph a viewer might call a bug.
+  //   backpack-grid 66, concentric_arc_truchet_3 58, arcs_1 56,
+  //   masked_letter_grid 51, isometric_ribbon_grid 45, hiding-squares 41,
+  //   isometric_cubes 39, triangular_mosaic 39, modular_circle 34,
+  //   quarter_circles_grid 34, resonance_field 32
+  //
+  // Nothing dense but linear is caught with them. The densest thing that stays
+  // is flow_poles at 23, then nested_polygons_filled at 27 and rect_field_void
+  // at 26, and the patterns this rule was most at risk of taking are nowhere
+  // near it: wave-field 8, interference-mesh 10, node_garden 22, ripple_grid 5,
+  // lissajous_field 5, and the iso wireframes between 5 and 10
+  // (iso-cube-wireframe 6, isometric-cube-grid 6, iso_test_noise_field 7,
+  // iso_test_noise_field_2 5, sine-cube 6, dna_helix 10). chaos_circles is the
+  // close one at 29.6, and it stays: it is the artwork in the pattern-tint
+  // screenshot that this ceiling exists to protect the look of.
+  //
+  // The default frame decides membership and it decides it alone. The sweep
+  // frames are measured and logged but gate nothing, so a pattern whose slider
+  // runs up into a solid sheet at one end stays in and morphs through it;
+  // chaos_circles reaches 52 at the top of its own sweep. The whole 0 to 5
+  // sweep is the morph range.
+  //
+  // An earlier version of this file had a floor as well, and a rule that
+  // trimmed the degenerate ends off each sweep. Both went, because with the
+  // strokes at their real width they were throwing away the dense line work
+  // the show is built around, and only the ceiling is back.
+  //
+  // The test can only run after the pattern is rasterised, so a rejected
+  // pattern costs one load, once, and then sits in `rejected` for the session.
+  const COVER_MAX = 0.30;
 
   // The value of the brightest one percent of a frame, 0 to 255, over the
   // largest of the three channels rather than their luminance, because a
@@ -312,6 +342,16 @@
         entry.peak = peak99(entry.frames[6]);
         entry.ms += performance.now() - t0;
         entry.busy = false;
+        if (entry.cover[6] > COVER_MAX) {
+          // Too solid to be line work; see COVER_MAX. The frames are freed
+          // rather than kept, and prewarm() remembers the slug so the cost is
+          // paid once a session and not once every twenty seconds.
+          freeFrames(entry);
+          console.log('visuals: pattern too solid', meta.slug,
+            (100 * entry.cover[6]).toFixed(0) + '% of the default frame lit');
+          done(null);
+          return;
+        }
         done(entry);
         return;
       }
@@ -444,8 +484,10 @@
       clearTimeout(watchdog);
       loading = false;
       if (!entry) {
+        // Either the load failed or the pattern is too solid; both are
+        // properties of the artwork rather than of the moment, so neither is
+        // retried.
         rejected.push(meta.slug);
-        console.log('visuals: pattern load failed', meta.slug);
         return;
       }
       cache.push(entry);
@@ -456,6 +498,7 @@
         'worst frame ' + entry.worst.toFixed(0) + ' ms,',
         'peak ' + entry.peak + ',',
         'lit ' + entry.cover.slice(0, 6).map(c => (100 * c).toFixed(1)).join('/') + '%,',
+        'default ' + (100 * entry.cover[6]).toFixed(1) + '%,',
         (meta.frame / 1e6).toFixed(2) + ' MB in its biggest frame');
     });
   }
