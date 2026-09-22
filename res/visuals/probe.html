@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BiteDJ visuals probe</title>
+<!-- Diagnostic page, not part of the show. Launch it with the same Chromium
+     flags the supervisor uses and read the console lines it prints:
+
+       chromium <same flags> --user-data-dir=/tmp/probe-profile \
+         file://$HOME/bitedj-res/visuals/probe.html
+
+     Each media API is raced against a timeout, so a call that never settles
+     (which is what enumerateDevices() did on the first bring-up) shows up as
+     "timed out" rather than as silence. -->
+<style>body { background: #000; color: #ccc; font: 14px monospace; padding: 16px; }</style>
+</head>
+<body>
+<pre id="out">probe starting</pre>
+<script>
+(function () {
+  const TIMEOUT_MS = 8000;
+  const out = document.getElementById('out');
+  function log(line) {
+    console.log('probe: ' + line);
+    out.textContent += '\n' + line;
+  }
+  function timed(name, promiseFactory) {
+    const started = performance.now();
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('timed out after ' + TIMEOUT_MS + ' ms')), TIMEOUT_MS));
+    let p;
+    try { p = promiseFactory(); } catch (e) { return Promise.resolve(log(name + ': threw ' + e.message)); }
+    return Promise.race([p, timeout]).then(
+      v => { log(name + ': ok in ' + Math.round(performance.now() - started) + ' ms: ' + v); },
+      e => { log(name + ': failed in ' + Math.round(performance.now() - started) + ' ms: ' + (e && e.message ? e.message : e)); });
+  }
+  log('mediaDevices is ' + String(navigator.mediaDevices) + ', secure context ' + window.isSecureContext);
+  const md = navigator.mediaDevices;
+  Promise.resolve()
+    .then(() => timed('getUserMedia video only', () => md.getUserMedia({ video: true, audio: false }).then(s => {
+      const t = s.getVideoTracks()[0];
+      const label = t ? t.label + ' ' + JSON.stringify(t.getSettings()) : 'no track';
+      s.getTracks().forEach(x => x.stop());
+      return label;
+    })))
+    .then(() => timed('enumerateDevices', () => md.enumerateDevices().then(d =>
+      d.length + ' devices: ' + d.map(x => x.kind + ':' + (x.label || '?')).join(', '))))
+    .then(() => timed('getUserMedia audio only', () => md.getUserMedia({ video: false, audio: true }).then(s => {
+      const t = s.getAudioTracks()[0];
+      s.getTracks().forEach(x => x.stop());
+      return t ? t.label : 'no track';
+    })))
+    .then(() => log('done'));
+})();
+</script>
+</body>
+</html>

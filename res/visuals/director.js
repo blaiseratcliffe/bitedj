@@ -74,10 +74,24 @@
   // probe the device list ourselves to know whether camera sketches are
   // usable at all. Re-run on devicechange: a USB webcam can be plugged in
   // hours into a set, and can equally be pulled out mid-sketch.
+  // Every outcome is logged, including a probe that never settles: on the
+  // appliance the first build logged nothing at all here, which left no way
+  // to tell "no camera" from "enumerateDevices() hung".
+  const PROBE_TIMEOUT_MS = 5000;
   function probeCamera() {
-    return navigator.mediaDevices.enumerateDevices().then(devs => {
-      window.camReady = devs.some(d => d.kind === 'videoinput');
-      console.log('visuals: camera', window.camReady ? 'present' : 'absent');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      window.camReady = false;
+      console.error('visuals: camera probe unavailable: navigator.mediaDevices is',
+        String(navigator.mediaDevices));
+      return Promise.resolve();
+    }
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('timed out after ' + PROBE_TIMEOUT_MS + ' ms')), PROBE_TIMEOUT_MS));
+    return Promise.race([navigator.mediaDevices.enumerateDevices(), timeout]).then(devs => {
+      const cams = devs.filter(d => d.kind === 'videoinput');
+      window.camReady = cams.length > 0;
+      console.log('visuals: camera', window.camReady ? 'present' : 'absent',
+        '(' + devs.length + ' media devices, ' + cams.length + ' video inputs)');
       if (!window.camReady && current && current.cam) {
         // The camera went away underneath a sketch that is drawing it. Waiting
         // for the next beat switch could mean a minute of a frozen last frame,
@@ -86,7 +100,10 @@
         console.log('visuals: camera lost during', current.name);
         show(pickNext());
       }
-    }).catch(() => { window.camReady = false; });
+    }).catch(e => {
+      window.camReady = false;
+      console.error('visuals: camera probe failed:', e && e.message ? e.message : String(e));
+    });
   }
   probeCamera();
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
