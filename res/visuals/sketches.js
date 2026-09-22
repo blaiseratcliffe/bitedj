@@ -1,5 +1,8 @@
-// The sketch library for the HDMI visuals page: sixteen rotation sketches and
-// the idle fallback.
+// The sketch library for the HDMI visuals page: twenty-four rotation sketches
+// and the idle fallback. Sixteen are drawn from oscillators, noise and the
+// camera; the eight named pattern-* draw Book of Shapes SVG artwork that
+// patterns.js has rasterised, morphing it along a parameter sweep. The helpers
+// for those are grouped together below, after accent().
 //
 // The contract with director.js, which owns the rotation:
 //   - every chain here ends in .out(o0). o1 is free scratch for a sketch that
@@ -7,13 +10,19 @@
 //     field once instead of four times; the director blanks it on every
 //     switch. o2, o3 and the source s3 belong to the director's crossfade and
 //     nothing here may write to any of them; s3 in particular holds the
-//     frozen outgoing frame and is re-initialised on every switch.
+//     frozen outgoing frame and is re-initialised on every switch. s4 to s7
+//     belong to patterns.js and are reached through patterns.bind(), never by
+//     hand.
+//   - a sketch that needs a pattern carries `pattern: true`, which keeps it
+//     out of the rotation until something has finished rasterising, exactly as
+//     `cam: true` keeps a sketch out until there is a camera.
 //   - it clears the sketch-scoped beat listeners and sets window.sketchUpdate
 //     back to null on every switch, so run() is the right and the only place
 //     to call feed.onBeat(fn) or to assign window.sketchUpdate = (dt) => {}.
-//     dt is milliseconds. Nothing in this file needs either any more: the
-//     springs and the clock below cover everything the old per-sketch
-//     integrators did.
+//     dt is milliseconds. The springs and the shared clock cover everything
+//     the old per-sketch integrators did, so nothing here uses feed.onBeat;
+//     the eight pattern sketches are the only users of window.sketchUpdate,
+//     and all they do with it is push the sweep position at patterns.bind().
 //   - window.update and feed.onBeatAlways belong to the director. Nothing
 //     here touches either, and nothing here calls hush(), which would clear
 //     the sources as well as the outputs.
@@ -218,6 +227,66 @@
   // on the beat. This is what a kick is worth now.
   function accent(base, lift) {
     return () => base + lift * feed.pulse;
+  }
+
+  // ---- the Book of Shapes pattern family ---------------------------------
+  //
+  // patterns.js rasterises a pattern's seven SVG frames into 1024x1024
+  // canvases and binds two of them to a slot's pair of sources: slot 0 is s4
+  // and s5, slot 1 is s6 and s7. A sketch here does three things and nothing
+  // else about loading: ask for a pattern with patterns.take(tags), drive
+  // patterns.bind() from window.sketchUpdate, and draw sweepPair().
+  //
+  // take() returns null only when nothing has finished rasterising.
+  // director.js already keeps a pattern sketch out of the rotation until
+  // patterns.ready(), so the fallback below is the belt and not the braces.
+  //
+  // The texture is square and the output is 16:9, and hydra stretches any
+  // source over the whole quad, so the square has to be squeezed back. For the
+  // artwork to keep its proportions the visible source region must be the full
+  // width of the texture and 540/960 of its height, which is
+  // scale(1, 1, 960/540): it crops the top and the bottom rather than
+  // pillarboxing. Every one of these patterns is a centred composition with
+  // margin around it, so the crop takes the margin.
+  const SQUARE_Y = 960 / 540;
+
+  // The two bound frames, mixed by the fractional part of the sweep position,
+  // which is what makes a still SVG breathe through its own slider. The two
+  // sources are sampled at the same coordinate: both sit before every
+  // coordinate transform the caller adds, so a scroll or a rotate moves the
+  // pair together rather than sliding one frame against the other.
+  function sweepPair(slot) {
+    const i = slot ? 1 : 0;
+    return src(i ? s6 : s4).blend(src(i ? s7 : s5), () => patterns.mix[i]);
+  }
+
+  // These patterns do not tile. They are single compositions inside a square
+  // with a margin, so a scroll that wraps drags the left edge of the artwork
+  // against its right edge and a hard seam crosses the frame. Every drift in
+  // this family is therefore bounded: a slow sine of a few percent of the
+  // frame, which never reaches the wrap. Only kaleid() and the rotations are
+  // allowed to sample outside the square, where the repeat reads as part of
+  // the fold rather than as a tear.
+  function driftX(amount, rate, phase) {
+    return () => amount * Math.sin(flow() * rate + (phase || 0));
+  }
+
+  // Beats per revolution in pattern-grid: 32, which is eight bars and eleven
+  // seconds at 174 BPM.
+  //
+  // This number was the suspect when the sketch first measured 7.3 to 9.7
+  // percent frame to frame against a budget of 3, and it was innocent.
+  // Slowing it to 256 beats made the sketch worse, not better: 8.2 to 11.4 on
+  // the same pattern. What was expensive was the pattern, a grid with a fifth
+  // of the frame lit, and the fix was the coverage ceiling in patterns.js
+  // rather than anything here. On a pattern inside that ceiling, at 32 beats a
+  // turn, the same sketch measures 0.6 to 1.3.
+  const TURN_BEATS = 32;
+
+  // No pattern, no black screen: the wordmark is in memory from the first
+  // frame the page ever drew.
+  function patternFallback() {
+    smear(wordmark(0.3).mult(solid(0.85, 0.85, 0.85, 1)), 0.85, 1.003).out(o0);
   }
 
   const monochrome = [
@@ -466,6 +535,159 @@
           .posterize(6, 1)
           .out(o1);
         edges(() => src(o1), 3).out(o0);
+    } },
+
+    // 11. A flow or physics pattern breathing through its sweep, drifting on
+    // two slow sines at different rates so the path never repeats, over a long
+    // smear. The smear is doing the same job it does for ribbons: these
+    // patterns are dense thin line work, and a soft edge moving a pixel
+    // changes far less of the frame than a hard one.
+    { name: 'pattern-flow', cam: false, mono: true, pattern: true, run() {
+        const p = patterns.take(['FLOW', 'PHYSICS']);
+        if (!p) { patternFallback(); return; }
+        window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
+        const bright = accent(0.92, 0.06);
+        smear(sweepPair(0)
+          .scrollX(driftX(0.02, 0.05))
+          .scrollY(driftX(0.014, 0.037, 1.3))
+          .scale(1, 1, SQUARE_Y)
+          .mult(solid(bright, bright, bright, 1)), 0.92, 1.0004)
+          .out(o0);
+    } },
+
+    // 12. A grid or isometric pattern turning once every 32 beats, which is
+    // eight bars: slow enough that the motion is felt rather than watched, and
+    // locked to the tempo rather than to a clock, so it comes round on a bar
+    // line at any BPM. feed.beats % 32 plus feed.phase is a continuous ramp
+    // through the 32 beats, and the step from 31.99 back to 0 is a whole turn,
+    // which is no step at all.
+    //
+    // modulateScale is last in the chain, so the perspective lean works on the
+    // screen coordinate; its ramp is a rotated gradient for the reason given
+    // at wire-terrain, that gradient's red channel is a true 0 to 1 where an
+    // oscillator's covers half that. The zoom past 1 is what keeps the fold
+    // at the corners of a rotating square texture off the screen for most of
+    // the turn; where it does reach outside, a grid repeating is a grid.
+    { name: 'pattern-grid', cam: false, mono: true, pattern: true, run() {
+        const p = patterns.take(['GRID', 'ISOMETRIC']);
+        if (!p) { patternFallback(); return; }
+        window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
+        const yRamp = () => gradient(0).rotate(Math.PI / 2);
+        const turn = () => 2 * Math.PI * ((feed.beats % TURN_BEATS) + feed.phase) / TURN_BEATS;
+        smear(sweepPair(0)
+          .rotate(turn)
+          .scale(() => 1.3 + 0.06 * feed.swell, 1, SQUARE_Y)
+          .modulateScale(yRamp(), () => 0.15 + 0.35 * feed.swell, 1.0), 0.9, 1.0004)
+          .out(o0);
+    } },
+
+    // 13. A radial pattern folded two or three ways. The fold count is drawn
+    // once per run and then left alone: a kaleid whose nSides moved with the
+    // music would rebuild the whole frame on every change, which is the
+    // stepping fault this library is built to avoid, and two runs of the same
+    // sketch on different nights should not look identical either.
+    //
+    // kaleid is the last coordinate transform, so it folds the screen and
+    // everything before it happens inside one wedge.
+    { name: 'pattern-radial', cam: false, mono: true, pattern: true, run() {
+        const p = patterns.take(['RADIAL']);
+        if (!p) { patternFallback(); return; }
+        window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
+        const sides = 2 + Math.floor(Math.random() * 2);
+        const bright = accent(0.84, 0.12);
+        smear(sweepPair(0)
+          .scale(() => 1.05 + 0.06 * feed.swell, 1, SQUARE_Y)
+          .rotate(() => flow() * 0.008)
+          .kaleid(sides)
+          .mult(solid(bright, bright, bright, 1)), 0.84, 1.0004)
+          .out(o0);
+    } },
+
+    // 14. A noise or organic pattern under a noise warp, so the contours of
+    // the artwork wander like the ones contours() draws from scratch.
+    //
+    // The warp amplitude is mostly swell and only a hundredth of energy,
+    // against the brief's "amplitude from energy", for the reason in the
+    // header: energy ripples by about seven hundredths over every beat at 174,
+    // which is invisible as brightness and quite enough to shove a dense line
+    // field a pixel sideways four times a second. The swell carries the shape
+    // of a build and none of that ripple, which is the same argument the
+    // scanline spacing in glitch-scan puts through a spring.
+    { name: 'pattern-noise', cam: false, mono: true, pattern: true, run() {
+        const p = patterns.take(['NOISE', 'ORGANIC']);
+        if (!p) { patternFallback(); return; }
+        window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
+        smear(sweepPair(0)
+          .modulate(noise(2.1, 0.008), () => 0.025 + 0.07 * feed.swell + 0.01 * feed.energy)
+          .scale(1, 1, SQUARE_Y), 0.86, 1.0004)
+          .out(o0);
+    } },
+
+    // 15. The pattern at its default settings against the far end of its own
+    // sweep, crossfading back and forth under a long smear that blows the
+    // history up by four thousandths a frame. The two frames are usually the
+    // same artwork at very different densities, so the mix reads as one
+    // drawing dissolving into another of itself.
+    //
+    // The wave is a raised cosine rather than the brief's triangle. A triangle
+    // is continuous in value but not in rate, and a mix that reverses at a
+    // corner is visible on line work as a flick; the cosine reverses at zero
+    // speed. The smear is the file's own smear(), reading o0 rather than the
+    // brief's o1, because o1 is scratch that the director blanks on every
+    // switch and o0 is where the feedback in this file has always lived.
+    { name: 'pattern-melt', cam: false, mono: true, pattern: true, run() {
+        const p = patterns.take([]);
+        if (!p) { patternFallback(); return; }
+        const wave = () => 0.5 - 0.5 * Math.cos(flow() * 0.22);
+        const base = patterns.base(p), top = patterns.top(p);
+        window.sketchUpdate = () => patterns.bindFrames(p, base, top, wave(), 0);
+        smear(sweepPair(0).scale(1, 1, SQUARE_Y), 0.92, 1.004).out(o0);
+    } },
+
+    // 16. The same edge detector the contour sketches use, run over a pattern
+    // instead of over a noise field: every line in the artwork comes back as
+    // the pair of lines that bound it, which doubles a sparse drawing and
+    // turns a dense one into moire. The pattern is rendered into o1 first so
+    // the detector's four copies cost one texture read each rather than
+    // rebuilding the two-source blend four times.
+    { name: 'pattern-edges', cam: false, mono: true, pattern: true, run() {
+        const p = patterns.take(['DISTORTION', 'ORGANIC']);
+        if (!p) { patternFallback(); return; }
+        window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
+        sweepPair(0)
+          .scrollX(driftX(0.012, 0.04))
+          .scale(() => 1.02 + 0.05 * feed.swell, 1, SQUARE_Y)
+          .out(o1);
+        edges(() => src(o1), () => 3 + 0.4 * feed.pulse).out(o0);
+    } },
+
+    // 17. Two patterns from different tag groups at half and half, drifting
+    // and turning against each other. The second one runs its sweep backwards,
+    // so the two are at opposite ends of their parameters whenever they are
+    // not crossing in the middle.
+    //
+    // Both slots exist for this sketch and this sketch only: it is the one
+    // thing in the library that needs four pattern sources. If the cache holds
+    // just one pattern the same one goes in both slots, where the opposed
+    // sweeps and rotations still give it something to interfere with.
+    { name: 'pattern-stack', cam: false, mono: true, pattern: true, run() {
+        const a = patterns.take(['GRID', 'ISOMETRIC', 'RADIAL']);
+        if (!a) { patternFallback(); return; }
+        const b = patterns.take(['FLOW', 'NOISE', 'ORGANIC', 'PHYSICS'], a) || a;
+        window.sketchUpdate = () => {
+          const t = patterns.sweepT();
+          patterns.bind(a, t, 0);
+          patterns.bind(b, 5 - t, 1);
+        };
+        const left = sweepPair(0)
+          .scrollX(driftX(0.018, 0.045))
+          .rotate(() => flow() * 0.004)
+          .scale(1, 1, SQUARE_Y);
+        const right = sweepPair(1)
+          .scrollX(driftX(-0.018, 0.045))
+          .rotate(() => -flow() * 0.004)
+          .scale(() => 1.08, 1, SQUARE_Y);
+        smear(left.blend(right, 0.5), 0.88, 1.0004).out(o0);
     } }
 
   ];
@@ -651,6 +873,39 @@
           .kaleid(6)
           .rotate(() => flow() * 0.11)
           .scale(() => 1 + 0.05 * feed.swell + 0.01 * feed.pulse)
+          .out(o0);
+    } },
+
+    // 24. The one pattern sketch in the colour family: any pattern at all,
+    // used as a stencil through a slow violet to pink wash rather than as
+    // white line work. The wash is the whole frame and the pattern multiplies
+    // it, so the lit pixels are the artwork's and everything else is the deep
+    // token at a quarter weight, which is nearly black and still not a hole.
+    //
+    // mult(), not mask(): the pattern canvases are opaque black outside the
+    // line work, so there is no alpha to mask with, and multiplying by a white
+    // on black image is the same stencil with one texture read.
+    //
+    // The osc feeding the wash takes offset 0 for the reason spelt out at
+    // tunnel: at any other offset the three channels are already out of phase,
+    // the source is full spectrum before .color() touches it, and the palette
+    // violet arrives on screen as blue.
+    { name: 'pattern-tint', cam: false, mono: false, pattern: true, run() {
+        const p = patterns.take([]);
+        if (!p) { patternFallback(); return; }
+        window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
+        const [dr, dg, db] = palette.rgb('deep');
+        const [vr, vg, vb] = palette.rgb('violet');
+        const [kr, kg, kb] = palette.rgb('pink');
+        const wash = () => solid(dr, dg, db, 1)
+          .add(osc(5, 0.012, 0).color(vr, vg, vb), () => 0.45 + 0.15 * feed.swell)
+          .add(noise(1.8, 0.015).color(kr, kg, kb), () => 0.15 + 0.2 * feed.energy)
+          .rotate(() => flow() * 0.02);
+        wash()
+          .mult(sweepPair(0)
+            .scrollX(driftX(0.015, 0.04))
+            .scale(() => 1.04 + 0.05 * feed.swell, 1, SQUARE_Y))
+          .add(solid(dr * 0.3, dg * 0.3, db * 0.3, 1))
           .out(o0);
     } }
 
