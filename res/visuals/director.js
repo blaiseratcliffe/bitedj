@@ -1,5 +1,10 @@
 // Runs the show: sources, sketch rotation, the fps cap, the idle fallback and
 // the numbers the load test reads from ~/bitedj-visuals.log.
+//
+// Sketches drive their own per-frame work through window.sketchUpdate(dt),
+// which this file calls every rendered frame; a sketch must never assign
+// window.update itself, that property belongs to this file (see the notes
+// by the assignments below for why).
 (function () {
   const RENDER_W = 960, RENDER_H = 540;
   const FPS = 30;
@@ -7,17 +12,18 @@
   const MIN_SKETCH_MS = 60000;
   const IDLE_AFTER_MS = 20000;      // no beat for this long: idle sketch
   const IDLE_ROTATE_MS = 180000;
-  const DIP_MS = 250;
+  const DIP_MS = 125;               // half of the ~250ms total not-visible budget
   const LOG_EVERY_MS = 10000;
 
   const canvas = document.getElementById('stage');
   const hydra = new Hydra({ canvas, width: RENDER_W, height: RENDER_H, detectAudio: false, makeGlobal: true });
   window.hydra = hydra;
   // makeGlobal mirrors window.fps onto synth.fps on every rendered frame
-  // (EvalSandbox.tick() in the vendored bundle), so setting synth.fps alone
-  // is clobbered back to undefined on the next frame, uncapping the loop.
+  // (EvalSandbox.tick() in the vendored bundle, vendor/hydra-synth.js
+  // ~1084-1090), so window.fps is the only assignment that sticks; a direct
+  // hydra.synth.fps write would be overwritten back to undefined (uncapped)
+  // on the very next frame, so there is no synth.fps line here at all.
   window.fps = FPS;
-  hydra.synth.fps = FPS;
 
   // Sources. s0 webcam, s1 the wordmark, s2 the boot logo.
   window.camReady = false;
@@ -48,14 +54,36 @@
   // Rotation.
   let current = null, currentSince = 0, lastBeatAt = performance.now(), idle = false, lastIdleSwitch = 0;
   let history = [];
+  // setTimeout id of a dip in flight, so a second show() call before the
+  // first one lands restarts the wait instead of racing it.
+  let pendingSwitch = null;
 
-  // hush() (called on every sketch switch) resets update to a no-op via
-  // sandbox.set, and because makeGlobal is true, EvalSandbox.tick() copies
-  // window.update onto synth.update on every rendered frame. So it is
-  // window.update that must carry the frame counter, and it must be
-  // reinstalled after each hush(), not just registered once.
+  // window.update, not hydra.synth.update: same makeGlobal mirroring as
+  // fps above (EvalSandbox.tick() copies window.update onto synth.update
+  // every frame), so this is the assignment that has to stick. It both
+  // counts frames for the fps log and drives whatever the current sketch
+  // has put on window.sketchUpdate.
   let frames = 0;
-  function countFrame() { frames += 1; }
+  function driveFrame(dt) {
+    frames += 1;
+    if (typeof window.sketchUpdate === 'function') {
+      try { window.sketchUpdate(dt); } catch (e) { console.error('visuals: sketchUpdate failed', e); }
+    }
+  }
+
+  // hush() (vendor/hydra-synth.js:3054-3065) also calls source.clear() on
+  // every source (s0-s3): that stops the webcam's tracks and replaces the
+  // wordmark/boot-logo textures (s1/s2) with 1x1 blanks, so every camera or
+  // logo sketch would come up blank after the very first switch. This does
+  // the safe subset of what hush() does: it clears the four outputs (what a
+  // sketch actually draws into) without touching the sources.
+  function clearOutputs() {
+    solid(0, 0, 0, 0).out(o0);
+    solid(0, 0, 0, 0).out(o1);
+    solid(0, 0, 0, 0).out(o2);
+    solid(0, 0, 0, 0).out(o3);
+    render(o0);
+  }
 
   function eligible() {
     return window.sketches.filter(s => !s.cam || window.camReady);
@@ -63,6 +91,7 @@
 
   function pickNext() {
     const list = eligible();
+    if (!list.length) return window.idleSketch;
     const last = history[history.length - 1];
     let candidates = list.filter(s => s !== last);
     if (last) {
@@ -75,23 +104,35 @@
         if (notLogo.length) candidates = notLogo;
       }
     }
-    return candidates[Math.floor(Math.random() * candidates.length)] || list[0];
+    if (!candidates.length) candidates = list;
+    return candidates[Math.floor(Math.random() * candidates.length)];
   }
 
   function show(sketch) {
+    if (!sketch) { console.log('visuals: no sketch to show'); return; }
+    if (pendingSwitch) { clearTimeout(pendingSwitch); pendingSwitch = null; }
     canvas.classList.add('dip');
-    setTimeout(() => {
-      hush();
-      window.update = countFrame;
-      try { sketch.run(); } catch (e) { console.error('visuals: sketch failed', sketch.name, e); }
+    pendingSwitch = setTimeout(() => {
+      pendingSwitch = null;
+      clearOutputs();
+      window.update = driveFrame;
+      feed.clearBeatListeners();
+      window.sketchUpdate = null;
+      try {
+        sketch.run();
+      } catch (e) {
+        console.error('visuals: sketch failed', sketch && sketch.name, e);
+      }
+      canvas.classList.remove('dip');
       current = sketch; currentSince = performance.now();
       history.push(sketch); if (history.length > 8) history.shift();
       console.log('visuals: sketch', sketch.name);
-      canvas.classList.remove('dip');
     }, DIP_MS);
   }
 
-  feed.onBeat(() => {
+  // The rotation logic must survive sketch switches, so it subscribes with
+  // onBeatAlways; onBeat is sketch-scoped and gets wiped by show() above.
+  feed.onBeatAlways(() => {
     lastBeatAt = performance.now();
     if (idle) { idle = false; show(pickNext()); return; }
     if (feed.beats % BEATS_PER_SWITCH === 0 && performance.now() - currentSince > MIN_SKETCH_MS) {
@@ -115,7 +156,7 @@
     console.log('visuals: renderer', ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'unknown');
   })();
   let lastLog = performance.now();
-  window.update = countFrame;
+  window.update = driveFrame;
   setInterval(() => {
     const now = performance.now();
     console.log('visuals: fps', (frames * 1000 / (now - lastLog)).toFixed(1), 'feed', feed.alive ? 'alive' : 'dead', 'bpm', feed.bpm.toFixed(1));

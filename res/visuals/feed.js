@@ -1,6 +1,12 @@
 // The music signal. One EventSource on the engine's feed; smoothing, AGC and
 // beat-edge detection live here so sketches read plain 0..1 numbers.
 //
+// Two beat-listener lists: onBeat(fn) is sketch-scoped and is wiped by
+// clearBeatListeners() on every sketch switch (the director does this in
+// show(), so a sketch never has to unsubscribe itself); onBeatAlways(fn) is
+// permanent and is what the director's own rotation logic uses, so it keeps
+// running across switches. Both lists fire on every beat edge.
+//
 // ?mock=1 replaces the engine with a 174 BPM synthetic feed for desktop work.
 (function () {
   const FEED_URL = 'http://127.0.0.1:7374/events';
@@ -10,13 +16,17 @@
   const AGC_DECAY = 0.995; // running max decays slowly, so quiet passages still move
   const AGC_FLOOR = 0.02;
   const DEAD_AFTER_MS = 2000;
+  const BEAT_VISIBLE_FRAMES = 2; // rAF ticks feed.beat stays true after an edge
 
   const feed = {
     bass: 0, lowmid: 0, mid: 0, high: 0, peak: 0,
     bpm: 0, beat: false, beats: 0, playing: false, alive: false,
-    _beatFns: [], _lastFrameAt: 0, _max: [AGC_FLOOR, AGC_FLOOR, AGC_FLOOR, AGC_FLOOR],
+    _beatFns: [], _beatAlwaysFns: [], _beatFrames: 0,
+    _lastFrameAt: 0, _max: [AGC_FLOOR, AGC_FLOOR, AGC_FLOOR, AGC_FLOOR],
     _prevBeat: [], _masterDeck: -1,
-    onBeat(fn) { this._beatFns.push(fn); }
+    onBeat(fn) { this._beatFns.push(fn); },
+    onBeatAlways(fn) { this._beatAlwaysFns.push(fn); },
+    clearBeatListeners() { this._beatFns.length = 0; }
   };
   window.feed = feed;
   window.a = {
@@ -58,23 +68,34 @@
     feed._masterDeck = pickMaster(decks, frame.xf || 0);
     feed.bpm = feed._masterDeck >= 0 ? decks[feed._masterDeck].bpm : 0;
 
+    // Only ever set feed.beat true here, on the rising edge. Clearing it is
+    // the rAF housekeeping loop's job (below), so a sketch polling
+    // feed.beat sees it for a full render frame regardless of how often
+    // frames arrive over the network.
     let beatNow = false;
     decks.forEach((d, i) => {
       const active = d.beat > 0;   // 1 forward, 2 reverse; both are beats
       if (active && !feed._prevBeat[i] && i === feed._masterDeck) beatNow = true;
       feed._prevBeat[i] = active;
     });
-    feed.beat = beatNow;
     if (beatNow) {
+      feed.beat = true;
+      feed._beatFrames = 0;
       feed.beats += 1;
       feed._beatFns.forEach(fn => fn());
+      feed._beatAlwaysFns.forEach(fn => fn());
     }
   }
 
-  // Clear the one-frame beat flag and the liveness flag on the render clock,
-  // not the network clock, so a sketch polling feed.beat sees it once.
+  // Clear the one-frame beat flag and the liveness flag on the render
+  // clock, not the network clock. feed.beat stays true for
+  // BEAT_VISIBLE_FRAMES rendered frames after an edge, then this clears it;
+  // ingest() above never clears it itself.
   function housekeeping() {
-    if (feed.beat && performance.now() - feed._lastFrameAt > 40) feed.beat = false;
+    if (feed.beat) {
+      feed._beatFrames += 1;
+      if (feed._beatFrames >= BEAT_VISIBLE_FRAMES) feed.beat = false;
+    }
     feed.alive = performance.now() - feed._lastFrameAt < DEAD_AFTER_MS;
     requestAnimationFrame(housekeeping);
   }
