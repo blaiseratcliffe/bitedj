@@ -2,22 +2,54 @@
 // the idle fallback.
 //
 // The contract with director.js, which owns the rotation:
-//   - the director blanks o0..o3 and calls render(o0) before it runs a
-//     sketch, so every chain here ends in .out(o0). o1..o3 are free scratch
-//     for a sketch that wants a cheap intermediate pass, and several below
-//     use o1 to build a field once instead of four times.
+//   - every chain here ends in .out(o0). o1 is free scratch for a sketch that
+//     wants a cheap intermediate pass, and several below use it to build a
+//     field once instead of four times; the director blanks it on every
+//     switch. o2, o3 and the source s3 belong to the director's crossfade and
+//     nothing here may write to any of them; s3 in particular holds the
+//     frozen outgoing frame and is re-initialised on every switch.
 //   - it clears the sketch-scoped beat listeners and sets window.sketchUpdate
 //     back to null on every switch, so run() is the right and the only place
 //     to call feed.onBeat(fn) or to assign window.sketchUpdate = (dt) => {}.
-//     dt is milliseconds.
+//     dt is milliseconds. Nothing in this file needs either any more: the
+//     springs and the clock below cover everything the old per-sketch
+//     integrators did.
 //   - window.update and feed.onBeatAlways belong to the director. Nothing
 //     here touches either, and nothing here calls hush(), which would clear
 //     the sources as well as the outputs.
 //
 // Two families. mono is white line work on pure black: no .color() beyond
 // white or a grey scale factor, no fills. colour uses palette.js tokens only.
-// Motion comes from the music, not from time alone: bass for size and
-// displacement, beats for kicks and cuts, high for sparkle.
+//
+// How the music is allowed to move the picture. This is the whole point of
+// the file and the thing the first pass got wrong, so it is worth being blunt
+// about it:
+//
+//   - rate of motion comes from flow() below, which is a clock that runs
+//     faster when feed.energy is high. Never from a band value directly.
+//   - amount of warp, scale or brightness comes from feed.swell and
+//     feed.energy, over ranges narrow enough that loud and quiet are
+//     obviously different but a single kick cannot slam the frame.
+//   - a beat is worth a few percent, through feed.pulse, or a new target for
+//     a feed.spring. Never an instantaneous jump, and never a random number.
+//   - no posterize or thresh level is driven by a live value. Stepping a
+//     quantiser with a moving number is a flicker generator; the levels stay
+//     fixed and the input moves through them instead.
+//   - trails are made with blend(), not with an additive layer over a dimmed
+//     copy. A mix can never be brighter than its brightest input, so however
+//     long the trail is it cannot pile up into a white field.
+//
+// One measured number is worth carrying around while editing this file. On a
+// dense field of thin lines, a ridge plot or a wire mesh, about a pixel of
+// movement between two rendered frames changes four or five percent of the
+// frame, because every line crosses into where it was not. That is the whole
+// difference between smooth and twitchy, and it means the amplitude of a warp
+// on such a field has to come from feed.swell and not from feed.energy: the
+// energy envelope ripples by about seven hundredths over each beat at 174,
+// which is small enough to be invisible as brightness and quite large enough
+// to shove sixty lines a pixel sideways four times a second. Sparse bright
+// things, a wordmark or a scatter of dots, are an order of magnitude less
+// sensitive and can be driven from energy directly.
 //
 // Three hydra facts shaped the code below.
 //
@@ -37,7 +69,10 @@
 // The last coordinate transform in a chain is applied to the screen
 // coordinate first (generate-glsl.js emits `uv = f(uv)` and then the rest of
 // the chain), so a screen space warp such as the terrain perspective goes at
-// the end of the chain, and a warp in source space goes near the front.
+// the end of the chain, and a warp in source space goes near the front. A
+// combine's second input is generated against the coordinate as it stands
+// where the combine sits, which is what lets smear() zoom the feedback copy
+// without dragging the new line work along with it.
 (function () {
   // (1024 / 256) / (960 / 540). The wordmark text nearly fills its texture,
   // so it spans the whole screen at an amount near 0.44 and crops at the
@@ -64,6 +99,34 @@
   // soft ramp rather than a hard cut.
   const LOGO_KEY = [0.035, 0.015];
 
+  // osc(freq) is sin(st * freq), so the number of lines across the coordinate
+  // is freq / TAU. Every line count below is written as COUNT * TAU, because
+  // a bare frequency is impossible to read as a line count and the first
+  // versions of the ridge and terrain sketches came out at a quarter of the
+  // density they were meant to have.
+  const TAU = 2 * Math.PI;
+
+  // The shared clock. Every sketch that used to read hydra.synth.time reads
+  // flow() instead: the same seconds, but advancing between about a third of
+  // real time when the room is quiet and one and a half times it when the
+  // music is loud. The rate is what energy scales, not the value: multiplying
+  // an absolute clock by a changing number makes the picture jump backwards
+  // and forwards, which is the fault this whole rework exists to remove.
+  //
+  // It runs on its own requestAnimationFrame rather than on the director's
+  // frame drive so that a sketch does not have to own an integrator to have a
+  // clock, and so that every sketch shares one.
+  let flowT = 0, flowAt = performance.now();
+  function flowTick() {
+    const now = performance.now();
+    const dt = Math.min(100, now - flowAt);
+    flowAt = now;
+    flowT += (dt / 1000) * (0.35 + 1.15 * (window.feed ? feed.energy : 0));
+    requestAnimationFrame(flowTick);
+  }
+  requestAnimationFrame(flowTick);
+  const flow = () => flowT;
+
   // Edges of a source: the difference against copies of itself shifted by a
   // pixel in x and y, then a threshold. hydra's custom GLSL cannot sample
   // textures, so this is the whole edge detector.
@@ -71,7 +134,9 @@
   // `make` is a factory, not a chain: the detector needs four independent
   // copies of the source and hydra transforms mutate in place, so passing one
   // chain would splice the shifts and the diff into the very thing being
-  // differenced. `gain` may be a number or a function.
+  // differenced. `gain` may be a number or a function, but it feeds a fixed
+  // threshold, so a gain that swings with the music switches whole edges on
+  // and off. Every caller below keeps it nearly constant for that reason.
   //
   // The shift is one pixel of whatever the output actually is, read per
   // frame rather than assumed, because a one-pixel step is the whole point:
@@ -87,12 +152,28 @@
       .thresh(0.15, 0.05);
   }
 
-  // The previous frame, dimmed and blown up a touch, as the base of a chain
-  // that layers new line work over it. Line work carries zero alpha off the
-  // line once it has been through luma() or comes from a transparent source,
-  // so layer() keeps the trail visible underneath.
-  function trail(fade, grow) {
-    return src(o0).scale(grow).mult(solid(fade, fade, fade, 1));
+  // New work mixed over the previous frame, blown up by a hair so the history
+  // drifts outward: the main tool for the liquid feel in this file.
+  //
+  // blend, not layer over a dimmed copy. The old trail() fed the previous
+  // frame back at a gain and added new line work on top, which is a geometric
+  // series: at any fade above about 0.8 the bright pixels converge on white
+  // and the frame blooms. A mix is bounded by its brightest input by
+  // construction, so `keep` can go to 0.95 for a long smear with no risk at
+  // all. `keep` is how much of the previous frame survives one frame, `grow`
+  // the zoom per frame, which wants to stay within a few thousandths of 1.
+  //
+  // The work is composited onto black before it is mixed in, and that line is
+  // not optional. blend() mixes rgb and ignores alpha, while the wordmark
+  // texture carries its glow entirely in alpha: every pixel within 24 px of a
+  // stroke is rgb 255 at an alpha around 48, because that is what a canvas
+  // shadow is. Mixed on its rgb alone the wordmark arrives as a solid white
+  // slab with no letterforms in it at all, which is exactly how the first
+  // version of this rework looked. layer() over solid(0,0,0,1) multiplies rgb
+  // by alpha, which is the premultiply, and it is a no-op for the line work
+  // and edge chains whose alpha is already 1 where they are lit.
+  function smear(work, keep, grow) {
+    return src(o0).scale(grow).blend(solid(0, 0, 0, 1).layer(work), 1 - keep);
   }
 
   // Alpha-key a filled black and white image so it can be layered: luma sets
@@ -133,38 +214,47 @@
     return src(s1).mask(oneTile()).scale(amount, MARK_X, 1);
   }
 
-  // What counts as a loud kick on feed.bass. Measured, not assumed: over 240
-  // frames of the mock 174 BPM feed, feed.bass ran 0.29 to 0.749 and
-  // feed.peak 0.28 to 0.596. feed.js normalises each band against a decaying
-  // running maximum and then chases it at ATTACK 0.6 a frame, and a drum and
-  // bass kick envelope has decayed well before the smoothed value catches up,
-  // so the band tops out around three quarters. The two sketches that gate on
-  // a loud kick use this rather than the 0.7 and 0.8 of the spec, which would
-  // fire once in a blue moon and never respectively.
-  const BASS_LOUD = 0.62;
-
-  // osc(freq) is sin(st * freq), so the number of lines across the coordinate
-  // is freq / TAU. Every line count below is written as COUNT * TAU, because
-  // a bare frequency is impossible to read as a line count and the first
-  // versions of the ridge and terrain sketches came out at a quarter of the
-  // density they were meant to have.
-  const TAU = 2 * Math.PI;
+  // A grey, for .mult(solid(...)), that sits near one and lifts a few percent
+  // on the beat. This is what a kick is worth now.
+  function accent(base, lift) {
+    return () => base + lift * feed.pulse;
+  }
 
   const monochrome = [
 
-    // 1. The wordmark breathing on the bass, brightness riding the peak, and
-    // a faint outward trail so the strokes glow rather than sit flat.
+    // 1. The wordmark breathing. The size follows the swell, so it is a
+    // little larger through a loud passage and a little smaller through a
+    // break, and the outward smear turns the strokes into a soft glow that
+    // never resolves to a hard edge. The beat is four percent of brightness
+    // and half a percent of size: present, not an event.
     { name: 'logo-outline', cam: false, mono: true, run() {
-        const bright = () => 0.5 + 0.5 * feed.peak;
-        trail(0.78, 1.016)
-          .layer(wordmark(() => 0.33 + 0.05 * feed.bass)
-            .mult(solid(bright, bright, bright, 1)))
+        const bright = accent(0.86, 0.1);
+        const size = () => 0.325 + 0.02 * feed.swell + 0.004 * feed.pulse;
+        smear(wordmark(size)
+          .scrollY(() => 0.012 * Math.sin(flow() * 0.23))
+          .rotate(() => 0.035 * Math.sin(flow() * 0.5))
+          .mult(solid(bright, bright, bright, 1)), 0.85, 1.003)
           .out(o0);
     } },
 
     // 2. The logotype mirrored four ways around the centre, letters readable,
-    // turning slowly with a kick on every beat and the ring breathing out on
-    // the bass.
+    // turning continuously at a rate set by energy. A beat adds a couple of
+    // degrees of extra turn through a spring, so the ring leans into the kick
+    // and settles back; the old version added a fixed fifteen degrees to a
+    // counter on every beat, which is a jump however small the step.
+    //
+    // Both numbers are small for the same reason: the letters sit at about
+    // four tenths of the frame from the centre, so a degree of turn moves
+    // them seven pixels, and thin strokes moving seven pixels between two
+    // rendered frames is a twitch even when the cause of it is a spring.
+    //
+    // The short smear on the way out is doing more than it looks. A trail is
+    // a low pass filter in time as well as a look: measured, the same
+    // rotation went from six and a half percent of the frame changing between
+    // rendered frames to under two, because the ring is now a soft edge
+    // rather than a hard one and a soft edge moving a pixel changes a pixel
+    // by very little. It is the cheapest way to buy motion back on anything
+    // drawn in thin lines.
     //
     // Built out of four placed copies, not out of kaleid(). kaleid(4) squeezes
     // a full turn into a 45 degree wedge, which stretches everything eight
@@ -178,48 +268,51 @@
     // contributes its rgb unweighted, and the wordmark's soft glow would come
     // through as a solid white slab where the layers above are transparent.
     { name: 'logo-kaleid', cam: false, mono: true, run() {
-        let angle = 0, kick = 0;
-        feed.onBeat(() => { angle += Math.PI / 12; kick = 1; });
-        window.sketchUpdate = (dt) => { kick = Math.max(0, kick - dt / 260); };
-        wordmark(() => 0.26 + 0.015 * kick).out(o1);
-        const arm = (a) => src(o1).scrollY(() => -0.28 - 0.035 * feed.bass).rotate(a);
-        solid(0, 0, 0, 0)
+        wordmark(() => 0.255 + 0.012 * feed.swell).out(o1);
+        const arm = (a) => src(o1)
+          .scrollY(() => -0.28 - 0.016 * feed.swell)
+          .rotate(a);
+        const turn = () => flow() * 0.025
+          + 0.03 * feed.spring('kaleid-kick', () => feed.pulse, 1);
+        smear(solid(0, 0, 0, 0)
           .layer(arm(0))
           .layer(arm(Math.PI / 2))
           .layer(arm(Math.PI))
           .layer(arm(-Math.PI / 2))
-          .rotate(() => angle * 0.5 + hydra.synth.time * 0.03)
+          .rotate(turn), 0.8, 1.0012)
           .out(o0);
     } },
 
-    // 3. The wordmark sliced into horizontal bands. The modulator is a
-    // stepped ramp carried in the red channel only, with green zeroed, so
-    // modulate() shifts x per band and leaves y alone; modulate rather than
-    // modulateScrollX because the scroll variants fract the coordinate and
-    // the wordmark would wrap instead of sliding.
+    // 3. The wordmark sheared. This was a slicer: a beat threw a random
+    // offset into a posterised band modulator and it decayed over 300 ms, so
+    // the type tore itself apart four times a second at a different place
+    // every time. It is now one continuous shear, the modulator a smooth
+    // vertical wave rather than a stepped ramp, leaning one way and then the
+    // other on the shared clock. The lean opens up with energy, so a loud
+    // passage pulls the letters further out of true, and the beat is worth
+    // one percent of it.
     //
-    // A beat throws a fresh offset in and it decays over about 300 ms. At 174
-    // BPM a beat is 345 ms, so a pure decay leaves the thing unsliced most of
-    // the time and the name stops meaning anything; a small standing stagger
-    // under the jump keeps the bands apart between kicks.
+    // The modulator carries its ramp in the red channel only, with green
+    // zeroed, so modulate() displaces x and leaves y alone; modulate rather
+    // than modulateScrollX because the scroll variants fract the coordinate
+    // and the wordmark would wrap instead of sliding. brightness(-0.5)
+    // centres the red channel on zero so the shear goes both ways.
     { name: 'logo-sliced', cam: false, mono: true, run() {
-        const STAGGER = 0.035;
-        let off = 0;
-        feed.onBeat(() => { off = 0.16 * (Math.random() * 2 - 1); });
-        window.sketchUpdate = (dt) => { off *= Math.pow(0.05, dt / 300); };
-        const bands = () => osc(26, 0, 0).rotate(Math.PI / 2)
-          .posterize(5, 1).brightness(-0.5).mult(solid(1, 0, 0, 1));
-        const bright = () => 0.6 + 0.4 * feed.peak;
-        trail(0.55, 1.003)
-          .layer(wordmark(0.34)
-            .modulate(bands(), () => STAGGER + off)
-            .mult(solid(bright, bright, bright, 1)))
+        const wave = () => osc(4.2, 0.07, 0).rotate(Math.PI / 2)
+          .brightness(-0.5).mult(solid(1, 0, 0, 1));
+        const lean = () => 0.07 + 0.06 * Math.sin(flow() * 0.9)
+          + 0.04 * feed.energy + 0.01 * feed.pulse;
+        const bright = accent(0.88, 0.08);
+        smear(wordmark(0.34)
+          .modulate(wave(), lean)
+          .mult(solid(bright, bright, bright, 1)), 0.88, 1.0015)
           .out(o0);
     } },
 
     // 4. Joy Division ridges: sixty thin horizontal lines, evenly spaced and
-    // mostly flat, with local bumps where the field pushes them up. The bass
-    // scales the bump height, so the ridges heave on the kick.
+    // mostly flat, with local bumps where the field pushes them up. The bump
+    // height follows the swell, so the ridge plot opens out over a whole
+    // passage rather than heaving on every kick.
     //
     // Three things make this read as ridges rather than as marbling. The
     // oscillator frequency is in radians across the coordinate, so LINES * TAU
@@ -233,68 +326,96 @@
     // The modulator's red channel is zeroed, so the displacement is in y only
     // and the lines never slide along their own length.
     { name: 'ridge-lines', cam: false, mono: true, run() {
-        const bumps = () => noise(4.5, 0.06)
-          .mult(noise(2.2, 0.05).thresh(0.3, 0.3))
+        const bumps = () => noise(4.5, 0.006)
+          .mult(noise(2.2, 0.005).thresh(0.3, 0.3))
           .mult(solid(0, 1, 0, 1));
         osc(60 * TAU, 0, 0).rotate(Math.PI / 2)
-          .modulate(bumps(), () => 0.015 + 0.13 * feed.bass)
+          .modulate(bumps(), () => 0.02 + 0.05 * feed.swell)
           .thresh(0.93, 0.01)
           .out(o0);
     } },
 
-    // 5. A bundle of some forty-five thin lines bending together, laid over a
-    // slow feedback smear so the bundle reads as ribbon rather than as fence.
+    // 5. A bundle of some thirty-five thin lines bending together, laid over
+    // a long smear so the bundle reads as ribbon rather than as fence. The
+    // bundle's own angle drifts a couple of degrees either side of 20 on the
+    // shared clock, which is what keeps the smear from settling into a static
+    // blur, and the bend is the noise field moving through it rather than the
+    // lines sliding along themselves.
     //
-    // Two numbers do all the work. The count: osc(60) is not sixty lines, it
-    // is sixty radians, which is nine and a half, and nine fat bands is not a
-    // bundle. And the smear: at fade 0.84 and grow 1.005 the copies pile up
-    // into fat white bands and the frame goes two thirds white, the opposite
-    // of the look, so the half-life is a couple of frames and the growth is
-    // almost nothing. The bright line with a grey body behind it is the point.
+    // Three numbers do all the work. The count: osc(60) is not sixty lines,
+    // it is sixty radians, which is nine and a half, and nine fat bands is not
+    // a bundle. The smear: with the old additive trail at fade 0.84 the copies
+    // piled up into fat white bands and the frame went two thirds white.
+    // Through blend() the same 0.9 is safe, because the result cannot exceed
+    // the brightest input.
+    //
+    // And the sync argument, which is the one that decided whether this
+    // sketch was smooth. osc's second argument shifts the pattern by
+    // sync * time in the coordinate, independent of the frequency, so the old
+    // 0.05 slid this whole field 48 px a second across the render target: a
+    // dense line field moving a pixel between rendered frames is the single
+    // largest source of frame to frame change in the library. At 0.0015 the
+    // lines are near enough still and everything you see moving is the warp.
     { name: 'ribbons', cam: false, mono: true, run() {
-        trail(0.45, 1.0008)
-          .layer(keyed(osc(45 * TAU, 0.05, 0)
-            .modulate(noise(1.4, 0.04), () => 0.06 + 0.2 * feed.bass)
-            .rotate(0.35)
-            .thresh(0.94, 0.008)))
-          .out(o0);
+        const work = osc(34 * TAU, 0.0015, 0)
+          .modulate(noise(1.4, 0.006), () => 0.08 + 0.06 * feed.swell)
+          .rotate(() => 0.35 + 0.02 * Math.sin(flow() * 0.17))
+          .thresh(0.92, 0.02);
+        smear(work, 0.92, 1.0008).out(o0);
     } },
 
     // 6. Topographic contours. The posterised noise field is rendered once
     // into o1 and the edge detector then runs on that texture, which costs
     // one noise pair per frame instead of the eight a four-copy chain would
-    // need. The field drifts with mid energy; the band gain follows the bass
-    // so the contours brighten on the kick.
+    // need. The field drifts with energy through the warp amount; the band
+    // count and the edge gain are both fixed, because both feed thresholds
+    // and a threshold moved by the music adds and drops whole contour lines
+    // at a time.
     { name: 'contours', cam: false, mono: true, run() {
-        noise(2.6, 0.05)
-          .modulate(noise(1.1, 0.02), () => 0.08 + 0.5 * feed.mid)
+        noise(2.6, 0.01)
+          .modulate(noise(1.1, 0.006), () => 0.1 + 0.16 * feed.swell)
           .posterize(10, 1)
           .out(o1);
-        edges(() => src(o1), () => 2.5 + 4 * feed.bass).out(o0);
+        edges(() => src(o1), () => 3 + 0.4 * feed.pulse).out(o0);
     } },
 
     // 7. A flow field made entirely of feedback: every frame the previous
     // frame is displaced along a noise vector field and dimmed a little, and
     // sparse bright points are seeded into it, so the points draw their own
-    // trajectories as lines with a dot at the head. Beats open the seed
-    // threshold for a moment, which puts a burst of new lines in on the kick.
+    // trajectories as lines with a dot at the head.
+    //
+    // The beat rides the seed *brightness* through a spring, not the seed
+    // threshold. Moving the threshold is what the first version did, and it
+    // switched whole dots into existence at once; moving the brightness fades
+    // the same dots up and down.
     { name: 'flow-lines', cam: false, mono: true, run() {
-        let seed = 0;
-        feed.onBeat(() => { seed = 1; });
-        window.sketchUpdate = (dt) => { seed = Math.max(0, seed - dt / 400); };
+        const seed = () => 0.8 + 0.2 * feed.spring('flow-seed', () => feed.pulse, 1.6);
         src(o0)
-          .modulate(noise(3.2, 0.08), () => 0.004 + 0.012 * feed.bass)
-          .mult(solid(0.93, 0.93, 0.93, 1))
-          .layer(keyed(noise(22, 0.3).thresh(() => 0.8 - 0.14 * seed, 0.01)))
+          .modulate(noise(3.2, 0.03), () => 0.004 + 0.008 * feed.energy)
+          .mult(solid(0.965, 0.965, 0.965, 1))
+          .layer(keyed(noise(22, 0.06).thresh(0.8, 0.02))
+            .mult(solid(seed, seed, seed, 1)))
           .out(o0);
     } },
 
-    // 8. Wireframe terrain: a forty by twenty-five mesh of single pixel lines
+    // 8. Wireframe terrain: a thirty-two by twenty mesh of single pixel lines
     // warped by a smooth field and compressing toward the horizon.
+    //
+    // The rows no longer come at the viewer at all, and that is the one
+    // structural thing this rework took away rather than smoothed. A single
+    // pixel line is the most motion-sensitive thing that can be drawn: the
+    // mesh at the old sync of 0.012, about twelve pixels a second, changed a
+    // quarter of the frame every second, and even a tenth of that measured
+    // three times the budget for the whole sketch. Softening the lines to
+    // spread the change over more pixels made it worse, not better, because
+    // more of the frame is then line. So the mesh stands still and the warp
+    // field moves through it, which is the same picture with the travel taken
+    // out of the grid and put into the terrain.
     //
     // The warp amplitude is the thing to keep small. At 0.22 the coordinate
     // gradient folds over in places and whole cells collapse into white
-    // blobs; a tenth of that bends the mesh without ever folding it.
+    // blobs; a tenth of that bends the mesh without ever folding it, and the
+    // swell moves it over a bar rather than over a kick.
     //
     // The rows scroll away on the oscillator's own sync argument rather than
     // on scrollY. scrollY ends in fract(st), and although the grid itself is
@@ -308,35 +429,43 @@
     // and barely leans the grid at all.
     { name: 'wire-terrain', cam: false, mono: true, run() {
         const yRamp = () => gradient(0).rotate(Math.PI / 2);
-        osc(40 * TAU, 0, 0).thresh(0.984, 0.006)
-          .add(osc(25 * TAU, 0.012, 0).rotate(Math.PI / 2).thresh(0.984, 0.006))
-          .modulate(noise(1.6, 0.04), () => 0.02 + 0.06 * feed.bass)
+        osc(32 * TAU, 0, 0).thresh(0.984, 0.006)
+          .add(osc(20 * TAU, 0, 0).rotate(Math.PI / 2).thresh(0.984, 0.006))
+          .modulate(noise(1.6, 0.006), () => 0.02 + 0.035 * feed.swell)
           .modulateScale(yRamp(), 1.4, 1.0)
           .out(o0);
     } },
 
-    // 9. Webcam edges with a short trail. The gain follows the high band so
-    // the outline crackles on hats, and the trail length follows the bass so
-    // the ghosting stretches on the kick. The trail does the visible work of
-    // the two: the gain feeds a threshold, and an edge that already clears
-    // the threshold does not get any brighter for being multiplied harder.
+    // 9. Webcam edges over a long smear, so the outline leaves a wake behind
+    // whoever is moving rather than crackling in place. The gain is nearly
+    // constant for the reason given at edges(): it feeds a threshold, and an
+    // edge that already clears the threshold does not get any brighter for
+    // being multiplied harder, it just brings in and drops out the marginal
+    // ones. The swell lengthens the wake instead, which is the part that
+    // actually reads.
     { name: 'cam-edges', cam: true, mono: true, run() {
-        trail(() => 0.55 + 0.35 * feed.bass, 1.006)
-          .layer(edges(() => src(s0), () => 3 + 6 * feed.high))
+        smear(edges(() => src(s0), () => 3.5 + 0.5 * feed.pulse),
+          0.82, () => 1.002 + 0.003 * feed.swell)
           .out(o0);
     } },
 
     // 10. Webcam luminance posterised into a handful of bands and reduced to
     // the band edges, a contour map of whoever is in front of the lens.
     // Same o1 trick as contours: posterise once, detect edges on the result.
-    // The band count rides the bass, which adds and drops whole contour lines
-    // on the kick; driving only the edge gain would be invisible, because the
-    // gain feeds a threshold that the edges already clear.
+    //
+    // The band count is fixed at six. Riding it on the bass, as the first
+    // version did, added and dropped whole contour lines on the kick, which
+    // is the most literal version of the flicker this file is trying to be
+    // rid of. The bands still move, because the image is lifted and contrast
+    // stretched slowly underneath them, so the contours slide over the face
+    // instead of blinking on and off.
     { name: 'cam-contours', cam: true, mono: true, run() {
         src(s0).saturate(0)
-          .posterize(() => 4 + Math.round(5 * feed.bass), 1)
+          .brightness(() => 0.02 * Math.sin(flow() * 0.37) + 0.015 * feed.energy)
+          .contrast(() => 1 + 0.1 * feed.swell)
+          .posterize(6, 1)
           .out(o1);
-        edges(() => src(o1), () => 3 + 4 * feed.mid).out(o0);
+        edges(() => src(o1), 3).out(o0);
     } }
 
   ];
@@ -344,8 +473,14 @@
   const colour = [
 
     // 11. The boot logo, centred and readable across about eighty percent of
-    // the width, bouncing on the bass over a palette field that folds through
-    // kaleid(2) while the bass is over BASS_LOUD.
+    // the width, over a palette field that folds through kaleid(2).
+    //
+    // The fold used to be a hard cut, on for every frame the bass was over a
+    // threshold and off otherwise, which flipped the whole background several
+    // times a bar. kaleid has no identity value of nSides, so the two chains
+    // still have to exist separately, but they are cross-dissolved on the
+    // swell now: mostly flat through a quiet passage, mostly folded through a
+    // loud one, and the journey between them takes bars.
     //
     // The fold is on the field, never on the logo. kaleid returns
     // r * vec2(cos a, sin a), a radial remap centred on 0 rather than on 0.5,
@@ -353,21 +488,13 @@
     // what is left of it on its side against the two edges: the logo was
     // unreadable on every frame the gate was open. Folding only the field
     // keeps the accent and keeps the type.
-    //
-    // The gate is BASS_LOUD, not the 0.7 of the spec. Measured on the mock
-    // 174 BPM feed, feed.bass runs 0.29 to 0.749: feed.js chases the
-    // AGC-normalised value at ATTACK 0.6 per frame while the kick envelope is
-    // already decaying, so the smoothed band never gets near its ceiling. A
-    // 0.7 gate would open for a frame or two at the very tip of a kick, if at
-    // all, and 0.8 would never open. It is a hard cut between two separate
-    // chains because kaleid has no value of nSides that is the identity.
     { name: 'logo-colour', cam: false, mono: false, run() {
         const [dr, dg, db] = palette.rgb('deep');
         const [pr, pg, pb] = palette.rgb('purple');
         const [mr, mg, mb] = palette.rgb('magenta');
         const field = () => solid(dr, dg, db, 1)
-          .add(noise(2.2, 0.05).color(pr, pg, pb), () => 0.25 + 0.5 * feed.bass)
-          .add(osc(9, 0.05, 0).color(mr, mg, mb), 0.2);
+          .add(noise(2.2, 0.03).color(pr, pg, pb), () => 0.28 + 0.3 * feed.energy)
+          .add(osc(9, 0.03, 0).color(mr, mg, mb), 0.2);
         // luma() first to key the black background out (see LOGO_KEY), then
         // mask() to drop the vertical repeats. Both are needed and they do
         // different jobs: the key gives the logo an alpha it does not have,
@@ -375,15 +502,26 @@
         // copies of the logo up the frame at this scale. Keying alone leaves
         // the repeats, masking alone leaves the black rectangle.
         field()
-          .blend(field().kaleid(2), () => (feed.bass > BASS_LOUD ? 1 : 0))
+          .blend(field().kaleid(2), () => 0.12 + 0.5 * feed.swell)
+          .modulate(noise(1.3, 0.015), () => 0.02 + 0.05 * feed.swell)
           .layer(src(s2).luma(LOGO_KEY[0], LOGO_KEY[1]).mask(oneTile())
-            .scale(() => 0.2 + 0.015 * feed.bass, LOGO_X, 1))
+            .scale(() => 0.2 + 0.008 * feed.swell + 0.004 * feed.pulse, LOGO_X, 1))
           .out(o0);
     } },
 
     // 12. Zoom feedback in magenta and violet: two oscillators crossed, the
-    // output folded back into its own coordinate, and the zoom pumped by the
-    // bass so the tunnel lurches forward on every kick.
+    // output folded back into its own coordinate. The zoom used to be pumped
+    // by the bass at 0.12 a kick, which lurched; it now sits near one and a
+    // bit on the energy, with a beat worth under one percent, so the tunnel
+    // pulls rather than lurches. Each percent of zoom is ten pixels a frame
+    // at the edge of a 960 wide target, which is why the number is small.
+    //
+    // The feedback depth matters as much as the zoom. Above about 0.2 the
+    // coordinate feedback stops being a tunnel and starts reorganising
+    // itself: the picture would sit still for a second and then turn itself
+    // inside out in three frames, which measured as a seven percent jump out
+    // of a one percent baseline. At 0.15 it is a tunnel that keeps moving and
+    // never snaps.
     //
     // Every osc() feeding a .color() in this family takes offset 0. osc's
     // third argument phase shifts the three channels against each other, so
@@ -394,56 +532,72 @@
     { name: 'tunnel', cam: false, mono: false, run() {
         const [r, g, b] = palette.rgb('magenta');
         const [r2, g2, b2] = palette.rgb('violet');
-        osc(14, 0.08, 0).color(r, g, b)
-          .blend(osc(22, -0.05, 0).color(r2, g2, b2), 0.5)
-          .modulate(src(o0), 0.25)
-          .scale(() => 1.03 + 0.12 * feed.bass)
+        osc(14, 0.015, 0).color(r, g, b)
+          .blend(osc(22, -0.011, 0).color(r2, g2, b2), 0.5)
+          .modulate(src(o0), () => 0.15 + 0.04 * feed.swell)
+          .scale(() => 1.002 + 0.006 * feed.energy + 0.003 * feed.pulse)
+          .rotate(() => flow() * 0.02)
           .kaleid(3)
           .out(o0);
     } },
 
-    // 13. A dark plum field that a pink and white flash tears open when the
-    // bass crosses BASS_LOUD (see the note on that constant; the spec says
-    // 0.8, which the smoothed band never reaches). The crossing is a rising
-    // edge, not a level, and the flash is rate limited to one per 500 ms in a
-    // closure, so at 174 BPM, about 345 ms a beat, it fires on alternate
-    // kicks rather than on every frame the bass happens to be loud.
+    // 13. The drop, as a bloom rather than a strobe. The old version watched
+    // for the bass crossing a threshold and threw a pink and white flash at
+    // the screen for 170 ms, rate limited to one every 500 ms: a strobe, on
+    // an appliance that sits in front of a DJ for hours.
+    //
+    // What opens the pink now is the swell, so it comes up over a bar or two
+    // as the track builds and falls away again over four, and the beat adds a
+    // few percent through a spring on top of that. There is no white in the
+    // chain at all, and no discontinuity anywhere in it.
     { name: 'strobe-drop', cam: false, mono: false, run() {
         const [pr, pg, pb] = palette.rgb('plum');
         const [dr, dg, db] = palette.rgb('deep');
         const [kr, kg, kb] = palette.rgb('pink');
-        const [wr, wg, wb] = palette.rgb('white');
-        let lastFlash = -1e9, flash = 0, wasOver = false;
-        window.sketchUpdate = (dt) => {
-          const now = performance.now();
-          const over = feed.bass > BASS_LOUD;
-          if (over && !wasOver && now - lastFlash > 500) { lastFlash = now; flash = 1; }
-          wasOver = over;
-          flash = Math.max(0, flash - dt / 170);
-        };
+        const bloom = () => 0.28 + 0.6 * feed.swell
+          + 0.07 * feed.spring('drop-kick', () => feed.pulse, 2.2);
         solid(dr, dg, db, 1)
-          .add(noise(2.4, 0.04).color(pr, pg, pb), 0.45)
-          .add(osc(6, 0.2, 0).color(kr, kg, kb).kaleid(5), () => flash * 0.9)
-          .add(solid(wr, wg, wb, 1), () => flash * flash * 0.5)
+          .add(noise(2.4, 0.02).color(pr, pg, pb), 0.35)
+          .add(osc(16, 0.04, 0).color(kr, kg, kb).kaleid(5)
+            .modulate(noise(1.1, 0.015), () => 0.04 + 0.05 * feed.swell)
+            .scale(() => 1 + 0.06 * Math.sin(flow() * 0.23)), bloom)
           .out(o0);
     } },
 
     // 14. Webcam posterised to a few levels and pushed through the palette:
-    // the image in magenta, its inverse in violet, blended back over the
-    // previous frame for trails. The bass rides the level count, six levels
-    // at rest down to three on the kick, so the banding coarsens with it.
+    // the image in magenta, its inverse in violet, mixed back over the
+    // previous frame for trails. Five levels, fixed; the bass used to ride
+    // the level count between six and three and the whole picture re-banded
+    // on every kick. The image is lifted slowly underneath the quantiser
+    // instead, which slides the bands rather than rebuilding them, and the
+    // swell lengthens the trail.
     { name: 'cam-posterise', cam: true, mono: false, run() {
         const [mr, mg, mb] = palette.rgb('magenta');
         const [vr, vg, vb] = palette.rgb('violet');
-        const bins = () => 3 + Math.round(3 * (1 - feed.bass));
-        src(s0).saturate(0).posterize(bins, 1).color(mr, mg, mb)
-          .add(src(s0).saturate(0).posterize(bins, 1).invert().color(vr, vg, vb), 0.55)
-          .blend(src(o0), 0.45)
+        const face = () => src(s0).saturate(0)
+          .brightness(() => 0.03 * Math.sin(flow() * 0.4))
+          .posterize(5, 1);
+        face().color(mr, mg, mb)
+          .add(face().invert().color(vr, vg, vb), 0.55)
+          .blend(src(o0), () => 0.55 + 0.1 * feed.swell)
           .out(o0);
     } },
 
-    // 15. Scanlines over a pixelated palette field. The block size is thrown
-    // small on every beat and eases back out between them.
+    // 15. A scanline field over a palette wash. The old sketch threw a random
+    // block count in on every beat and pixelated the frame with it, easing
+    // back out over 420 ms: the single twitchiest thing in the library, and
+    // the one the DJ picked out. There is no pixelate here at all now.
+    //
+    // The scanlines are a soft sine rather than a posterised square, so
+    // nothing in the picture is quantised, and their spacing follows the
+    // swell: about forty-five lines through a quiet passage closing to
+    // seventy-five through a loud one, sliding slowly down the frame the
+    // whole time. The beat is a shimmer, five percent on the line brightness
+    // and nothing else; it is worth keeping small because this mask
+    // multiplies the entire frame, so a lift that would be subtle on a
+    // wordmark is a flash of the whole picture here. The drift is a crawl: a
+    // scanline field is a comb, and a comb moving a pixel between rendered
+    // frames changes every pixel it covers.
     //
     // The hue drift is measured against 174 BPM, the tempo this box is built
     // for, and is zero there. hue() takes turns, not degrees: an absolute
@@ -459,35 +613,44 @@
     { name: 'glitch-scan', cam: false, mono: false, run() {
         const [mr, mg, mb] = palette.rgb('magenta');
         const [vr, vg, vb] = palette.rgb('violet');
-        let blocks = 160;
-        feed.onBeat(() => { blocks = 10 + Math.floor(Math.random() * 26); });
-        window.sketchUpdate = (dt) => { blocks += (160 - blocks) * Math.min(1, dt / 420); };
-        osc(18, 0.05, 0).color(mr, mg, mb)
-          .add(noise(3, 0.1).color(vr, vg, vb), 0.4)
+        // The spacing goes through a slow spring rather than reading the
+        // swell directly. A comb's lines move by their distance from the
+        // origin times the change in frequency, so the far edge of the frame
+        // travels a third of a line for a hundredth of swell: the swell's own
+        // small ripple over each beat, invisible anywhere else, came out here
+        // as a visible twitch of the whole field twice a bar. At 0.3 Hz the
+        // spring passes the shape of a build and none of the ripple.
+        const lines = () => (45 + 30 * feed.spring('scan-lines', () => feed.swell, 0.3)) * TAU;
+        const lit = accent(0.57, 0.02);
+        const scan = () => osc(lines, 0, 0).rotate(Math.PI / 2)
+          .scrollY(() => flow() * 0.0025)
+          .brightness(0.45).contrast(1.4)
+          .mult(solid(lit, lit, lit, 1));
+        osc(18, 0.02, 0).color(mr, mg, mb)
+          .add(noise(3, 0.02).color(vr, vg, vb), 0.4)
           .hue(() => {
             const bpm = feed.bpm > 20 ? feed.bpm : 174;
-            return 0.02 * Math.sin(hydra.synth.time * 0.2) + 0.25 * ((bpm - 174) / 174);
+            return 0.02 * Math.sin(flow() * 0.2) + 0.25 * ((bpm - 174) / 174);
           })
-          .pixelate(() => blocks, () => Math.max(6, blocks * 0.56))
-          .mult(osc(180, 0, 0).rotate(Math.PI / 2).posterize(2, 1).brightness(0.35))
+          .modulate(noise(1.2, 0.015), () => 0.02 + 0.05 * feed.swell)
+          .mult(scan())
           .out(o0);
     } },
 
     // 16. A plasma of oscillator and noise in the palette, folded six ways.
-    // The rotation is integrated from mid energy rather than from time, so a
-    // busy mid range spins it and a sparse break lets it settle.
+    // The rotation runs on the shared clock, so a busy passage spins it and a
+    // sparse break lets it settle, and the fold scale opens on the swell.
     { name: 'plasma-kaleid', cam: false, mono: false, run() {
         const [mr, mg, mb] = palette.rgb('magenta');
         const [vr, vg, vb] = palette.rgb('violet');
         const [kr, kg, kb] = palette.rgb('pink');
-        let rot = 0;
-        window.sketchUpdate = (dt) => { rot += (dt / 1000) * (0.05 + 0.9 * feed.mid); };
-        osc(9, 0.06, 0).color(mr, mg, mb)
-          .add(noise(3, 0.12).color(vr, vg, vb), 0.45)
-          .add(osc(24, -0.1, 0).thresh(0.7, 0.1).color(kr, kg, kb), () => 0.1 + 0.35 * feed.high)
+        osc(9, 0.03, 0).color(mr, mg, mb)
+          .add(noise(3, 0.04).color(vr, vg, vb), 0.45)
+          .add(osc(24, -0.03, 0).thresh(0.7, 0.1).color(kr, kg, kb),
+            () => 0.12 + 0.2 * feed.energy)
           .kaleid(6)
-          .rotate(() => rot)
-          .scale(() => 1 + 0.18 * feed.bass)
+          .rotate(() => flow() * 0.11)
+          .scale(() => 1 + 0.05 * feed.swell + 0.01 * feed.pulse)
           .out(o0);
     } }
 
@@ -497,9 +660,11 @@
 
   // The contour sketch slowed right down, with the wordmark sitting under it
   // at 30 percent alpha. This is what the page shows when no deck has sent a
-  // beat for twenty seconds, so nothing here reads feed at all.
+  // beat for twenty seconds, so nothing here reads feed at all, and nothing
+  // here reads flow() either: an idle screen should drift at one rate
+  // whatever the feed last said.
   window.idleSketch = { name: 'idle-contours', cam: false, mono: true, run() {
-      noise(2, 0.012).modulate(noise(0.9, 0.006), 0.12).posterize(9, 1).out(o1);
+      noise(2, 0.008).modulate(noise(0.9, 0.004), 0.12).posterize(9, 1).out(o1);
       edges(() => src(o1), 3)
         .layer(wordmark(0.32).mult(solid(1, 1, 1, 0.3)))
         .out(o0);
