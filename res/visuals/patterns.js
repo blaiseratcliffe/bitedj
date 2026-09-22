@@ -34,15 +34,17 @@
 //    filled faces, and the alpha channel does not know a face from an edge.
 //    `wire` in the index marks those 10, and they get black faces and white
 //    strokes; everything else gets white faces and white strokes.
-// 3. Nine patterns have a sweep frame 0 that is not artwork. With the slider
+// 3. Eight patterns have a sweep frame 0 that is not artwork. With the slider
 //    at its minimum the site emits a 1591 byte paperclip icon, and a paperclip
 //    is exactly what the screen would show. The generator detects those (the
 //    root `<svg>` of a real export carries `class="svg-preview"`) and repeats
 //    the nearest usable frame in their place, so the sweep is always seven
-//    frames and simply flattens at that end.
+//    frames and simply flattens at that end. One of the eight is iso-sphere,
+//    which the size limit below keeps out of the rotation anyway, so seven
+//    patterns on screen have a flattened sweep end.
 //
 // Cost. Rasterising is not free and the heavy end of the library is very
-// heavy: the timings are in the MAX_BYTES comment below. Nothing here
+// heavy: the timings are in the size limit comment below. Nothing here
 // rasterises on demand. A pattern is pulled into the cache in the background,
 // one frame per animation frame so the main thread never stalls for longer
 // than a single frame's draw, and a sketch only ever gets a pattern that is
@@ -50,9 +52,13 @@
 // cache is empty, which the director treats exactly like a camera sketch with
 // no camera.
 //
-// Memory. A frame is a 1024x1024 canvas, 4 MB of RGBA, so a pattern is 28 MB
-// and the three-pattern cache is 84 MB plus whatever the GPU holds for the
-// four bound textures. That is the reason CACHE_MAX is 3 and not 10.
+// Memory. A frame is a 1024x1024 canvas, 4.19 MB of RGBA, so a pattern is
+// 29.4 MB and the peak is three patterns, 88 MB, plus 16.8 MB of GPU memory
+// for the four bound textures. Three is the peak and not the steady state
+// only because prewarm() evicts down to two before it allocates the third; the
+// first version pushed a fourth entry and trimmed afterwards, which was 117 MB
+// for as long as the load took. That arithmetic is the reason CACHE_MAX is 3
+// and not 10.
 (function () {
   const BASE = 'assets/patterns/';
   const SIZE = 1024;
@@ -62,58 +68,80 @@
                              // is fair game to replace, so a three hour set
                              // does not run on the first three patterns that
                              // happened to load
-  const RECENT = 6;          // slugs to remember, so prewarm spreads out
+  const RECENT = 8;          // slugs take() steers around, one per sketch in
+                             // the family, so a full round of them can only
+                             // repeat an artwork once the cache has nothing
+                             // else to offer
+  const DEAD_BAND = 0.05;    // sweep positions either side of a frame boundary
+                             // that keep the pair already bound
 
-  // What a pattern costs, and why the size limit is in bytes.
+  // What a pattern costs, and what the size limit is a limit on.
   //
-  // The weight of a pattern is its seven frames on disk. That tracks the cost
-  // of rasterising it far better than index.json's `shapes` does, because
-  // `shapes` counts the default frame only and the top of a sweep can be five
-  // times it: iso-sphere is 11,232 shapes at its default and 1.9 MB, and
-  // 4.65 MB at the top of its sweep.
+  // The number to hold a limit against is the biggest single frame, not the
+  // seven-frame total. A pattern rasterises one frame per animation frame, so
+  // the total is spread and the biggest frame is the stall: at the page's
+  // 30 fps cap, 250 ms is seven dropped frames in a row, and the Pi is roughly
+  // four times slower again. The generator puts both figures in the index and
+  // this gates on `frame`.
   //
-  // Measured in Chrome on this desktop at 1024x1024, whole pattern, and per
-  // frame the decode plus the draw, which are both on the main thread (the
-  // XHR is not):
+  // Measured here at 1024x1024, the decode plus the draw plus the coverage
+  // readback, all of them on the main thread and all inside the timed block:
   //
-  //   flow_lines              0.8 MB     117 ms total,  39 ms main,   7 ms worst frame
-  //   iso-sphere             12.0 MB     901 ms total, 789 ms main, 272 ms worst frame
-  //   deformed_grid_mesh_2   15.3 MB    1065 ms total, 875 ms main, 337 ms worst frame
+  //   pattern                 biggest frame   worst frame
+  //   arcs_1                        0.03 MB         10 ms
+  //   ripple_grid                   0.55 MB         74 ms
+  //   resonance_field               1.50 MB         99 ms
+  //   scattered-cube-grid           1.81 MB    212, 251 ms
+  //   iso-cross                     1.93 MB        228 ms
+  //   scattered-cube-grid-v3        2.56 MB        372 ms
+  //   iso-sphere                    4.65 MB        608 ms
+  //   deformed_grid_mesh_2          6.11 MB        597 ms
   //
-  // The brief's test was to exclude nothing unless iso-sphere passed 1500 ms,
-  // and at 901 ms it does not. The number that matters turned out to be the
-  // other one. A worst frame of 272 ms is eight dropped frames at the page's
-  // 30 fps cap in one go, seven times over as the seven frames load, and the
-  // Pi is roughly four times slower again: a second of frozen picture, several
-  // times, in the middle of a set. So the limit is applied anyway, on the
-  // worst frame rather than on the total.
+  // 1.6 MB a frame is the cut. It is not the largest number that ever came in
+  // under 250 ms: scattered-cube-grid at 1.81 MB measured 212 ms on one run
+  // and 251 ms on another, which is a pattern sitting on the ceiling rather
+  // than under it, and the same is true of iso-cross. Below 1.6 MB the worst
+  // anything measured was 99 ms, which leaves room for a slower box and for
+  // the run to run spread. It keeps 49 of the 54 patterns.
   //
-  // 5 MB of frames keeps 49 of the 54 patterns and caps the heaviest single
-  // frame in the rotation at 1.93 MB, about 110 ms here. It drops
-  // deformed_grid_mesh_2, iso-sphere, scattered-cube-grid-v3,
-  // scattered-cube-grid and resonance_field, and keeps everything else
-  // including the dense ones: nested_polygons_filled is 3,332 shapes and
-  // stays. Raise it if the Pi turns out to be quicker than four times slower;
-  // the log line at the end of a load prints the worst frame so the number can
-  // be re-derived on the box rather than guessed.
-  const MAX_BYTES = 5e6;
+  // The whole table is about twice what these same patterns cost before the
+  // stroke rule below went in, which is the price of white line work: 2.5 px
+  // of stroke is five times the fill of half a pixel. The `worst frame` figure
+  // is logged at the end of every load, so the cut can be re-derived on the Pi
+  // rather than assumed from this table.
+  const MAX_FRAME_BYTES = 1.6e6;
 
-  // The rewrite. `<svg` is always the first tag in these files, and none of
-  // them carries a `style` attribute on the root, so inserting after the four
-  // characters of the tag name is safe. The eight files that do carry an
-  // `xmlns` are the placeholder frames the generator has already replaced, but
-  // the guard stays: a duplicate attribute is an XML error and would fail the
-  // whole document.
-  // Most of these patterns stroke at half a pixel with
-  // `vector-effect="non-scaling-stroke"`, which means half a *device* pixel
-  // whatever size the file is rasterised at. A half-covered pixel is a 50%
-  // grey, so the wireframe patterns arrive as grey line work on black however
-  // large the canvas is, and on a projector in a dark room grey is what the
-  // room sees. The gain lifts those strokes to white without touching the
-  // black behind them or clipping anything that was already white; it is a
-  // brightness on the draw rather than a contrast in hydra so that every
-  // sketch gets it and none of them has to know.
-  const GAIN = 'brightness(1.8)';
+  // The rewrite, in two halves.
+  //
+  // The root gets the namespace and the three colour properties. `<svg` is
+  // always the first tag in these files and none of them carries a `style`
+  // attribute on the root, so inserting after the four characters of the tag
+  // name is safe. The eight files that do carry an `xmlns` are the
+  // placeholder frames the generator has already replaced, but the guard
+  // stays: a duplicate attribute is an XML error and would fail the whole
+  // document.
+  //
+  // A `<style>` child then sets the stroke width, and that rule is the
+  // difference between white line work and grey. 41 of the 54 patterns stroke
+  // with `vector-effect="non-scaling-stroke"`, which means the width is in
+  // device pixels at whatever size the file is rasterised, and the widths
+  // they ask for run from 0.2 to 1. A stroke 0.5 px wide covers half a pixel
+  // and arrives as a 50% grey, and no amount of raster size changes that: the
+  // first version of this file tried to buy it back with
+  // `filter: brightness(1.8)` on the draw, which lifts a 50% grey to about
+  // 90% and cannot do better, because a brightness cannot widen a line. At
+  // 2.5 px every stroke covers whole pixels and lands at 255 with an
+  // antialiased edge either side.
+  //
+  // `vector-effect` is forced on as well, for the 13 patterns that do not ask
+  // for it: without it the width is in user units and scales by the viewBox,
+  // which is between 2 and 20 here, so the same rule would give one pattern a
+  // 5 px stroke and another a 50 px one. A CSS rule beats a presentation
+  // attribute in the cascade whatever its specificity, which is why this works
+  // on files that carry `stroke-width="0.5"` on every path.
+  const STROKE_PX = 2.5;
+  const RULE = '<style>*{vector-effect:non-scaling-stroke;stroke-width:'
+    + STROKE_PX + 'px}</style>';
 
   const NS = 'xmlns="http://www.w3.org/2000/svg"';
   const WIRE = 'style="--fill-color:#000;--stroke-color:#fff;--occlusion-color:#000"';
@@ -121,21 +149,23 @@
 
   const TAGS = ['GRID', 'RADIAL', 'NOISE', 'FLOW', 'ISOMETRIC', 'ORGANIC', 'DISTORTION', 'PHYSICS'];
 
-  const library = (window.patternIndex || []).filter(p => p.bytes <= MAX_BYTES);
+  const library = (window.patternIndex || []).filter(p => p.frame <= MAX_FRAME_BYTES);
   if (!window.patternIndex) {
     console.error('visuals: no pattern index; run tools/build-pattern-index.py');
   } else {
     console.log('visuals: patterns', library.length, 'of', window.patternIndex.length,
-      'under the', (MAX_BYTES / 1e6).toFixed(0) + ' MB size limit');
+      'whose biggest frame is under', (MAX_FRAME_BYTES / 1e6).toFixed(1) + ' MB');
   }
 
   function svgDoc(text, wire) {
     const open = text.indexOf('<svg');
     if (open < 0) return null;
     const close = text.indexOf('>', open);
+    if (close < 0) return null;   // a truncated file: no opening tag to close
     const head = text.slice(open, close);
     const add = (head.indexOf('xmlns') < 0 ? ' ' + NS : '') + ' ' + (wire ? WIRE : SOLID);
-    return text.slice(0, open + 4) + add + text.slice(open + 4);
+    return text.slice(0, open + 4) + add
+      + text.slice(open + 4, close + 1) + RULE + text.slice(close + 1);
   }
 
   // One frame: fetch the text, rewrite it, decode it through an <img>, and
@@ -147,6 +177,12 @@
   //
   // The draw is the expensive half and it is synchronous, so it is the thing
   // that gets a frame of its own. The fetch and the decode are not.
+  //
+  // The coverage readback happens inside the same timed block, deliberately.
+  // It is a 64x64 downscale and a getImageData, which forces a flush of
+  // everything queued behind it, and leaving it outside meant the `worst
+  // frame` figure in the log understated the real stall by the one part of it
+  // that has nothing to do with how complicated the artwork is.
   function rasterise(path, wire, done) {
     let xhr;
     try {
@@ -180,15 +216,16 @@
           const ctx = cv.getContext('2d');
           ctx.fillStyle = '#000';
           ctx.fillRect(0, 0, SIZE, SIZE);
-          ctx.filter = GAIN;
+          let lit = 0;
           try {
             ctx.drawImage(img, 0, 0, SIZE, SIZE);
+            lit = coverage(cv);
           } catch (e) {
             console.error('visuals: pattern draw failed', path, e);
             cv = null;
           }
           URL.revokeObjectURL(url);
-          done(cv, decodeMs + (performance.now() - t1));
+          done(cv, decodeMs + (performance.now() - t1), lit);
         });
       };
       t0 = performance.now();
@@ -214,86 +251,79 @@
     return sum / (255 * s * s);
   }
 
-  // The usable part of a sweep, decided on the rendered pixels rather than on
-  // the parameter, because the parameter is 54 different sliders with 54
-  // different meanings. A frame is usable when between COVER_MIN and
-  // COVER_MAX of it is lit; the range is seeded on the densest usable frame
-  // and grown outward while its neighbours are usable too.
+  // Coverage is telemetry now, not a gate. An earlier version of this file
+  // used it to reject a pattern that was a solid sheet at every setting and to
+  // trim the degenerate ends off a sweep, on the argument that a frame 40
+  // percent lit is not white line work on black. With the strokes at 2.5 px
+  // that argument cuts the other way: the reference this show is built against
+  // is dense white line work, and a rule tuned against hairlines was throwing
+  // away ten patterns and eighteen sweep ends for being what the show wants.
+  // The `lit` figures still go in the log, because they are the cheapest way
+  // to see what the artwork is doing on a box nobody is standing in front of.
   //
-  // Both ends of a slider are routinely degenerate, and a survey of all 49
-  // patterns at all six settings says so plainly. arcs_1 runs 59.2, 2.4, 2.4,
-  // 1.5, 0.5, 0.3 percent lit: a solid white sheet at one end and 25 specks on
-  // black at the other, with three usable frames in between. halftone_sphere
-  // runs 36.1 down to 7.7 and only its last two frames are line work at all.
-  //
-  // The ceiling earns its place twice over. A frame that is 40% lit is not
-  // white line work on black, which is what this show is, and it is also the
-  // most expensive thing there is to move: the two densest patterns to reach
-  // the cache before this rule existed, at 44 and 35 percent lit, measured
-  // 3.05 and 2.20 percent frame to frame under nothing but a slow drift,
-  // against a budget of 3 for the whole sketch, while a sparse one under the
-  // same drift measured 0.23.
-  //
-  // At these two numbers the library keeps 39 of the 49 and trims the sweep of
-  // 18 of those. The ten it drops outright are solid sheets at every setting
-  // (backpack-grid, chevron_blocks, concentric_arc_truchet_3, hiding-squares,
-  // masked_letter_grid, quarter_circles_grid, rect_field_void) or have one
-  // usable frame and therefore no morph (isometric_ribbon_grid,
-  // nested_polygons_filled, triangular_mosaic).
-  const COVER_MIN = 0.005;
-  const COVER_MAX = 0.12;
-  function usable(c) {
-    return c >= COVER_MIN && c <= COVER_MAX;
-  }
-  function usableRange(cover) {
-    let seed = -1;
-    for (let i = 0; i < cover.length; i++) {
-      if (usable(cover[i]) && (seed < 0 || cover[i] > cover[seed])) seed = i;
+  // What that does leave is the genuinely degenerate end of a slider, where
+  // the artwork is 25 specks on black. That is now on screen, and it is the
+  // one thing about the morph a viewer might call a bug.
+
+  // The value of the brightest one percent of a frame, 0 to 255, over the
+  // largest of the three channels rather than their luminance, because a
+  // tinted line is still a lit line. This is the check that the stroke rule
+  // above is working: a frame of half-pixel hairlines answers about 130, the
+  // same artwork at 2.5 px answers 255. It reads a quarter of a million
+  // pixels, which is why it runs once per pattern, on the default frame, and
+  // not once per frame.
+  function peak99(cv) {
+    const d = cv.getContext('2d').getImageData(0, 0, SIZE, SIZE).data;
+    const hist = new Uint32Array(256);
+    let n = 0;
+    for (let i = 0; i < d.length; i += 16) {
+      hist[Math.max(d[i], d[i + 1], d[i + 2])] += 1;
+      n += 1;
     }
-    if (seed < 0) return { lo: 0, hi: 0 };
-    let lo = seed, hi = seed;
-    while (lo > 0 && usable(cover[lo - 1])) lo -= 1;
-    while (hi < cover.length - 1 && usable(cover[hi + 1])) hi += 1;
-    return { lo: lo, hi: hi };
+    const cut = Math.max(1, Math.ceil(n * 0.01));
+    let acc = 0;
+    for (let v = 255; v >= 0; v--) {
+      acc += hist[v];
+      if (acc >= cut) return v;
+    }
+    return 0;
   }
 
-  // The coverage of the last pattern loaded, kept for the log line when a
-  // pattern is rejected: the numbers are the only way to tell a pattern that
-  // is genuinely too sparse from a threshold that is set wrong.
-  let lastCover = [];
+  // 1x1, not dropped on the floor. A 1024x1024 backing store is not a JS
+  // object and the heap is in no hurry about it, so every path that gives up
+  // on a set of frames says so explicitly: the eviction in trim(), and the
+  // partial load below, which would otherwise leave up to six full frames
+  // behind on a fetch that failed on the seventh.
+  function freeFrames(entry) {
+    entry.frames.forEach(cv => { if (cv) { cv.width = 1; cv.height = 1; } });
+  }
 
   // Seven frames, strictly one after another, so two patterns are never
   // rasterising into the same animation frames.
   function load(meta, done) {
     const entry = {
-      meta: meta, frames: new Array(7), busy: true, ms: 0, worst: 0,
-      lo: 0, hi: 5, base: 6, cover: [],
-      shownAt: 0, at: performance.now(), held: 0
+      meta: meta, frames: new Array(7), busy: true, ms: 0, worst: 0, peak: 0,
+      cover: [], shownAt: 0, at: performance.now(), held: 0
     };
     let i = 0;
     (function step() {
       if (i >= 7) {
-        lastCover = entry.cover.slice(0, 6);
-        const range = usableRange(entry.cover.slice(0, 6));
-        entry.lo = range.lo; entry.hi = range.hi;
-        // The frame the default file drew, for pattern-melt, unless the
-        // site's own default settings are outside the band as well.
-        entry.base = usable(entry.cover[6]) ? 6 : range.lo;
+        const t0 = performance.now();
+        entry.peak = peak99(entry.frames[6]);
+        entry.ms += performance.now() - t0;
         entry.busy = false;
-        // One usable frame is a pattern with no sweep in it, and every
-        // sketch here is built around the morph, so it is not worth 28 MB.
-        if (range.lo === range.hi) {
-          entry.frames.forEach(cv => { if (cv) { cv.width = 1; cv.height = 1; } });
-          done(null);
-        } else {
-          done(entry);
-        }
+        done(entry);
         return;
       }
-      rasterise(meta.frames[i], meta.wire, (cv, ms) => {
-        if (!cv) { entry.busy = false; done(null); return; }
+      rasterise(meta.frames[i], meta.wire, (cv, ms, lit) => {
+        if (!cv) {
+          entry.busy = false;
+          freeFrames(entry);
+          done(null);
+          return;
+        }
         entry.frames[i] = cv;
-        entry.cover[i] = coverage(cv);
+        entry.cover[i] = lit;
         entry.ms += ms;
         entry.worst = Math.max(entry.worst, ms);
         i += 1;
@@ -303,8 +333,16 @@
   }
 
   const cache = [];
+  // Slugs shown, most recent last: `recent` is the last RECENT of them and is
+  // what take() steers around, `seen` is every one this session and is what
+  // the prewarm steers around. They are separate because they answer
+  // different questions. take() is choosing between three things in memory
+  // and only needs to know which of them the room has just watched; the
+  // prewarm is choosing between 49 files and should be pulling in something
+  // the room has never seen at all.
   const recent = [];
-  const rejected = [];   // slugs that failed to load or had no usable sweep
+  const seen = [];
+  const rejected = [];   // slugs whose load failed; never retried this session
   let loading = false;
   let tagTurn = 0;
 
@@ -312,29 +350,36 @@
     return cache.some(e => e.meta.slug === slug) || rejected.indexOf(slug) >= 0;
   }
 
+  function pickFrom(pool) {
+    return pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
+  }
+
   // Round robin over the tag groups, so a run of prewarms cannot land three
-  // grids in a row just because GRID is 21 of the 54 patterns.
+  // grids in a row just because GRID is 21 of the 54 patterns, and inside a
+  // group prefer something never shown this session over something that has
+  // been round already. Falling back twice: first to a pattern that has been
+  // shown before, then to any tag at all, because a prewarm that declines to
+  // load anything leaves the family with whatever it already has.
   function pickPrewarm() {
-    for (let n = 0; n < TAGS.length + 1; n++) {
+    for (let n = 0; n < TAGS.length; n++) {
       const tag = TAGS[(tagTurn + n) % TAGS.length];
-      const pool = library.filter(p => p.tags.indexOf(tag) >= 0
-        && !cached(p.slug) && recent.indexOf(p.slug) < 0);
-      if (pool.length) {
+      const pool = library.filter(p => p.tags.indexOf(tag) >= 0 && !cached(p.slug));
+      const fresh = pool.filter(p => seen.indexOf(p.slug) < 0);
+      const pick = pickFrom(fresh.length ? fresh : pool);
+      if (pick) {
         tagTurn = (tagTurn + n + 1) % TAGS.length;
-        return pool[Math.floor(Math.random() * pool.length)];
+        return pick;
       }
     }
     const any = library.filter(p => !cached(p.slug));
-    return any.length ? any[Math.floor(Math.random() * any.length)] : null;
+    const fresh = any.filter(p => seen.indexOf(p.slug) < 0);
+    return pickFrom(fresh.length ? fresh : any);
   }
 
   // Least recently shown first, and never one a sketch is currently drawing.
-  // Freeing the canvas explicitly rather than dropping the reference: a
-  // 1024x1024 backing store is not a JS object and the heap has no reason to
-  // be in a hurry about it.
-  function trim() {
+  function trim(limit) {
     const age = (e) => Math.max(e.shownAt, e.at);
-    while (cache.length > CACHE_MAX) {
+    while (cache.length > limit) {
       let worst = -1;
       for (let i = 0; i < cache.length; i++) {
         if (cache[i].held || cache[i].busy) continue;
@@ -342,13 +387,12 @@
       }
       if (worst < 0) return;
       const gone = cache.splice(worst, 1)[0];
-      gone.frames.forEach(cv => { if (cv) { cv.width = 1; cv.height = 1; } });
+      freeFrames(gone);
       console.log('visuals: pattern evicted', gone.meta.slug);
     }
   }
 
-  // Room in the cache, or a resident nobody has looked at for ROTATE_MS: the
-  // load below pushes a fourth entry and trim() then drops the stalest one.
+  // Room in the cache, or a resident nobody has looked at for ROTATE_MS.
   //
   // One replacement per ROTATE_MS and no more. Without that clause a full
   // cache whose entries are all stale swaps one out every PREWARM_MS until
@@ -364,32 +408,55 @@
     return cache.some(e => !e.busy && !e.held && now - Math.max(e.shownAt, e.at) > ROTATE_MS);
   }
 
+  // A load that never calls back would otherwise retire the whole family for
+  // the session, because `loading` gates every later prewarm and nothing else
+  // clears it. XMLHttpRequest on file:// has no timeout that can be relied on
+  // and neither has image decoding, so the guard is a plain timer and a
+  // generation counter: the abandoned load's callbacks, if they ever arrive,
+  // see a stale generation and free what they built rather than joining the
+  // cache behind the one that replaced them.
+  const LOAD_TIMEOUT_MS = 60000;
+  let generation = 0;
+
   function prewarm() {
     if (loading || !hasRoom()) return;
     const meta = pickPrewarm();
     if (!meta) return;
     loading = true;
-    if (cache.length >= CACHE_MAX) lastSwapAt = performance.now();
+    // Evict before allocating, not after. Pushing a fourth entry and trimming
+    // afterwards is a second or two of four patterns in memory, 117 MB rather
+    // than 88, at exactly the moment the page is also decoding an SVG.
+    trim(CACHE_MAX - 1);
+    if (cache.length >= CACHE_MAX - 1) lastSwapAt = performance.now();
     const t0 = performance.now();
+    const mine = ++generation;
+    const watchdog = setTimeout(() => {
+      if (generation !== mine) return;
+      generation += 1;
+      loading = false;
+      console.log('visuals: pattern load timed out', meta.slug);
+    }, LOAD_TIMEOUT_MS);
     load(meta, (entry) => {
+      if (generation !== mine) {
+        if (entry) freeFrames(entry);
+        return;
+      }
+      clearTimeout(watchdog);
       loading = false;
       if (!entry) {
-        // Not retried: the reason is a property of the artwork, not of the
-        // moment, so trying again in twenty seconds would only cost the same
-        // work twice.
         rejected.push(meta.slug);
-        console.log('visuals: pattern rejected', meta.slug, lastCover.map(c => (100 * c).toFixed(1) + '%').join(' '));
+        console.log('visuals: pattern load failed', meta.slug);
         return;
       }
       cache.push(entry);
-      trim();
+      trim(CACHE_MAX);
       console.log('visuals: pattern ready', meta.slug,
         (performance.now() - t0).toFixed(0) + ' ms total,',
         entry.ms.toFixed(0) + ' ms on the main thread,',
         'worst frame ' + entry.worst.toFixed(0) + ' ms,',
-        'sweep ' + entry.lo + '-' + entry.hi + ',',
+        'peak ' + entry.peak + ',',
         'lit ' + entry.cover.slice(0, 6).map(c => (100 * c).toFixed(1)).join('/') + '%,',
-        (meta.bytes / 1e6).toFixed(1) + ' MB');
+        (meta.frame / 1e6).toFixed(2) + ' MB in its biggest frame');
     });
   }
   setInterval(prewarm, PREWARM_MS);
@@ -469,20 +536,32 @@
       return cache.some(e => !e.busy);
     },
 
-    // A ready pattern whose tags meet any of `tags`, else any ready pattern,
-    // else null. Never blocks, never rasterises.
+    // A ready pattern, preferring one the room has not just seen, then one
+    // whose tags meet any of `tags`. Never blocks, never rasterises, and
+    // returns null only when nothing has finished loading.
+    //
+    // The order of those two preferences is the fix for what the first
+    // version did. It sorted by tag first and by last-shown second, and with
+    // three patterns in the cache against eight tag groups the tag filter
+    // usually picked out exactly one entry, which then came up under sketch
+    // after sketch: four of the eight screenshots taken of this family were
+    // the same artwork. Freshness first means a run of pattern sketches walks
+    // the cache, and the tag is what chooses between equally fresh ones.
     take(tags, exclude) {
       const pool = cache.filter(e => !e.busy && e !== exclude);
       if (!pool.length) return null;
+      const unshown = pool.filter(e => recent.indexOf(e.meta.slug) < 0);
+      const from = unshown.length ? unshown : pool;
       const want = (tags || []).length
-        ? pool.filter(e => e.meta.tags.some(t => tags.indexOf(t) >= 0))
+        ? from.filter(e => e.meta.tags.some(t => tags.indexOf(t) >= 0))
         : [];
-      const from = want.length ? want : pool;
-      from.sort((x, y) => x.shownAt - y.shownAt);
-      const pick = from[0];
+      const final = want.length ? want : from;
+      final.sort((x, y) => x.shownAt - y.shownAt);
+      const pick = final[0];
       pick.shownAt = performance.now();
       recent.push(pick.meta.slug);
       while (recent.length > RECENT) recent.shift();
+      if (seen.indexOf(pick.meta.slug) < 0) seen.push(pick.meta.slug);
       return pick;
     },
 
@@ -493,27 +572,31 @@
     // fraction for the chain's blend(). Only re-uploads when the integer part
     // moves, which is every two to four seconds, not every frame.
     //
-    // `t` runs 0 to 5 whatever the pattern is; it is mapped onto the usable
-    // part of that pattern's sweep, so a sketch never has to know that arcs_1
-    // is empty at the top of its Spacing slider.
+    // DEAD_BAND is why the integer part is not simply floor(t). The sweep
+    // position is a sine, so it stops and reverses, and it can stop within a
+    // hundredth of an integer: every rendered frame the position crosses the
+    // boundary is then two texture uploads, 8 MB of them, and a position
+    // hovering there does that thirty times a second. Inside the band the
+    // pair already bound is kept and the fraction is clamped, which is the
+    // same picture, because at the boundary the mix is showing one frame
+    // whichever pair it is expressed in.
     bind(entry, t, slot) {
       if (!entry) return;
-      const span = entry.hi - entry.lo;
-      const tt = entry.lo + span * Math.max(0, Math.min(5, t)) / 5;
-      const i0 = Math.min(entry.hi - 1, Math.floor(tt));
+      const tt = Math.max(0, Math.min(5, t));
+      const st = slots[slot ? 1 : 0];
+      let i0 = Math.min(4, Math.floor(tt));
+      if (st.entry === entry && st.i1 === st.i0 + 1
+        && tt > st.i0 - DEAD_BAND && tt < st.i1 + DEAD_BAND) {
+        i0 = st.i0;
+      }
       bindFrames(entry, i0, i0 + 1, tt - i0, slot);
     },
 
-    // The two ends a sketch might want by name rather than by position:
-    // `base` is the frame the site's own default settings drew, index 6,
-    // falling back to the bottom of the sweep when those settings are outside
-    // the usable band; `top` is the top of the usable sweep.
-    base(entry) {
-      return entry ? entry.base : 6;
-    },
-    top(entry) {
-      return entry ? entry.hi : 5;
-    },
+    // The two ends a sketch might want by name rather than by position: the
+    // frame the site's own default settings drew, which is index 6 and is not
+    // part of the sweep at all, and the top of the sweep.
+    base() { return 6; },
+    top() { return 5; },
 
     // The primitive under bind(), for a sketch that wants two frames that are
     // not neighbours: pattern-melt crossfades the default against the top of
@@ -536,8 +619,9 @@
     stats() {
       return cache.map(e => ({
         slug: e.meta.slug, busy: e.busy, ms: Math.round(e.ms),
-        worst: Math.round(e.worst), sweep: e.lo + '-' + e.hi,
-        mb: +(e.meta.bytes / 1e6).toFixed(2), held: e.held
+        worst: Math.round(e.worst), peak: e.peak,
+        lit: e.cover.slice(0, 6).map(c => +(100 * c).toFixed(1)),
+        mb: +(e.meta.frame / 1e6).toFixed(2), held: e.held
       }));
     }
   };

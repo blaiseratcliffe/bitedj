@@ -21,14 +21,19 @@ from the files rather than assumed:
           those with black faces and white strokes; everything else gets white
           faces and white strokes. Recolouring by alpha instead turns every
           occluded form into a white blob, which is what the first pass did.
-  bytes   the total size of the seven frames, which is what the rasteriser's
-          cost actually tracks; the `shapes` count in index.json is for the
-          default frame only and the sweep can be five times heavier.
+  bytes   the total size of the seven frames, and
+  frame   the size of the largest one of them, which is the number patterns.js
+          actually gates on: a pattern rasterises one frame per animation
+          frame, so the total is spread over seven frames and the largest
+          single frame is the stall. The `shapes` count in index.json is for
+          the default frame only and the sweep can be five times heavier.
   frames  the seven file paths, sweep 0 to 5 then the default, with any
-          degenerate frame replaced by its nearest usable neighbour. Nine
+          degenerate frame replaced by its nearest usable neighbour. Eight
           patterns have a sweep frame 0 that is not artwork at all: with the
           slider at its minimum the site emits a 1591 byte paperclip icon,
-          which would land on the screen as a paperclip.
+          which would land on the screen as a paperclip. One of the eight is
+          iso-sphere, which patterns.js keeps out of the rotation on size, so
+          seven of them reach the screen with a flattened sweep end.
 """
 
 import json
@@ -88,8 +93,11 @@ def main():
             patched += 1
 
         total = 0
+        biggest = 0
         for rel in set(frames):
-            total += os.path.getsize(os.path.join(PATTERNS, rel.replace('/', os.sep)))
+            size = os.path.getsize(os.path.join(PATTERNS, rel.replace('/', os.sep)))
+            total += size
+            biggest = max(biggest, size)
 
         default_head = read_head(os.path.join(PATTERNS, entry['file'].replace('/', os.sep)))
         out.append({
@@ -98,6 +106,7 @@ def main():
             'tags': entry.get('tags', []),
             'shapes': entry.get('shapes', 0),
             'bytes': total,
+            'frame': biggest,
             'wire': '--occlusion-color' in default_head,
             'param': entry.get('sweep', {}).get('param', ''),
             'frames': frames,
@@ -114,8 +123,9 @@ def main():
         print('  dropped %s: %s' % (slug, why))
     wire = sum(1 for p in out if p['wire'])
     print('  %d wire (occluded faces), %d solid' % (wire, len(out) - wire))
-    heavy = sorted(out, key=lambda p: -p['bytes'])[:5]
-    print('  heaviest: %s' % ', '.join('%s %.1f MB' % (p['slug'], p['bytes'] / 1e6) for p in heavy))
+    heavy = sorted(out, key=lambda p: -p['frame'])[:6]
+    print('  biggest single frames: %s'
+          % ', '.join('%s %.2f MB' % (p['slug'], p['frame'] / 1e6) for p in heavy))
 
 
 if __name__ == '__main__':
