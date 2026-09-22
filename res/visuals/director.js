@@ -51,7 +51,7 @@
 
   // hush() (called on every sketch switch) resets update to a no-op via
   // sandbox.set, and because makeGlobal is true, EvalSandbox.tick() copies
-  // window.update onto synth.update on every rendered frame — so it is
+  // window.update onto synth.update on every rendered frame. So it is
   // window.update that must carry the frame counter, and it must be
   // reinstalled after each hush(), not just registered once.
   let frames = 0;
