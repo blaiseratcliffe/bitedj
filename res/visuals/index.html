@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BiteDJ visuals</title>
+<!-- hydra-synth vendored from unpkg, version 1.4.0. -->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  #stage { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block;
+           transition: opacity 250ms linear; }
+  #stage.dip { opacity: 0; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script src="vendor/hydra-synth.js"></script>
+<script src="palette.js"></script>
+<script src="feed.js"></script>
+<script src="sketches.js"></script>
+<script src="director.js"></script>
+</body>
+</html>
