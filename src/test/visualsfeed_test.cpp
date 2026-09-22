@@ -9,10 +9,13 @@
 
 #include <gtest/gtest.h>
 
+#include <QElapsedTimer>
+#include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
+#include <QTcpSocket>
 #include <QTest>
 #include <cmath>
 #include <memory>
@@ -20,6 +23,7 @@
 
 #include "control/controlobject.h"
 #include "engine/engine.h"
+#include "engine/sidechain/visualsserver.h"
 #include "test/mixxxtest.h"
 #include "util/types.h"
 
@@ -245,6 +249,76 @@ TEST_F(VisualsFeedTest, FrameTimeIsMonotonic) {
     QTest::qWait(20);
     const QJsonObject second = QJsonDocument::fromJson(m_pFeed->buildFrame()).object();
     EXPECT_GE(second.value("t").toDouble(), first.value("t").toDouble());
+}
+
+class VisualsServerTest : public VisualsFeedTest {
+  protected:
+    void SetUp() override {
+        VisualsFeedTest::SetUp();
+        m_pServer = std::make_unique<VisualsServer>(m_pFeed.get(), 0);
+        ASSERT_GT(m_pServer->serverPort(), 0);
+    }
+
+    // Connects, sends one request, and returns everything received within
+    // `waitMs`. The event loop is pumped by hand: the test has no running loop.
+    QByteArray request(const QByteArray& line, int waitMs = 200) {
+        QTcpSocket socket;
+        socket.connectToHost(QHostAddress::LocalHost, m_pServer->serverPort());
+        if (!socket.waitForConnected(1000)) {
+            return QByteArray("CONNECT FAILED");
+        }
+        socket.write(line);
+        socket.flush();
+        QByteArray received;
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < waitMs) {
+            application()->processEvents();
+            if (socket.waitForReadyRead(10)) {
+                received += socket.readAll();
+            }
+            if (m_pendingFrame.size() > 0 && m_pServer->clientCount() > 0) {
+                m_pServer->broadcastFrame(m_pendingFrame);
+                m_pendingFrame.clear();
+            }
+        }
+        return received;
+    }
+
+    std::unique_ptr<VisualsServer> m_pServer;
+    QByteArray m_pendingFrame;
+};
+
+TEST_F(VisualsServerTest, EventsStreamDeliversFrame) {
+    m_pendingFrame = "{\"t\":1}";
+    const QByteArray got = request("GET /events HTTP/1.1\r\nHost: x\r\n\r\n");
+    EXPECT_TRUE(got.startsWith("HTTP/1.1 200")) << got.constData();
+    EXPECT_TRUE(got.contains("Content-Type: text/event-stream")) << got.constData();
+    EXPECT_TRUE(got.contains("Access-Control-Allow-Origin: *")) << got.constData();
+    EXPECT_EQ(1, got.count("data: {\"t\":1}\n\n")) << got.constData();
+}
+
+TEST_F(VisualsServerTest, StatusReportsEnabledAndClients) {
+    const QByteArray got = request("GET /status HTTP/1.1\r\n\r\n");
+    EXPECT_TRUE(got.startsWith("HTTP/1.1 200")) << got.constData();
+    EXPECT_TRUE(got.contains("Content-Type: application/json")) << got.constData();
+    EXPECT_TRUE(got.contains("{\"enabled\":1,\"clients\":0}")) << got.constData();
+}
+
+TEST_F(VisualsServerTest, StatusReflectsDisabled) {
+    m_pEnabled->set(0.0);
+    const QByteArray got = request("GET /status HTTP/1.1\r\n\r\n");
+    EXPECT_TRUE(got.contains("{\"enabled\":0,\"clients\":0}")) << got.constData();
+}
+
+TEST_F(VisualsServerTest, UnknownPathIs404) {
+    const QByteArray got = request("GET /nope HTTP/1.1\r\n\r\n");
+    EXPECT_TRUE(got.startsWith("HTTP/1.1 404")) << got.constData();
+}
+
+TEST_F(VisualsServerTest, OversizedRequestIsRejected) {
+    const QByteArray got = request(QByteArray(600, 'A'));
+    EXPECT_TRUE(got.startsWith("HTTP/1.1 431")) << got.constData();
 }
 
 } // namespace

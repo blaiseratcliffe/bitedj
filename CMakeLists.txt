@@ -600,6 +600,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/engine/sidechain/networkinputstreamworker.cpp
   src/engine/sidechain/networkoutputstreamworker.cpp
   src/engine/sidechain/visualsfeed.cpp
+  src/engine/sidechain/visualsserver.cpp
   src/engine/sync/enginesync.cpp
   src/engine/sync/internalclock.cpp
   src/engine/sync/syncreference.cpp
