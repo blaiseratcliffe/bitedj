@@ -16,10 +16,10 @@
 //   feed.swell   bass averaged over four bars, about five and a half seconds
 //                at 174. The "where are we in the track" number: this is what
 //                a drop reads through, and it cannot be moved by one kick.
-//   feed.pulse   1 on a beat edge, decaying to 0 with a time constant of a
-//                third of a beat. The only instant signal in the file, and
-//                the accents it drives should be worth a few percent, not a
-//                slam.
+//   feed.pulse   rises to about 0.85 over 25 ms on a beat edge and decays
+//                with a time constant of a third of a beat. The fastest
+//                signal in the file, and the accents it drives should be
+//                worth a few percent, not a slam.
 //   feed.phase   0..1 through the current beat, free running on the render
 //                clock and corrected forward from the master deck's
 //                beat_distance. Continuous rotation locked to tempo.
@@ -57,7 +57,8 @@
   const ENERGY_ATTACK_MS = 120;
   const ENERGY_RELEASE_MS = 700;
   const EASE_MS = 60;        // render-clock approach to a 30 Hz target
-  const PULSE_BEATS = 1 / 3; // pulse time constant, in beats
+  const PULSE_BEATS = 1 / 3;   // pulse decay time constant, in beats
+  const PULSE_ATTACK_MS = 25;  // and how long it takes to get there
   const TARGET_BPM = 174;    // what the box is built for, and the bpm fallback
   const BARS_OF_SWELL = 4;
   const MAX_DT_MS = 100;     // a stall must not integrate as if it were real
@@ -71,7 +72,7 @@
     _prevBeat: [], _masterDeck: -1,
     // Targets set by ingest() at 30 Hz, chased by the render clock.
     _want: { bass: 0, lowmid: 0, mid: 0, high: 0, peak: 0, energy: 0, swell: 0 },
-    _env: 0, _bar: 0, _swell: 0, _springs: Object.create(null),
+    _env: 0, _bar: 0, _swell: 0, _pulseWant: 0, _springs: Object.create(null),
     _renderAt: 0,
     onBeat(fn) { this._beatFns.push(fn); },
     onBeatAlways(fn) { this._beatAlwaysFns.push(fn); },
@@ -211,7 +212,7 @@
       feed.beat = true;
       feed._beatFrames = 0;
       feed.beats += 1;
-      feed.pulse = 1;
+      feed._pulseWant = 1;
       // Each listener is guarded on its own. The director's rotation logic
       // is the last entry in _beatAlwaysFns, so an exception thrown by a
       // sketch listener earlier in the pass would otherwise stop the show
@@ -244,20 +245,31 @@
     feed.energy += (feed._want.energy - feed.energy) * k;
     feed.swell += (feed._want.swell - feed.swell) * k;
 
+    // The pulse is an envelope, not a step. The beat edge sets the target to
+    // 1 and the target decays from there with the beat-third time constant;
+    // what a sketch reads chases that target with a 25 ms attack, so the rise
+    // takes two or three rendered frames instead of landing inside one. That
+    // matters wherever a pulse feeds something with a hard edge of its own:
+    // the edge detector gains in sketches.js sit in front of a fixed
+    // threshold, and a value that goes 0 to 1 between two frames adds and
+    // drops whole edges at once. The cost is that the peak lands nearer 0.85
+    // than 1, which is fine for accents worth a few percent.
     const beatMs = feed.beatMs();
-    feed.pulse *= Math.exp(-dt / (PULSE_BEATS * beatMs));
-    if (feed.pulse < 1e-4) feed.pulse = 0;
+    feed._pulseWant *= Math.exp(-dt / (PULSE_BEATS * beatMs));
+    feed.pulse += (feed._pulseWant - feed.pulse) * approach(dt, PULSE_ATTACK_MS);
+    if (feed.pulse < 1e-4 && feed._pulseWant < 1e-4) { feed.pulse = 0; feed._pulseWant = 0; }
 
     feed.phase += dt / beatMs;
     if (feed.phase >= 1) feed.phase -= Math.floor(feed.phase);
 
     // Exact solution of a critically damped spring over dt, so the step is
     // stable at any frame rate and the spring cannot ring or explode when the
-    // compositor hands us a 100 ms frame.
+    // compositor hands us a 100 ms frame. for-in rather than Object.keys,
+    // which would allocate an array on every rendered frame for the sake of
+    // the two or three springs a sketch actually has.
     const secs = dt / 1000;
-    const names = Object.keys(feed._springs);
-    for (let i = 0; i < names.length; i++) {
-      const s = feed._springs[names[i]];
+    for (const name in feed._springs) {
+      const s = feed._springs[name];
       const w = 2 * Math.PI * s.hz;
       const e = Math.exp(-w * secs);
       const dx = s.x - s.want;

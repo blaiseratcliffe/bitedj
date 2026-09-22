@@ -8,11 +8,11 @@
 //   - every chain here ends in .out(o0). o1 is free scratch for a sketch that
 //     wants a cheap intermediate pass, and several below use it to build a
 //     field once instead of four times; the director blanks it on every
-//     switch. o2, o3 and the source s3 belong to the director's crossfade and
-//     nothing here may write to any of them; s3 in particular holds the
-//     frozen outgoing frame and is re-initialised on every switch. s4 to s7
-//     belong to patterns.js and are reached through patterns.bind(), never by
-//     hand.
+//     switch. o2 and the source s3 belong to the director's crossfade and
+//     nothing here may write to either; s3 holds the frozen outgoing frame
+//     and its texture is rewritten on every switch. o3 is written by nothing
+//     today and stays the director's as well. s4 to s7 belong to patterns.js
+//     and are reached through patterns.bind(), never by hand.
 //   - a sketch that needs a pattern carries `pattern: true`, which keeps it
 //     out of the rotation until something has finished rasterising, exactly as
 //     `cam: true` keeps a sketch out until there is a camera.
@@ -23,9 +23,13 @@
 //     the old per-sketch integrators did, so nothing here uses feed.onBeat;
 //     the eight pattern sketches are the only users of window.sketchUpdate,
 //     and all they do with it is push the sweep position at patterns.bind().
-//   - window.update and feed.onBeatAlways belong to the director. Nothing
-//     here touches either, and nothing here calls hush(), which would clear
-//     the sources as well as the outputs.
+//   - window.update, window.afterUpdate and feed.onBeatAlways belong to the
+//     director. Nothing here touches any of them, and nothing here calls
+//     hush(), which would clear the sources as well as the outputs.
+//     afterUpdate is the one that looks free and is not: the director takes
+//     the crossfade's frozen frame there, because it is the only moment in a
+//     frame at which the canvas can be read, and a sketch that assigned it
+//     would break every switch from then on without any error anywhere.
 //
 // Two families. mono is white line work on pure black: no .color() beyond
 // white or a grey scale factor, no fills. colour uses palette.js tokens only.
@@ -125,12 +129,33 @@
   // It runs on its own requestAnimationFrame rather than on the director's
   // frame drive so that a sketch does not have to own an integrator to have a
   // clock, and so that every sketch shares one.
+  //
+  // It wraps at FLOW_PERIOD, and the value of that constant is the whole
+  // reason this comment is long. A clock that only ever grows reaches a few
+  // thousand after an hour or two of a set, and every consumer here hands it
+  // to a shader as a float32 uniform: at 6000 the spacing between
+  // representable floats is about a thousandth, at a hundred thousand it is
+  // a fiftieth of a radian and a slow rotation visibly steps. Wrapping is
+  // free as long as the wrap is invisible, which means the period has to be a
+  // whole number of cycles for every consumer. TAU * 1000 is, because the
+  // consumers are all of the form sin(flow() * rate) or rotate(flow() * rate)
+  // and every rate in the file is a multiple of a thousandth: the wrap moves
+  // each of them by an exact multiple of a full turn.
+  //
+  // So: any new rate multiplied into flow() must be a multiple of 0.001. A
+  // rate of 0.0333 would put a jump into that sketch once every two hours,
+  // which is the kind of fault nobody finds. A rate that feeds a scroll
+  // rather than an angle has a different rule, since a scroll counts turns
+  // and not radians: it has to be a whole number of turns per period, which
+  // is what the one such rate in the file, in scan-field, is written as.
+  const FLOW_PERIOD = TAU * 1000;
   let flowT = 0, flowAt = performance.now();
   function flowTick() {
     const now = performance.now();
     const dt = Math.min(100, now - flowAt);
     flowAt = now;
     flowT += (dt / 1000) * (0.35 + 1.15 * (window.feed ? feed.energy : 0));
+    if (flowT >= FLOW_PERIOD) flowT -= FLOW_PERIOD;
     requestAnimationFrame(flowTick);
   }
   requestAnimationFrame(flowTick);
@@ -173,14 +198,18 @@
   // the zoom per frame, which wants to stay within a few thousandths of 1.
   //
   // The work is composited onto black before it is mixed in, and that line is
-  // not optional. blend() mixes rgb and ignores alpha, while the wordmark
-  // texture carries its glow entirely in alpha: every pixel within 24 px of a
-  // stroke is rgb 255 at an alpha around 48, because that is what a canvas
-  // shadow is. Mixed on its rgb alone the wordmark arrives as a solid white
-  // slab with no letterforms in it at all, which is exactly how the first
-  // version of this rework looked. layer() over solid(0,0,0,1) multiplies rgb
-  // by alpha, which is the premultiply, and it is a no-op for the line work
-  // and edge chains whose alpha is already 1 where they are lit.
+  // not optional. blend() is a straight mix of all four channels,
+  // c0 * (1 - amount) + c1 * amount, alpha included: it is not a composite,
+  // so it never weights a colour by its own alpha. The wordmark texture
+  // carries its glow entirely in alpha, every pixel within 24 px of a stroke
+  // being rgb 255 at an alpha around 48, because that is what a canvas shadow
+  // is. Mixed channel by channel that whole halo is white and the wordmark
+  // arrives as a solid slab with no letterforms in it at all, which is
+  // exactly how the first version of this rework looked; the alpha the mix
+  // carried along made no difference, because nothing downstream reads it.
+  // layer() over solid(0,0,0,1) is mix(black, work.rgb, work.a), which is the
+  // premultiply, and it is a no-op for the line work and edge chains whose
+  // alpha is already 1 wherever they are lit.
   function smear(work, keep, grow) {
     return src(o0).scale(grow).blend(solid(0, 0, 0, 1).layer(work), 1 - keep);
   }
@@ -352,10 +381,12 @@
           .out(o0);
     } },
 
-    // 3. The wordmark sheared. This was a slicer: a beat threw a random
-    // offset into a posterised band modulator and it decayed over 300 ms, so
-    // the type tore itself apart four times a second at a different place
-    // every time. It is now one continuous shear, the modulator a smooth
+    // 3. The wordmark sheared. This was logo-sliced, a slicer: a beat threw a
+    // random offset into a posterised band modulator and it decayed over
+    // 300 ms, so the type tore itself apart four times a second at a
+    // different place every time. It is now one continuous shear, and it is
+    // named for that rather than for what it used to do. The modulator is a
+    // smooth
     // vertical wave rather than a stepped ramp, leaning one way and then the
     // other on the shared clock. The lean opens up with energy, so a loud
     // passage pulls the letters further out of true, and the beat is worth
@@ -366,7 +397,7 @@
     // than modulateScrollX because the scroll variants fract the coordinate
     // and the wordmark would wrap instead of sliding. brightness(-0.5)
     // centres the red channel on zero so the shear goes both ways.
-    { name: 'logo-sliced', cam: false, mono: true, run() {
+    { name: 'logo-shear', cam: false, mono: true, run() {
         const wave = () => osc(4.2, 0.07, 0).rotate(Math.PI / 2)
           .brightness(-0.5).mult(solid(1, 0, 0, 1));
         const lean = () => 0.07 + 0.06 * Math.sin(flow() * 0.9)
@@ -612,7 +643,7 @@
     // which is invisible as brightness and quite enough to shove a dense line
     // field a pixel sideways four times a second. The swell carries the shape
     // of a build and none of that ripple, which is the same argument the
-    // scanline spacing in glitch-scan puts through a spring.
+    // scanline spacing in scan-field puts through a spring.
     { name: 'pattern-noise', cam: false, mono: true, pattern: true, run() {
         const p = patterns.take(['NOISE', 'ORGANIC']);
         if (!p) { patternFallback(); return; }
@@ -763,16 +794,17 @@
           .out(o0);
     } },
 
-    // 13. The drop, as a bloom rather than a strobe. The old version watched
-    // for the bass crossing a threshold and threw a pink and white flash at
-    // the screen for 170 ms, rate limited to one every 500 ms: a strobe, on
-    // an appliance that sits in front of a DJ for hours.
+    // 13. The drop, as a bloom rather than a strobe, and named bloom-drop for
+    // it. As strobe-drop it watched for the bass crossing a threshold and
+    // threw a pink and white flash at the screen for 170 ms, rate limited to
+    // one every 500 ms: a strobe, on an appliance that sits in front of a DJ
+    // for hours.
     //
     // What opens the pink now is the swell, so it comes up over a bar or two
     // as the track builds and falls away again over four, and the beat adds a
     // few percent through a spring on top of that. There is no white in the
     // chain at all, and no discontinuity anywhere in it.
-    { name: 'strobe-drop', cam: false, mono: false, run() {
+    { name: 'bloom-drop', cam: false, mono: false, run() {
         const [pr, pg, pb] = palette.rgb('plum');
         const [dr, dg, db] = palette.rgb('deep');
         const [kr, kg, kb] = palette.rgb('pink');
@@ -805,10 +837,11 @@
           .out(o0);
     } },
 
-    // 15. A scanline field over a palette wash. The old sketch threw a random
-    // block count in on every beat and pixelated the frame with it, easing
-    // back out over 420 ms: the single twitchiest thing in the library, and
-    // the one the DJ picked out. There is no pixelate here at all now.
+    // 15. A scanline field over a palette wash, and a scanline field is what
+    // the name says now. As glitch-scan it threw a random block count in on
+    // every beat and pixelated the frame with it, easing back out over
+    // 420 ms: the single twitchiest thing in the library, and the one the DJ
+    // picked out. There is no pixelate here at all now.
     //
     // The scanlines are a soft sine rather than a posterised square, so
     // nothing in the picture is quantised, and their spacing follows the
@@ -832,7 +865,7 @@
     // at startup, and for the twenty seconds between a stop and the idle
     // fallback. Taken literally that is a quarter turn of hue, straight out of
     // the palette, so a missing tempo falls back to the target instead.
-    { name: 'glitch-scan', cam: false, mono: false, run() {
+    { name: 'scan-field', cam: false, mono: false, run() {
         const [mr, mg, mb] = palette.rgb('magenta');
         const [vr, vg, vb] = palette.rgb('violet');
         // The spacing goes through a slow spring rather than reading the
@@ -844,8 +877,18 @@
         // spring passes the shape of a build and none of the ripple.
         const lines = () => (45 + 30 * feed.spring('scan-lines', () => feed.swell, 0.3)) * TAU;
         const lit = accent(0.57, 0.02);
+        // The only consumer of flow() in the file that counts turns rather
+        // than radians, so the rule that every rate is a multiple of 0.001
+        // does not make its wrap invisible: a rate has to put a whole number
+        // of turns into one period instead. Sixteen of them is 0.00255 a
+        // second, the crawl this wants, and the modulo keeps the number small
+        // for the float32 uniform. A scroll is sampled through fract(), so a
+        // jump of exactly one turn cannot be seen and a jump of 0.7 of one,
+        // which is what a round 0.0025 would give at the wrap, would be the
+        // whole comb moving at once.
+        const drift = 16 / FLOW_PERIOD;
         const scan = () => osc(lines, 0, 0).rotate(Math.PI / 2)
-          .scrollY(() => flow() * 0.0025)
+          .scrollY(() => (flow() * drift) % 1)
           .brightness(0.45).contrast(1.4)
           .mult(solid(lit, lit, lit, 1));
         osc(18, 0.02, 0).color(mr, mg, mb)
