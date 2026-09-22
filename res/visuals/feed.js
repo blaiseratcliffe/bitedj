@@ -82,8 +82,15 @@
       feed.beat = true;
       feed._beatFrames = 0;
       feed.beats += 1;
-      feed._beatFns.forEach(fn => fn());
-      feed._beatAlwaysFns.forEach(fn => fn());
+      // Each listener is guarded on its own. The director's rotation logic
+      // is the last entry in _beatAlwaysFns, so an exception thrown by a
+      // sketch listener earlier in the pass would otherwise stop the show
+      // from ever switching again.
+      const fire = (fn) => {
+        try { fn(); } catch (e) { console.error('visuals: beat listener failed', e); }
+      };
+      feed._beatFns.forEach(fire);
+      feed._beatAlwaysFns.forEach(fire);
     }
   }
 
