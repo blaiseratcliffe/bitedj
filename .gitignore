@@ -66,3 +66,8 @@ src/mixxx.rc.include
 src/mixxx.res
 src/test/**/*.actual
 res/qrc_mixxx.cc
+
+# Bite DJ: Book of Shapes pattern SVGs used as visuals textures. Their licence
+# allows on-screen use but not redistribution as patterns, so they are deployed
+# from the working tree (deploy-skin.sh rsyncs res/) and never committed.
+res/visuals/assets/patterns/
