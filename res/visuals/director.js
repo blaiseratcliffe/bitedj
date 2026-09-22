@@ -1,6 +1,16 @@
 // Runs the show: sources, sketch rotation, the fps cap, the idle fallback and
 // the numbers the load test reads from ~/bitedj-visuals.log.
 //
+// Idle is a state, not a rotation. Twenty seconds without a beat means
+// nothing is playing or the feed is down, and the idle sketch then stays up
+// until the next beat arrives. Nobody is watching an idle screen, and
+// swapping sketches on a timer only spent GPU on an empty room.
+//
+// The webcam is opened on demand rather than at load: s0.initCam(0) runs when
+// a cam sketch is about to start and s0.clear() when the rotation leaves one,
+// so the camera LED is dark through the thirteen sketches that never look at
+// it. hush() is still never called anywhere, for the reason by clearOutputs().
+//
 // Sketches drive their own per-frame work through window.sketchUpdate(dt),
 // which this file calls every rendered frame; a sketch must never assign
 // window.update itself, that property belongs to this file (see the notes
@@ -11,7 +21,6 @@
   const BEATS_PER_SWITCH = 256;     // 64 bars at 4/4
   const MIN_SKETCH_MS = 60000;
   const IDLE_AFTER_MS = 20000;      // no beat for this long: idle sketch
-  const IDLE_ROTATE_MS = 180000;
   const DIP_MS = 125;               // half of the ~250ms total not-visible budget
   const LOG_EVERY_MS = 10000;
 
@@ -32,15 +41,9 @@
   // on the very next frame, so there is no synth.fps line here at all.
   window.fps = FPS;
 
-  // Sources. s0 webcam, s1 the wordmark, s2 the boot logo.
+  // Sources. s0 the webcam, opened by show() when a cam sketch needs it;
+  // s1 the wordmark, s2 the boot logo.
   window.camReady = false;
-  s0.initCam(0);
-  // hydra resolves the camera asynchronously and swallows the rejection, so
-  // probe it ourselves to know whether camera sketches are usable.
-  navigator.mediaDevices.enumerateDevices().then(devs => {
-    window.camReady = devs.some(d => d.kind === 'videoinput');
-    console.log('visuals: camera', window.camReady ? 'present' : 'absent');
-  }).catch(() => { window.camReady = false; });
 
   const mark = document.createElement('canvas');
   mark.width = 1024; mark.height = 256;
@@ -59,11 +62,36 @@
   s2.initImage('assets/boot-logo.png');
 
   // Rotation.
-  let current = null, currentSince = 0, lastBeatAt = performance.now(), idle = false, lastIdleSwitch = 0;
+  let current = null, currentSince = 0, lastBeatAt = performance.now(), idle = false;
   let history = [];
   // setTimeout id of a dip in flight, so a second show() call before the
   // first one lands restarts the wait instead of racing it.
   let pendingSwitch = null;
+  // Whether s0 currently holds an open camera stream. Only show() moves this.
+  let camInit = false;
+
+  // hydra resolves the camera asynchronously and swallows the rejection, so
+  // probe the device list ourselves to know whether camera sketches are
+  // usable at all. Re-run on devicechange: a USB webcam can be plugged in
+  // hours into a set, and can equally be pulled out mid-sketch.
+  function probeCamera() {
+    return navigator.mediaDevices.enumerateDevices().then(devs => {
+      window.camReady = devs.some(d => d.kind === 'videoinput');
+      console.log('visuals: camera', window.camReady ? 'present' : 'absent');
+      if (!window.camReady && current && current.cam) {
+        // The camera went away underneath a sketch that is drawing it. Waiting
+        // for the next beat switch could mean a minute of a frozen last frame,
+        // so move on now; pickNext() already excludes cam sketches while
+        // camReady is false, and show() releases s0 on the way out.
+        console.log('visuals: camera lost during', current.name);
+        show(pickNext());
+      }
+    }).catch(() => { window.camReady = false; });
+  }
+  probeCamera();
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', probeCamera);
+  }
 
   // window.update, not hydra.synth.update: same makeGlobal mirroring as
   // fps above (EvalSandbox.tick() copies window.update onto synth.update
@@ -118,6 +146,25 @@
   function show(sketch) {
     if (!sketch) { console.log('visuals: no sketch to show'); return; }
     if (pendingSwitch) { clearTimeout(pendingSwitch); pendingSwitch = null; }
+    // Camera lifecycle, decided here because this is the only place that
+    // knows both which sketch is leaving and which is arriving. Done before
+    // the dip timer so the stream has the dip to come up in.
+    if (sketch.cam && !camInit) {
+      try {
+        s0.initCam(0);
+        camInit = true;
+        console.log('visuals: camera opened for', sketch.name);
+      } catch (e) {
+        console.error('visuals: initCam failed', e);
+      }
+    } else if (!sketch.cam && camInit && current && current.cam) {
+      // s0.clear() stops the stream's tracks and leaves a 1x1 blank behind.
+      // It is safe here, and only here, because no cam sketch is about to
+      // draw s0; hush() would do this to s1 and s2 as well.
+      try { s0.clear(); } catch (e) { console.error('visuals: camera release failed', e); }
+      camInit = false;
+      console.log('visuals: camera released');
+    }
     canvas.classList.add('dip');
     pendingSwitch = setTimeout(() => {
       pendingSwitch = null;
@@ -147,12 +194,11 @@
     }
   });
 
+  // Falling into idle, and nothing else: the idle sketch stays up until a
+  // beat arrives and the onBeatAlways handler above switches away from it.
   setInterval(() => {
-    const now = performance.now();
-    if (!idle && now - lastBeatAt > IDLE_AFTER_MS) {
-      idle = true; lastIdleSwitch = now; show(window.idleSketch);
-    } else if (idle && now - lastIdleSwitch > IDLE_ROTATE_MS) {
-      lastIdleSwitch = now; show(window.idleSketch);
+    if (!idle && performance.now() - lastBeatAt > IDLE_AFTER_MS) {
+      idle = true; show(window.idleSketch);
     }
   }, 1000);
 
@@ -171,5 +217,5 @@
   }, LOG_EVERY_MS);
 
   show(window.idleSketch);
-  idle = true; lastIdleSwitch = performance.now();
+  idle = true;
 })();
