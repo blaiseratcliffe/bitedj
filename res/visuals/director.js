@@ -37,15 +37,29 @@
 // screen, so a switch during a melt freezes the mix with no special case.
 //
 // The webcam is opened on demand rather than at load: s0.initCam(0) runs when
-// a cam sketch is about to start and s0.clear() when the rotation leaves one,
-// so the camera LED is dark through the thirteen sketches that never look at
-// it. hush() is still never called anywhere, for the reason by clearScratch().
+// a sketch that reads it is about to start and s0.clear() when the rotation
+// reaches one that does not. Two kinds of sketch read it. `cam: true` is a
+// camera sketch, which is the picture and drops out of the rotation when
+// there is no camera; `camMix` names a treatment (bend, cut or edges) that
+// mixes the camera into a sketch that stands on its own, and such a sketch
+// stays in the rotation without a camera and simply runs plain. Every
+// non-camera sketch carries a camMix today, so with a camera present it is
+// open for the whole show; the release path is kept for a library that has a
+// sketch with neither. hush() is still never called anywhere, for the reason
+// by clearScratch().
 //
 // Sketches drive their own per-frame work through window.sketchUpdate(dt),
 // which this file calls every rendered frame; a sketch must never assign
 // window.update or window.afterUpdate itself, both of those belong to this
 // file (see the notes by the assignments below for why).
 (function () {
+  // 960x540, shown at 1920x1080 on the TV. 1920x1080 was tried on bitepi on
+  // 2026-09-22 with one deck playing: the page fell from 24 fps to 8 to 15,
+  // and the panel's waveform dropped to 34 to 38 fps with a dropped-frame
+  // warning every ten seconds. The VideoCore cannot carry both at that size.
+  // 1280x720 the same evening: the page ran 14 to 23 fps, mostly 17 to 21,
+  // and the waveform held 60 fps but dropped 5 to 9 frames every ten
+  // seconds where 960x540 drops none. Usable, at a cost to the instrument.
   const RENDER_W = 960, RENDER_H = 540;
   const FPS = 30;
   // 16 bars at 4/4: 22 s at 174 BPM, 44 s at 88. It was 64 bars, 88 s at
@@ -162,11 +176,12 @@
       window.camReady = cams.length > 0;
       console.log('visuals: camera', window.camReady ? 'present' : 'absent',
         '(' + devs.length + ' media devices, ' + cams.length + ' video inputs)');
-      if (!window.camReady && current && current.cam) {
+      if (!window.camReady && current && (current.cam || current.camMix)) {
         // The camera went away underneath a sketch that is drawing it. Waiting
         // for the next beat switch could mean a minute of a frozen last frame,
         // so move on now; pickNext() already excludes cam sketches while
-        // camReady is false, and show() releases s0 on the way out.
+        // camReady is false, a camMix sketch picked next runs plain, and
+        // show() releases s0 on the way out.
         console.log('visuals: camera lost during', current.name);
         show(pickNext());
       }
@@ -285,7 +300,10 @@
     // does, would still see the previous non-cam `current`, skip the release,
     // and leave camInit stuck true with the stream open. No later cam sketch
     // could re-init after that.
-    if (sketch.cam && !camInit) {
+    // A camMix sketch only asks for the camera when there is one to open;
+    // a cam sketch cannot be here without one, since eligible() drops it.
+    const wantsCam = sketch.cam || (sketch.camMix && window.camReady);
+    if (wantsCam && !camInit) {
       try {
         s0.initCam(0);
         camInit = true;
@@ -293,7 +311,7 @@
       } catch (e) {
         console.error('visuals: initCam failed', e);
       }
-    } else if (!sketch.cam && camInit) {
+    } else if (!wantsCam && camInit) {
       // s0.clear() stops the stream's tracks and leaves a 1x1 blank behind.
       // It is safe here, and only here, because no cam sketch is about to
       // draw s0; hush() would do this to s1 and s2 as well.
