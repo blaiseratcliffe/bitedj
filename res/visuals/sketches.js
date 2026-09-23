@@ -292,11 +292,32 @@
   // it is modulateRotate by a soft disc: the centre turns by the full amount
   // and the frame's edge not at all, which is a vortex rather than a
   // rotation, and it can go on a sketch whose corners a rotation would
-  // smear. The amount rides the swell, so it winds up through a build and
-  // lets go on the drop, and the bounce adds a few degrees on the kick and
-  // springs back. Inside a feedback loop (flow-lines, tunnel) the amount is
-  // a trickle, because it is applied to the previous frame every frame and
-  // compounds into a spiral on its own.
+  // smear.
+  //
+  // The first version held the angle at a fixed bend, swirlAmount() * amount
+  // * (0.4 + 0.6 * swell + 0.3 * bounce), and only swell moved it: swell is a
+  // four-bar average that travels a few degrees over many seconds, and the
+  // bounce adds up to 30 percent for about 0.3 s a beat. Measured off that
+  // formula, Medium with swell 0.9 held a fixed 6 degrees on the wordmarks
+  // (amount 0.12), 14 to 16 on the pattern sketches (0.25 to 0.3) and 22 to
+  // 27 on kaleid and plasma (0.4 to 0.5). A fixed bend on artwork that
+  // already flows reads as the artwork's own shape, so Swirl Off and Medium
+  // looked the same on the TV; Blaise's verdict on 2026-09-23 was that it
+  // does not seem to do anything.
+  //
+  // swirl() now swings instead of holding a bend: the angle winds one way
+  // and back over SWING_BEATS beats, locked to the beat clock, with swell
+  // still setting how far it swings and the bounce still adding a little on
+  // the kick. At Medium with swell 0.9 the swing runs to about plus and
+  // minus 12 degrees on the wordmarks, 27 to 32 on the pattern sketches and
+  // 43 to 54 on kaleid and plasma, the same three groupings as the numbers
+  // above.
+  //
+  // Inside a feedback loop (flow-lines, tunnel) the angle is applied to the
+  // previous frame every frame, so a swinging angle there would wind the
+  // spiral up and unwind it again rather than turning it steadily; those two
+  // keep the original fixed-bend formula, unchanged, through
+  // swirlTrickle(chain, amount).
   //
   // Which sketches take it and which do not is a judgement about line
   // density, the same one the header makes about energy: a vortex on a
@@ -311,10 +332,27 @@
     const v = SWIRL_LEVELS[feed.settings.swirl];
     return v === undefined ? 1 : v;
   };
+  // SWING_BEATS = 8, two bars: beats() is the tempo-integrated clock defined
+  // below, wrapping at TURN_BEATS = 256, and 256 / 8 = 32 whole swing cycles,
+  // so the wrap lands the sine back where it would have been anyway and is
+  // never seen. SWING = 2 is what puts the numbers in the header above on the
+  // screen: at Medium with swell 0.9, amount 0.12 (wordmarks) swings to about
+  // 13 degrees, amount 0.25 to 0.3 (pattern sketches) to about 27 to 32, and
+  // amount 0.4 to 0.5 (kaleid, plasma) to about 43 to 54.
+  const SWING_BEATS = 8;
+  const SWING = 2;
   const vortex = () => shape(64, 0, 1);
-  function swirl(chain, amount) {
+  // The trickle: the original fixed-bend formula, unchanged, for the two
+  // feedback loops (flow-lines, tunnel) whose behaviour must not change.
+  function swirlTrickle(chain, amount) {
     return chain.modulateRotate(vortex(),
       () => swirlAmount() * amount * (0.4 + 0.6 * feed.swell + 0.3 * feed.bounce));
+  }
+  function swirl(chain, amount) {
+    return chain.modulateRotate(vortex(),
+      () => swirlAmount() * amount * SWING * (0.4 + 0.6 * feed.swell)
+        * Math.sin(2 * Math.PI * beats() / SWING_BEATS)
+        + swirlAmount() * amount * 0.3 * feed.bounce);
   }
 
   // ---- the webcam in every sketch -----------------------------------------
@@ -644,7 +682,7 @@
         // the flow field then carries off in trails.
         // The swirl sits on the feedback read, a trickle per frame, so the
         // trails spiral instead of streaming straight.
-        camOverBlend(swirl(src(o0)
+        camOverBlend(swirlTrickle(src(o0)
           .modulate(noise(3.2, 0.03), () => (0.004 + 0.008 * feed.energy) * kick(KICK_WARP)()), 0.012)
           .mult(solid(0.965, 0.965, 0.965, 1))
           .layer(keyed(noise(22, 0.06).thresh(0.8, 0.02))
@@ -983,7 +1021,7 @@
         // frame flickers at the frame rate.
         // The swirl is a trickle here too: it is inside the feedback and
         // compounds into the tunnel's own spiral.
-        camCut(swirl(osc(() => 14 * kick(KICK_SCALE)(), 0.015, 0).color(r, g, b)
+        camCut(swirlTrickle(osc(() => 14 * kick(KICK_SCALE)(), 0.015, 0).color(r, g, b)
           .blend(osc(() => 22 * kick(KICK_SCALE)(), -0.011, 0).color(r2, g2, b2), 0.5)
           .modulate(src(o0), () => 0.15 + 0.04 * feed.swell)
           .scale(() => 1.002 + 0.006 * feed.energy + 0.003 * feed.pulse)
