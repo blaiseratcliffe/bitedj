@@ -44,9 +44,12 @@
 // mixes the camera into a sketch that stands on its own, and such a sketch
 // stays in the rotation without a camera and simply runs plain. Every
 // non-camera sketch carries a camMix today, so with a camera present it is
-// open for the whole show; the release path is kept for a library that has a
-// sketch with neither. hush() is still never called anywhere, for the reason
-// by clearScratch().
+// open for the whole show, unless the Camera row's Mix switch is off, in
+// which case show() never asks for it for those sketches and the release
+// path below is what closes the camera when the rotation reaches one; the
+// same release path is also what a library with a sketch that carries
+// neither flag would use. hush() is still never called anywhere, for the
+// reason by clearScratch().
 //
 // Sketches drive their own per-frame work through window.sketchUpdate(dt),
 // which this file calls every rendered frame; a sketch must never assign
@@ -62,12 +65,12 @@
   // seconds where 960x540 drops none. Usable, at a cost to the instrument.
   const RENDER_W = 960, RENDER_H = 540;
   const FPS = 30;
-  // 16 bars at 4/4: 22 s at 174 BPM, 44 s at 88. It was 64 bars, 88 s at
-  // 174, and Blaise's verdict from the TV was that it needed to be much
-  // quicker. The floor below is what stops a fast tempo strobing through
-  // the library; at 174 it never binds, since 64 beats is 22 s there.
-  const BEATS_PER_SWITCH = 64;
-  const MIN_SKETCH_MS = 15000;
+  // From the Switch every row: 8, 16, 32 or 64 bars, read on every beat so a
+  // change takes effect at the next multiple. The floor below is what stops
+  // a fast tempo strobing through the library; 8 bars at 174 is 11 s, so
+  // the floor sits under that.
+  const beatsPerSwitch = () => 4 * (feed.settings.bars || 16);
+  const MIN_SKETCH_MS = 8000;
   // How many sketches the picker keeps out of the next draw. With a switch
   // every 22 s and a colour family of seven, remembering only the last one
   // brought plasma-kaleid back seven times in an evening of twenty-two
@@ -195,6 +198,36 @@
     navigator.mediaDevices.addEventListener('devicechange', probeCamera);
   }
 
+  // The three switches that change what a sketch is built from, and the
+  // Next counter, watched on every rendered frame. A change that affects
+  // the sketch on screen melts to another one now; one that does not waits
+  // for the rotation. Next always melts now. show() queues behind a running
+  // melt, so three taps in a row are three switches and no stutter.
+  //
+  // watched.next stays null, and next is never treated as tapped, until
+  // feed.alive: a frame has to have been ingested for feed.settings.next to
+  // carry a real value, and taking the baseline any earlier would let a
+  // count left over from taps earlier in the app's session melt the show on
+  // its own the moment that first frame lands. Once alive, the baseline is
+  // kept current every frame, so a drop in next (an app restart resets it
+  // to 0) simply becomes the new baseline rather than reading as a tap.
+  const watched = { camMix: null, camSketches: null, patterns: null, next: null };
+  function watchSettings() {
+    const s = feed.settings;
+    const first = watched.next === null;
+    const affected =
+      (watched.camMix !== s.camMix && current && current.camMix) ||
+      (watched.camSketches !== s.camSketches && current && current.cam && s.camSketches !== 1) ||
+      (watched.patterns !== s.patterns && current && current.pattern && s.patterns !== 1);
+    const tapped = watched.next !== null && s.next > watched.next;
+    watched.camMix = s.camMix; watched.camSketches = s.camSketches;
+    watched.patterns = s.patterns;
+    if (feed.alive) watched.next = s.next;
+    if (first) return;
+    if (tapped) { console.log('visuals: next tapped'); show(pickNext()); return; }
+    if (affected && !idle) { console.log('visuals: settings changed under', current.name); show(pickNext()); }
+  }
+
   // window.update, not hydra.synth.update: same makeGlobal mirroring as
   // fps above (EvalSandbox.tick() copies window.update onto synth.update
   // every frame), so this is the assignment that has to stick. It both
@@ -206,6 +239,7 @@
   function driveFrame(dt) {
     frames += 1;
     sampleRange();
+    watchSettings();
     if (swapNext) {
       swapNext = false;
       startPending();
@@ -242,8 +276,8 @@
   // when assets/patterns/ is missing altogether.
   function eligible() {
     return window.sketches.filter(s =>
-      (!s.cam || window.camReady) &&
-      (!s.pattern || (window.patterns && patterns.ready())));
+      (!s.cam || (window.camReady && feed.settings.camSketches === 1)) &&
+      (!s.pattern || (window.patterns && patterns.ready() && feed.settings.patterns === 1)));
   }
 
   function pickNext() {
@@ -300,9 +334,10 @@
     // does, would still see the previous non-cam `current`, skip the release,
     // and leave camInit stuck true with the stream open. No later cam sketch
     // could re-init after that.
-    // A camMix sketch only asks for the camera when there is one to open;
-    // a cam sketch cannot be here without one, since eligible() drops it.
-    const wantsCam = sketch.cam || (sketch.camMix && window.camReady);
+    // A camMix sketch only asks for the camera when there is one to open and
+    // the Camera row's Mix switch is on; a cam sketch cannot be here without
+    // one, since eligible() drops it.
+    const wantsCam = sketch.cam || (sketch.camMix && window.camReady && feed.settings.camMix === 1);
     if (wantsCam && !camInit) {
       try {
         s0.initCam(0);
@@ -429,10 +464,11 @@
     lastBeatAt = performance.now();
     if (idle) { idle = false; show(pickNext()); return; }
     // The rotation, unlike the idle and camera paths, has no reason to be
-    // held: it comes round every 256 beats and can simply wait for the next
-    // one rather than queueing behind a melt that is still running.
+    // held: it comes round every beatsPerSwitch() beats and can simply wait
+    // for the next one rather than queueing behind a melt that is still
+    // running.
     if (busy()) return;
-    if (feed.beats % BEATS_PER_SWITCH === 0 && performance.now() - currentSince > MIN_SKETCH_MS) {
+    if (feed.beats % beatsPerSwitch() === 0 && performance.now() - currentSince > MIN_SKETCH_MS) {
       show(pickNext());
     }
   });
@@ -445,10 +481,8 @@
     }
   }, 1000);
 
-  // Evidence for the load test, and the knobs in force: ~/.bitedj-visuals.js
-  // on the Pi is optional, and this line is how to tell whether it loaded.
-  console.log('visuals: settings',
-    window.visualsSettings ? JSON.stringify(window.visualsSettings) : 'file absent, defaults in code');
+  // The knobs in force, once at start; changes log themselves above.
+  console.log('visuals: settings', JSON.stringify(feed.settings));
   (function logRenderer() {
     const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
     const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
@@ -492,7 +526,9 @@
     console.log('visuals: fps', (frames * 1000 / (now - lastLog)).toFixed(1),
       'feed', feed.alive ? 'alive' : 'dead',
       feed.playing ? 'playing' : 'stopped',
-      'bpm', feed.bpm.toFixed(1), 'beats', feed.beats, spans);
+      'bpm', feed.bpm.toFixed(1), 'beats', feed.beats,
+      'set', [feed.settings.reactivity, feed.settings.bounce, feed.settings.swirl, feed.settings.bars].join('/'),
+      spans);
     frames = 0; lastLog = now;
     resetRange();
   }, LOG_EVERY_MS);
