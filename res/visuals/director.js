@@ -135,13 +135,16 @@
   // Crossfade. `melt` is 1 the moment a new sketch starts and eases to 0 over
   // MELT_MS; `pending` holds a sketch whose snapshot frame has been armed but
   // not yet captured, and `queued` a request that arrived while all that was
-  // in flight.
+  // in flight. `nextPending` is separate: it counts Next taps that arrive
+  // while busy(), up to three, and endMelt() drains one into its own show()
+  // each time a melt ends, so three taps in a row still give three melts.
   //
   // `grabbing` is set by show() and cleared by the afterUpdate hook that
   // takes the still; `swapNext` is then read by the driveFrame after it, so
   // the new sketch starts on the first tick that has a still to melt out of.
   let melt = 0, meltElapsed = 0, melting = false, pending = null, queued = null;
   let grabbing = false, swapNext = false;
+  let nextPending = 0;
 
   // The frozen frame. 960x540 like the render target, so the copy is one to
   // one and s3 needs no aspect correction.
@@ -201,8 +204,10 @@
   // The three switches that change what a sketch is built from, and the
   // Next counter, watched on every rendered frame. A change that affects
   // the sketch on screen melts to another one now; one that does not waits
-  // for the rotation. Next always melts now. show() queues behind a running
-  // melt, so three taps in a row are three switches and no stutter.
+  // for the rotation. A Next tap always takes the show out of idle at once,
+  // even when the switch itself has to wait: taps during a melt are
+  // counted, up to three, and each runs as its own melt when the previous
+  // one ends.
   //
   // watched.next stays null, and next is never treated as tapped, until
   // feed.alive: a frame has to have been ingested for feed.settings.next to
@@ -224,7 +229,16 @@
     watched.patterns = s.patterns;
     if (feed.alive) watched.next = s.next;
     if (first) return;
-    if (tapped) { console.log('visuals: next tapped'); show(pickNext()); return; }
+    if (tapped) {
+      console.log('visuals: next tapped');
+      // A tap always leaves idle right away, whether or not the switch
+      // itself can happen this instant: with no beat following, the 1 s
+      // interval below drops back to the idle sketch after IDLE_AFTER_MS
+      // as usual, rather than the idle sketch just sitting there stale.
+      idle = false; lastBeatAt = performance.now();
+      if (busy()) { nextPending = Math.min(nextPending + 1, 3); } else { show(pickNext()); }
+      return;
+    }
     if (affected && !idle) { console.log('visuals: settings changed under', current.name); show(pickNext()); }
   }
 
@@ -455,6 +469,12 @@
       const next = queued;
       queued = null;
       show(next);
+    } else if (nextPending > 0) {
+      // Drain one counted tap per melt end. pickNext() runs now, not at tap
+      // time, so a settings change that landed during the wait is already
+      // reflected in what the drained melt shows.
+      nextPending -= 1;
+      show(pickNext());
     }
   }
 
