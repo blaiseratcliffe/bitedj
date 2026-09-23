@@ -146,10 +146,22 @@
   const MAX_FRAME_BYTES = 1.6e6;
   const COST_KEY = 'bitedj.patterns.cost';
   const COST_STALE_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days
+  const STRIKES = 2;   // over-budget samples before a pattern is retired
 
-  // slug -> {worstMs, when}. localStorage is wrapped at both ends because a
-  // page on file:// with a cleared profile can throw on either, and a loader
-  // that throws at startup takes the whole family down with it.
+  // slug -> {worstMs, when, n, over}: the last worst frame, when it was taken,
+  // how many samples there have been and how many of them in a row were over
+  // budget. Retirement needs STRIKES of those in a row, and any sample inside
+  // the budget puts the count back to zero.
+  //
+  // One sample is not enough, and the Pi proved it: noise_circle_1 read 225 ms
+  // on one deploy and 32 ms on the next. A single measurement taken while the
+  // page happened to be busy would otherwise cost that pattern thirty days.
+  // Two samples in a row is still one hitch per pattern per install more than
+  // the old rule, which is nothing against losing a pattern to a coincidence.
+  //
+  // localStorage is wrapped at both ends because a page on file:// with a
+  // cleared profile can throw on either, and a loader that throws at startup
+  // takes the whole family down with it.
   let cost = {};
   (function readCost() {
     let raw = null;
@@ -157,7 +169,9 @@
     if (!raw) return;
     try {
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') cost = parsed;
+      // Arrays pass a bare typeof test and then swallow every write silently,
+      // because JSON.stringify drops properties hung off an array.
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) cost = parsed;
     } catch (e) {
       cost = {};   // somebody else's data, or a truncated write
     }
@@ -167,21 +181,43 @@
     try { window.localStorage.setItem(COST_KEY, JSON.stringify(cost)); } catch (e) { /* no storage */ }
   }
 
-  function retired(slug) {
+  function strikes(slug) {
     const rec = cost[slug];
-    return !!(rec && rec.worstMs > WORST_FRAME_BUDGET_MS);
+    const n = rec && isFinite(rec.over) ? rec.over : 0;
+    return n > 0 ? n : 0;
+  }
+
+  function retired(slug) {
+    return strikes(slug) >= STRIKES;
   }
 
   // One sweep at startup rather than a check on every pick: an expired record
-  // is deleted, and the pattern is then simply unmeasured again.
+  // is deleted and its pattern is simply unmeasured again. Every record ages
+  // out, not only a retiring one, because a single strike that never expires
+  // means one unlucky sample plus another a year later is a retirement, which
+  // is the thing two strikes exists to prevent.
+  //
+  // A record whose `when` is missing, not a number, or in the future is
+  // expired on sight. bitepi takes its time off the network over Wi-Fi, so a
+  // record written before the clock was set carries a timestamp that would
+  // never come of age, and `now - rec.when > COST_STALE_MS` is false for every
+  // one of those cases rather than true: they have to be named to be caught.
+  //
+  // Records written by an earlier version have no `over` field, so strikes()
+  // reads zero and they retire nothing. That is the intended migration: the
+  // patterns they retired are measured again under the two-strike rule.
   (function expireCost() {
     const now = Date.now();
     let dropped = 0;
     Object.keys(cost).forEach(slug => {
       const rec = cost[slug];
-      if (rec && rec.worstMs > WORST_FRAME_BUDGET_MS && now - rec.when > COST_STALE_MS) {
-        delete cost[slug];
-        dropped += 1;
+      const when = rec && rec.when;
+      const stale = !isFinite(when) || when > now || now - when > COST_STALE_MS;
+      if (!stale) return;
+      const wasRetired = retired(slug);
+      delete cost[slug];
+      dropped += 1;
+      if (wasRetired) {
         console.log('visuals: pattern', slug, 'cost record expired, measuring it again');
       }
     });
@@ -238,8 +274,10 @@
   if (!window.patternIndex) {
     console.error('visuals: no pattern index; run tools/build-pattern-index.py');
   } else {
+    const onStrike = library.filter(p => strikes(p.slug) === 1).length;
     console.log('visuals: patterns', eligible().length, 'eligible,',
-      library.length - eligible().length, 'retired by measured cost;',
+      library.length - eligible().length, 'retired by measured cost,',
+      onStrike, 'on one strike;',
       library.length, 'of', window.patternIndex.length,
       'under the', (MAX_FRAME_BYTES / 1e6).toFixed(1) + ' MB frame size limit');
   }
@@ -277,11 +315,27 @@
   // Three pieces of main-thread work, and each gets its own animation frame:
   // the decode, which the browser does between `img.src` and `onload`; the
   // draw, FRAMES_PER_RASTER frames later; and the coverage readback, a frame
-  // after that. The readback used to share the draw's frame, which was honest
-  // about the total but made the stall the sum of two unrelated things. Split
-  // apart, the worst single frame of a load is very nearly the decode alone,
-  // which is the number the size cap is trying to control.
-  function rasterise(path, wire, done) {
+  // after that. Each is reported separately, because only two of them are a
+  // stall this pattern caused.
+  //
+  // `decodeMs` is wall clock from `img.src` to `img.onload`. It spans however
+  // many animation frames the browser took to parse the document plus whatever
+  // else was queued in front of it, so it is a measure of how busy the page
+  // was as much as of how heavy the artwork is, and it must not go into a
+  // figure that is compared against a per-frame budget. It used to be added to
+  // the draw, and that sum is what retired concentric_arc_truchet_2 on the Pi
+  // at 221 ms and read noise_circle_1 at 225 ms on one deploy and 32 on the
+  // next. It goes in the total and in the log line and nowhere else now.
+  //
+  // `live` is the abort. Every step of a load is paced by
+  // requestAnimationFrame, and a page that is hidden, occluded or looking at a
+  // blanked display stops getting those, so a load can be abandoned by the
+  // watchdog while it is between two frames. Whatever comes back after that
+  // must not allocate, must not draw and must not report: it frees what it is
+  // holding and stops. Checked at both resumption points, because the canvas
+  // between the draw frame and the readback frame is reachable from nothing
+  // else at all.
+  function rasterise(path, wire, live, done) {
     let xhr;
     try {
       xhr = new XMLHttpRequest();
@@ -292,6 +346,7 @@
     }
     xhr.onerror = () => { console.error('visuals: pattern fetch failed', path); done(null); };
     xhr.onload = () => {
+      if (!live()) return;
       const doc = svgDoc(xhr.responseText || '', wire);
       if (!doc) { console.error('visuals: pattern has no <svg>', path); done(null); return; }
       const url = URL.createObjectURL(new Blob([doc], { type: 'image/svg+xml' }));
@@ -301,29 +356,35 @@
         console.error('visuals: pattern decode failed', path);
         done(null);
       };
-      // The clock starts at the decode rather than at the draw. Both are on
-      // the main thread and for the dense patterns the decode is the larger
-      // half; only the XHR is somebody else's thread.
       let t0 = 0, decodeMs = 0;
       img.onload = () => {
         decodeMs = performance.now() - t0;
         afterFrames(FRAMES_PER_RASTER, () => {
+          if (!live()) { URL.revokeObjectURL(url); return; }
           const t1 = performance.now();
           let cv = document.createElement('canvas');
           cv.width = SIZE; cv.height = SIZE;
           const ctx = cv.getContext('2d');
           ctx.fillStyle = '#000';
           ctx.fillRect(0, 0, SIZE, SIZE);
+          let drew = true;
           try {
             ctx.drawImage(img, 0, 0, SIZE, SIZE);
           } catch (e) {
             console.error('visuals: pattern draw failed', path, e);
-            cv = null;
+            drew = false;
           }
           URL.revokeObjectURL(url);
-          const drawMs = decodeMs + (performance.now() - t1);
-          if (!cv) { done(null); return; }
+          const drawMs = performance.now() - t1;
+          if (!drew) {
+            // Shrink before dropping it. This is the one allocation in the
+            // file that used to be handed straight to the collector.
+            cv.width = 1; cv.height = 1;
+            done(null);
+            return;
+          }
           afterFrames(1, () => {
+            if (!live()) { cv.width = 1; cv.height = 1; return; }
             const t2 = performance.now();
             let lit = 0;
             try {
@@ -331,7 +392,7 @@
             } catch (e) {
               console.error('visuals: pattern coverage failed', path, e);
             }
-            done(cv, drawMs, lit, performance.now() - t2);
+            done(cv, lit, decodeMs, drawMs, performance.now() - t2);
           });
         });
       };
@@ -430,13 +491,21 @@
   // Seven frames, strictly one after another, so two patterns are never
   // rasterising into the same animation frames. Returns the entry it is
   // building, so a caller that gives up on the load can free what was built.
-  function load(meta, done) {
+  //
+  // `live` is checked at the top of every step and at both resumption points
+  // inside rasterise(). Without it an abandoned load carries on allocating
+  // full canvases after the watchdog has freed the ones it had, and does so in
+  // the same animation frames as the replacement the watchdog started, which
+  // breaks the one-at-a-time invariant this loop exists to keep.
+  function load(meta, live, done) {
     const entry = {
-      meta: meta, frames: new Array(7), busy: true, ms: 0, worst: 0, peak: 0,
+      meta: meta, frames: new Array(7), busy: true,
+      ms: 0, worst: 0, decodeMs: 0, peak: 0,
       cover: [], shownAt: 0, at: performance.now(), held: 0
     };
     let i = 0;
     (function step() {
+      if (!live()) return;
       if (i >= 7) {
         // peak99() reads a quarter of a million pixels and gets a frame of its
         // own for the same reason the coverage readback does: landing it in
@@ -444,6 +513,7 @@
         // the sum of two unrelated stalls, and the worst frame is the number
         // the budget is checked against.
         afterFrames(1, () => {
+          if (!live()) return;
           const t0 = performance.now();
           entry.peak = peak99(entry.frames[6]);
           const peakMs = performance.now() - t0;
@@ -464,7 +534,7 @@
         });
         return;
       }
-      rasterise(meta.frames[i], meta.wire, (cv, ms, lit, litMs) => {
+      rasterise(meta.frames[i], meta.wire, live, (cv, lit, decodeMs, drawMs, litMs) => {
         if (!cv) {
           entry.busy = false;
           freeFrames(entry);
@@ -473,11 +543,13 @@
         }
         entry.frames[i] = cv;
         entry.cover[i] = lit;
-        // `worst` is the worst single animation frame, which is what the cap
-        // is set against, so the draw and the readback count separately: they
-        // are in different frames now and neither waits for the other.
-        entry.ms += ms + litMs;
-        entry.worst = Math.max(entry.worst, ms, litMs);
+        // `worst` is the worst single animation frame and nothing else, so
+        // only the two terms that occupy one frame each go into it. The decode
+        // is wall clock across however many frames the browser wanted; it
+        // belongs in the total and in the log, not in a per-frame budget.
+        entry.ms += decodeMs + drawMs + litMs;
+        entry.decodeMs += decodeMs;
+        entry.worst = Math.max(entry.worst, drawMs, litMs);
         i += 1;
         step();
       });
@@ -489,12 +561,23 @@
   // Every slug shown this session. The prewarm steers around it, so a pattern
   // the room has never seen beats one that has already been round.
   const seen = [];
-  const rejected = [];   // slugs whose load failed; never retried this session
+  const rejected = [];   // slugs whose load failed or was refused on its own
+                         // merits; not retried this session
+  // Slugs whose load was abandoned by the watchdog. Separate from `rejected`
+  // and from the cost map on purpose: a timeout says nothing about the
+  // artwork. Every step of a load is paced by requestAnimationFrame and a
+  // blanked or occluded display stops those, so the commonest way to reach
+  // the watchdog is that nobody was looking at the screen. That must not cost
+  // a pattern thirty days, so it costs it this session and no longer.
+  const skipped = [];
   let loading = false;
   let tagTurn = 0;
 
-  function cached(slug) {
-    return cache.some(e => e.meta.slug === slug) || rejected.indexOf(slug) >= 0;
+  // What take() will hand out and what ready() counts: the same predicate, so
+  // the director cannot be told a pattern sketch is runnable and then handed
+  // nothing. A retired or skipped resident is neither.
+  function usable(e) {
+    return !e.busy && !retired(e.meta.slug) && skipped.indexOf(e.meta.slug) < 0;
   }
 
   function pickFrom(pool) {
@@ -516,17 +599,23 @@
   // because a prewarm that declines to load anything leaves the family with
   // whatever it has: first to a pattern already seen, then to any group at
   // all.
-  function pickPrewarm() {
+  // `absent` is the entry the caller is about to evict, if it has one. It is
+  // treated as already gone, both for the tag coverage and for cached(), so
+  // the eviction and the pick agree about what the cache will look like.
+  function pickPrewarm(absent) {
+    const here = (slug) => cache.some(e => e !== absent && e.meta.slug === slug)
+      || rejected.indexOf(slug) >= 0
+      || skipped.indexOf(slug) >= 0;
     const covered = Object.create(null);
     cache.forEach(e => {
-      if (!e.busy) e.meta.tags.forEach(t => { covered[t] = true; });
+      if (!e.busy && e !== absent) e.meta.tags.forEach(t => { covered[t] = true; });
     });
     const order = [];
     for (let n = 0; n < TAGS.length; n++) order.push(TAGS[(tagTurn + n) % TAGS.length]);
     const wanted = order.filter(t => !covered[t]).concat(order.filter(t => covered[t]));
     for (let n = 0; n < wanted.length; n++) {
       const tag = wanted[n];
-      const pool = eligible().filter(p => p.tags.indexOf(tag) >= 0 && !cached(p.slug));
+      const pool = eligible().filter(p => p.tags.indexOf(tag) >= 0 && !here(p.slug));
       const fresh = pool.filter(p => seen.indexOf(p.slug) < 0);
       const pick = pickFrom(fresh.length ? fresh : pool);
       if (pick) {
@@ -534,34 +623,56 @@
         return pick;
       }
     }
-    const any = eligible().filter(p => !cached(p.slug));
+    const any = eligible().filter(p => !here(p.slug));
     const fresh = any.filter(p => seen.indexOf(p.slug) < 0);
     return pickFrom(fresh.length ? fresh : any);
   }
 
-  // Least recently shown first, and never one a sketch is currently drawing.
-  // A resident that has been retired by the cost map goes before any of them,
-  // whatever its age: take() will not hand it out again, so it is 29 MB of
-  // nothing.
-  function trim(limit) {
+  // Who would go if something had to. Least recently shown first, never one a
+  // sketch is currently drawing, and a resident the cost map has retired goes
+  // before any of them whatever its age: take() will not hand it out again, so
+  // it is 29 MB of nothing.
+  function victim() {
     const age = (e) => Math.max(e.shownAt, e.at);
-    const dead = (e) => retired(e.meta.slug);
-    while (cache.length > limit) {
-      let worst = -1;
-      for (let i = 0; i < cache.length; i++) {
-        if (cache[i].held || cache[i].busy) continue;
-        if (worst < 0) { worst = i; continue; }
-        if (dead(cache[i]) !== dead(cache[worst])) {
-          if (dead(cache[i])) worst = i;
-        } else if (age(cache[i]) < age(cache[worst])) {
-          worst = i;
-        }
+    const dead = (e) => !usable(e);
+    let worst = -1;
+    for (let i = 0; i < cache.length; i++) {
+      if (cache[i].held || cache[i].busy) continue;
+      if (worst < 0) { worst = i; continue; }
+      if (dead(cache[i]) !== dead(cache[worst])) {
+        if (dead(cache[i])) worst = i;
+      } else if (age(cache[i]) < age(cache[worst])) {
+        worst = i;
       }
-      if (worst < 0) return;
-      const gone = cache.splice(worst, 1)[0];
-      freeFrames(gone);
-      console.log('visuals: pattern evicted', gone.meta.slug);
     }
+    return worst < 0 ? null : cache[worst];
+  }
+
+  function evict(entry, why) {
+    const at = cache.indexOf(entry);
+    if (at < 0) return;
+    cache.splice(at, 1);
+    freeFrames(entry);
+    console.log('visuals: pattern evicted', entry.meta.slug, why || '');
+  }
+
+  function trim(limit) {
+    while (cache.length > limit) {
+      const gone = victim();
+      if (!gone) return;
+      evict(gone);
+    }
+  }
+
+  // A retired resident is unusable the moment the cost map says so, and it is
+  // 29 MB holding one of three slots, so it goes as soon as no sketch is
+  // drawing it. Called when a retirement happens, and again from release()
+  // when the sketch that was holding one lets go, because a pattern cannot be
+  // taken away from a chain that is still sampling it.
+  function sweepRetired() {
+    cache.slice().forEach(e => {
+      if (!e.busy && !e.held && !usable(e)) evict(e, 'retired');
+    });
   }
 
   // Room in the cache, or a resident nobody has looked at for ROTATE_MS.
@@ -583,47 +694,64 @@
   // A load that never calls back would otherwise retire the whole family for
   // the session, because `loading` gates every later prewarm and nothing else
   // clears it. XMLHttpRequest on file:// has no timeout that can be relied on
-  // and neither has image decoding, so the guard is a plain timer and a
-  // generation counter: the abandoned load's callbacks, if they ever arrive,
-  // see a stale generation and free what they built rather than joining the
-  // cache behind the one that replaced them.
+  // and neither has image decoding, so the guard is a plain timer.
   //
-  // The watchdog also frees the partial entry itself, which is up to six full
-  // frames and 25 MB, and writes the slug into the cost map as an hour, so a
-  // file that hangs once is not offered again on this profile. Waiting for the
-  // abandoned callbacks to do that freeing is no good, because the whole point
-  // of the watchdog is that they may never arrive.
+  // The generation counter is what actually stops the abandoned load. Bumping
+  // it makes `live()` false, and load() and rasterise() check that at the top
+  // of every step and at both resumption points, so the orphan allocates
+  // nothing more, draws nothing more and reports nothing at all. Without it
+  // the orphan carried on building 4 MB canvases after the watchdog had freed
+  // the ones it had, in the same animation frames as the replacement two
+  // seconds later, which is the one-at-a-time invariant this loader is built
+  // on and roughly doubles the per-frame cost while it lasts.
+  //
+  // The watchdog writes no cost record and retires nothing. Every step of a
+  // load is paced by requestAnimationFrame and Chromium stops those for a
+  // hidden, occluded or blanked page, while setTimeout keeps running, so the
+  // commonest way to reach this code is that nobody was looking at the screen.
+  // The slug goes in `skipped` for the session, and the next boot may try it
+  // again.
   const LOAD_TIMEOUT_MS = 60000;
   let generation = 0;
 
   function prewarm() {
-    if (loading || !hasRoom()) return;
-    // Evict before allocating, not after. Pushing a fourth entry and trimming
+    if (loading) return;
+    sweepRetired();
+    if (!hasRoom()) return;
+    // Evict before allocating, not after: pushing a fourth entry and trimming
     // afterwards is a second or two of four patterns in memory, 117 MB rather
-    // than 88, at exactly the moment the page is also decoding an SVG. The
-    // trim comes before the pick, so an entry that is about to be evicted does
-    // not count as covering its tag group.
-    trim(CACHE_MAX - 1);
-    const meta = pickPrewarm();
+    // than 88, at exactly the moment the page is also decoding an SVG.
+    //
+    // But work out who would go before evicting anyone, and put that entry to
+    // pickPrewarm() as already gone. If the pick comes back empty there is
+    // nothing to put in the hole, and evicting anyway is how the cache used to
+    // end a session two patterns deep: with everything eligible either cached
+    // or rejected, the pick fails every time and the third slot is never
+    // refilled.
+    const going = cache.length >= CACHE_MAX ? victim() : null;
+    const meta = pickPrewarm(going);
     if (!meta) return;
+    if (going) {
+      evict(going);
+      lastSwapAt = performance.now();
+    }
     loading = true;
-    if (cache.length >= CACHE_MAX - 1) lastSwapAt = performance.now();
     const t0 = performance.now();
     const mine = ++generation;
+    const live = () => generation === mine;
     let building = null;
     const watchdog = setTimeout(() => {
-      if (generation !== mine) return;
-      generation += 1;
+      if (!live()) return;
+      generation += 1;          // stops the orphan at its next resumption
       loading = false;
       if (building) freeFrames(building);
-      cost[meta.slug] = { worstMs: LOAD_TIMEOUT_MS, when: Date.now(), why: 'timed out' };
-      writeCost();
-      rejected.push(meta.slug);
-      console.log('visuals: pattern load timed out', meta.slug, 'retired');
+      skipped.push(meta.slug);
+      console.log('visuals: pattern load timed out', meta.slug,
+        'skipped for this session');
       soon();
     }, LOAD_TIMEOUT_MS);
-    building = load(meta, (entry) => {
-      if (generation !== mine) {
+    building = load(meta, live, (entry) => {
+      if (!live()) {
         if (entry) freeFrames(entry);
         return;
       }
@@ -643,6 +771,7 @@
         (performance.now() - t0).toFixed(0) + ' ms total,',
         entry.ms.toFixed(0) + ' ms on the main thread,',
         'worst frame ' + entry.worst.toFixed(0) + ' ms,',
+        'decode ' + entry.decodeMs.toFixed(0) + ' ms,',
         'peak ' + entry.peak + ',',
         'lit ' + entry.cover.slice(0, 6).map(c => (100 * c).toFixed(1)).join('/') + '%,',
         'default ' + (100 * entry.cover[6]).toFixed(1) + '%,',
@@ -664,38 +793,54 @@
 
   // What the box actually did, written down so it is not discovered again.
   //
-  // Every completed load records its worst single animation frame against the
-  // slug, and a pattern whose record is over WORST_FRAME_BUDGET_MS is retired:
-  // eligible() drops it, so neither the prewarm nor take() will offer it
-  // again on this profile until the record goes stale. Over budget by more
-  // than double and it is evicted on the spot as well, because it would
-  // otherwise hold the screen for a minute of a set on a box that has just
-  // said it cannot afford it; over by less and it stays in the cache it has
-  // already been rasterised into, though take() will not hand it out, so it
-  // leaves at the next eviction.
+  // Every completed load writes {worstMs, when, n, over} against the slug.
+  // `over` counts over-budget samples in a row and any sample inside the
+  // budget puts it back to zero; at STRIKES in a row the pattern is retired
+  // and eligible() drops it, so neither the prewarm nor take() offers it again
+  // on this profile until the record goes stale.
+  //
+  // One sample is not enough to retire anything. The worst frame of a load
+  // depends on what else the page was doing, and the Pi read noise_circle_1 at
+  // 225 ms on one deploy and 32 ms on the next: a rule that retired on the
+  // first number would have lost that pattern for thirty days on a
+  // coincidence. Two in a row costs one extra hitch per pattern per install
+  // and cannot be reached by bad luck twice.
+  //
+  // The eviction at more than double the budget is separate and immediate, for
+  // the same reason as always: 240 ms is not something to leave on screen for
+  // a minute while the second sample is collected. It is one `over` sample
+  // like any other, not a retirement, and the pattern is eligible again the
+  // moment it has been evicted.
   //
   // An unmeasured pattern is always eligible. That is the whole design: every
-  // pattern is tried exactly once per profile, the affordable set converges to
-  // the same thing whatever order they load in, and the cost of finding out is
-  // one hitch per pattern per install. The version before this ratcheted a
-  // byte cap down from the first pattern that overran, which stranded most of
-  // the library behind whichever heavy one happened to load first.
+  // pattern is tried at most twice per profile, the affordable set converges
+  // to the same thing whatever order they load in, and none of it depends on
+  // predicting cost from the file. The version before this ratcheted a byte
+  // cap down from the first pattern that overran, which stranded most of the
+  // library behind whichever heavy one happened to load first.
   function calibrate(entry) {
     const slug = entry.meta.slug;
-    cost[slug] = { worstMs: Math.round(entry.worst), when: Date.now() };
+    const was = cost[slug];
+    const over = entry.worst > WORST_FRAME_BUDGET_MS;
+    cost[slug] = {
+      worstMs: Math.round(entry.worst),
+      when: Date.now(),
+      n: (was && isFinite(was.n) ? was.n : 0) + 1,
+      over: over ? strikes(slug) + 1 : 0
+    };
     writeCost();
-    if (entry.worst <= WORST_FRAME_BUDGET_MS) return;
-    console.log('visuals: pattern', slug, 'over budget',
-      entry.worst.toFixed(0), 'ms, retired');
-    if (entry.worst > 2 * WORST_FRAME_BUDGET_MS) {
-      const at = cache.indexOf(entry);
-      if (at >= 0 && !entry.held) {
-        cache.splice(at, 1);
-        freeFrames(entry);
-        console.log('visuals: pattern evicted', slug,
-          'over the frame budget by more than double');
-      }
+    if (!over) return;
+    if (retired(slug)) {
+      console.log('visuals: pattern', slug, 'over budget',
+        entry.worst.toFixed(0), 'ms, retired');
+    } else {
+      console.log('visuals: pattern', slug, 'over budget',
+        entry.worst.toFixed(0), 'ms, one strike');
     }
+    if (entry.worst > 2 * WORST_FRAME_BUDGET_MS && !entry.held) {
+      evict(entry, 'over the frame budget by more than double');
+    }
+    sweepRetired();
     soon();
   }
 
@@ -780,11 +925,17 @@
     // What has been measured, for the load test and for anyone reading the
     // log and wondering why the library shrank.
     get retired() { return library.filter(p => retired(p.slug)).length; },
+    get onestrike() { return library.filter(p => strikes(p.slug) === 1).length; },
     cost() { return cost; },
     get count() { return eligible().length; },
 
+    // The same predicate take() uses, not merely "something has finished
+    // loading". director.js gates the eight pattern sketches on this, and a
+    // cache holding one entry that has just been retired would otherwise
+    // schedule a pattern sketch that then gets null and draws the wordmark
+    // fallback for a whole switch interval, with nothing in the log.
     ready() {
-      return cache.some(e => !e.busy);
+      return cache.some(usable);
     },
 
     // A ready pattern for a sketch that wants one of `tags`. Never blocks,
@@ -806,7 +957,7 @@
     // tag groups the cache cannot answer for, so that choice has more than one
     // candidate in it.
     take(tags, exclude) {
-      const pool = cache.filter(e => !e.busy && e !== exclude && !retired(e.meta.slug));
+      const pool = cache.filter(e => e !== exclude && usable(e));
       if (!pool.length) return null;
       const byAge = (a, b) => a.shownAt - b.shownAt;
       const want = tags && tags.length ? tags : [];
@@ -868,6 +1019,10 @@
         if (st.entry) st.entry.held = Math.max(0, st.entry.held - 1);
         st.entry = null; st.i0 = -1; st.i1 = -1;
       });
+      // A retirement that arrived while a sketch was drawing the pattern had
+      // to wait for this moment, because a chain that is still sampling a
+      // texture cannot have its canvas taken away.
+      sweepRetired();
     },
 
     // For the load test and the memory measurement.
