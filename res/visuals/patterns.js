@@ -378,7 +378,7 @@
   // the prewarm steers around. They are separate because they answer
   // different questions. take() is choosing between three things in memory
   // and only needs to know which of them the room has just watched; the
-  // prewarm is choosing between 49 files and should be pulling in something
+  // prewarm is choosing between 38 files and should be pulling in something
   // the room has never seen at all.
   const recent = [];
   const seen = [];
@@ -394,20 +394,36 @@
     return pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
   }
 
-  // Round robin over the tag groups, so a run of prewarms cannot land three
-  // grids in a row just because GRID is 21 of the 54 patterns, and inside a
-  // group prefer something never shown this session over something that has
-  // been round already. Falling back twice: first to a pattern that has been
-  // shown before, then to any tag at all, because a prewarm that declines to
-  // load anything leaves the family with whatever it already has.
+  // Which pattern to pull in next.
+  //
+  // The tag groups the ready set cannot answer for come first. take() prefers
+  // a pattern whose tags match the sketch asking, and it can only do that if
+  // the three patterns in memory between them cover more than one group, so
+  // the prewarm's first job is to fill a hole rather than to deepen a group
+  // that is already covered. After that it is a round robin over the eight
+  // groups, which stops a run of prewarms landing three grids in a row just
+  // because GRID is 21 of the 54 patterns.
+  //
+  // Inside whichever group it lands on, something never shown this session
+  // beats something that has been round already, and the two fallbacks exist
+  // because a prewarm that declines to load anything leaves the family with
+  // whatever it has: first to a pattern already seen, then to any group at
+  // all.
   function pickPrewarm() {
-    for (let n = 0; n < TAGS.length; n++) {
-      const tag = TAGS[(tagTurn + n) % TAGS.length];
+    const covered = Object.create(null);
+    cache.forEach(e => {
+      if (!e.busy) e.meta.tags.forEach(t => { covered[t] = true; });
+    });
+    const order = [];
+    for (let n = 0; n < TAGS.length; n++) order.push(TAGS[(tagTurn + n) % TAGS.length]);
+    const wanted = order.filter(t => !covered[t]).concat(order.filter(t => covered[t]));
+    for (let n = 0; n < wanted.length; n++) {
+      const tag = wanted[n];
       const pool = library.filter(p => p.tags.indexOf(tag) >= 0 && !cached(p.slug));
       const fresh = pool.filter(p => seen.indexOf(p.slug) < 0);
       const pick = pickFrom(fresh.length ? fresh : pool);
       if (pick) {
-        tagTurn = (tagTurn + n + 1) % TAGS.length;
+        tagTurn = (TAGS.indexOf(tag) + 1) % TAGS.length;
         return pick;
       }
     }
@@ -579,28 +595,45 @@
       return cache.some(e => !e.busy);
     },
 
-    // A ready pattern, preferring one the room has not just seen, then one
-    // whose tags meet any of `tags`. Never blocks, never rasterises, and
-    // returns null only when nothing has finished loading.
+    // A ready pattern for a sketch that wants one of `tags`. Never blocks,
+    // never rasterises, and returns null only when nothing has finished
+    // loading.
     //
-    // The order of those two preferences is the fix for what the first
-    // version did. It sorted by tag first and by last-shown second, and with
-    // three patterns in the cache against eight tag groups the tag filter
-    // usually picked out exactly one entry, which then came up under sketch
-    // after sketch: four of the eight screenshots taken of this family were
-    // the same artwork. Freshness first means a run of pattern sketches walks
-    // the cache, and the tag is what chooses between equally fresh ones.
+    // Four tiers, in this order, first non-empty one wins:
+    //
+    //   1. matches the tags and has not been shown in the last RECENT picks
+    //   2. matches the tags, least recently shown first
+    //   3. has not been shown recently, any tag
+    //   4. anything ready, least recently shown first
+    //
+    // The two halves of that are both scars. The first version sorted by tag
+    // and then by last-shown, and with three patterns in the cache against
+    // eight tag groups the tag filter usually picked out exactly one entry,
+    // which then came up under sketch after sketch: four of eight screenshots
+    // of this family were the same artwork. The second put freshness first
+    // and fixed the repetition by throwing the tag away, so pattern-grid drew
+    // a sparse radial pattern and pattern-radial drew a grid. Tiers 1 and 2
+    // keep the tag, tiers 3 and 4 are what happens when the cache cannot
+    // answer for the group at all, and prewarm's job is to keep tier 1 from
+    // being empty by filling the groups the ready set is missing.
     take(tags, exclude) {
       const pool = cache.filter(e => !e.busy && e !== exclude);
       if (!pool.length) return null;
-      const unshown = pool.filter(e => recent.indexOf(e.meta.slug) < 0);
-      const from = unshown.length ? unshown : pool;
-      const want = (tags || []).length
-        ? from.filter(e => e.meta.tags.some(t => tags.indexOf(t) >= 0))
-        : [];
-      const final = want.length ? want : from;
-      final.sort((x, y) => x.shownAt - y.shownAt);
-      const pick = final[0];
+      const byAge = (a, b) => a.shownAt - b.shownAt;
+      const unshown = (e) => recent.indexOf(e.meta.slug) < 0;
+      const want = tags && tags.length ? tags : [];
+      const fits = (e) => e.meta.tags.some(t => want.indexOf(t) >= 0);
+      const tagged = want.length ? pool.filter(fits) : [];
+      const tiers = [
+        tagged.filter(unshown),
+        tagged.filter(e => !unshown(e)),
+        pool.filter(unshown),
+        pool
+      ];
+      let pick = null;
+      for (let i = 0; i < tiers.length && !pick; i++) {
+        if (tiers[i].length) pick = tiers[i].slice().sort(byAge)[0];
+      }
       pick.shownAt = performance.now();
       recent.push(pick.meta.slug);
       while (recent.length > RECENT) recent.shift();
