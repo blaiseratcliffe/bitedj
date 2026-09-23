@@ -134,6 +134,11 @@
   let history = [];
   // Whether s0 currently holds an open camera stream. Only show() moves this.
   let camInit = false;
+  // Preview mode's two hooks, set only by preview.js and only under
+  // ?preview=1 (see window.director at the bottom). `paused` stops the beat
+  // rotation and nothing else; `switchHook` is told about every landed switch.
+  // Outside preview mode they stay false and null for the life of the page.
+  let paused = false, switchHook = null;
 
   // Crossfade. `melt` is 1 the moment a new sketch starts and eases to 0 over
   // MELT_MS; `pending` holds a sketch whose snapshot frame has been armed but
@@ -475,6 +480,9 @@
     current = sketch; currentSince = performance.now(); currentSinceBeat = feed.beats;
     history.push(sketch); if (history.length > HISTORY_LENGTH) history.shift();
     console.log('visuals: sketch', sketch.name);
+    if (switchHook) {
+      try { switchHook(sketch); } catch (e) { console.error('visuals: switch hook failed', e); }
+    }
   }
 
   function endMelt() {
@@ -506,6 +514,9 @@
   feed.onBeatAlways(() => {
     lastBeatAt = performance.now();
     if (idle) { idle = false; show(pickNext()); return; }
+    // Preview mode holds the sketch until someone moves it. Leaving idle
+    // above still happens, so a paused page does not sit on the idle sketch.
+    if (paused) return;
     // The rotation, unlike the idle and camera paths, has no reason to be
     // held: it comes round beatsPerSwitch() beats after the last switch and
     // can simply wait for the next one rather than queueing behind a melt
@@ -581,4 +592,20 @@
   // is deliberate and is the boot fade; it is not the black crossfade bug.
   show(window.idleSketch);
   idle = true;
+
+  // The handle preview.js drives the show through, and nothing else reads it.
+  // preview.js returns at once unless the URL carries ?preview=1, so on the Pi
+  // this object exists and is never called. `target` is where the show is
+  // heading: a request held behind a melt, then one armed but not landed,
+  // then the sketch on screen, so stepping twice during a melt moves two
+  // places rather than one.
+  window.director = {
+    list: () => window.sketches,
+    current: () => current,
+    target: () => queued || pending || current,
+    show: show,
+    pickNext: pickNext,
+    onSwitch(fn) { switchHook = typeof fn === 'function' ? fn : null; },
+    pause(on) { paused = !!on; }
+  };
 })();
