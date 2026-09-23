@@ -15,7 +15,8 @@
 // What it does, through the hooks director.js and patterns.js expose for it:
 // the rotation is paused, so a sketch stays until you move; the sketch
 // buttons step window.sketches in list order, including the sketches the
-// rotation would skip, except a camera sketch with no camera; Next is the
+// rotation would skip, except a camera sketch with no camera and a video
+// sketch with no clip; the label names the clip while one is playing; Next is the
 // director's own pickNext(); and choosing a pattern pins it, so every pattern
 // sketch draws it until `auto`. A desktop is several times faster than the
 // Pi, so nothing seen here says how the Pi copes with a pattern.
@@ -132,6 +133,8 @@
       const t = pats.taken();
       text += '  \u00B7  ' + (t.length ? t.join(' + ') : 'no pattern ready yet');
     }
+    const clip = window.video ? video.file() : null;
+    if (clip) text += '  \u00B7  video ' + clip;
     label.textContent = text;
 
     const pin = pats ? pats.pinned() : null;
@@ -166,6 +169,10 @@
       const s = list[i];
       if (s.cam && !window.camReady) {
         flash('no camera, skipped ' + s.name);
+        continue;
+      }
+      if (s.video && !(window.video && video.available())) {
+        flash('no video, skipped ' + s.name);
         continue;
       }
       director.show(s);

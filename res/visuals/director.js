@@ -11,7 +11,10 @@
 // sketches.js may write to either. o3 is not written by anything today and
 // stays reserved here rather than being handed to the sketches, so the
 // crossfade keeps a spare output. Sources s4 to s7 belong to patterns.js and
-// a sketch reaches them through patterns.bind() rather than by hand. A switch
+// a sketch reaches them through patterns.bind() rather than by hand. s8
+// belongs to video.js: a sketch reads it with src(s8), and only video.js,
+// through video.open() and video.close() called from here, ever inits or
+// clears it. A switch
 // used to be a 125 ms dip to black through a CSS opacity transition, which
 // read as a cut with a hole in it. Now the outgoing frame is frozen, the new
 // sketch starts straight away in o0, and o2 shows a mix of the two for two
@@ -51,6 +54,16 @@
 // neither flag would use. hush() is still never called anywhere, for the
 // reason by clearScratch().
 //
+// Video on s8 follows the same lifecycle. `video: true` is a video sketch,
+// which is the footage and drops out of the rotation when no clip is
+// available; `vidMix` names a treatment that mixes the footage into a sketch
+// that stands on its own, and such a sketch runs plain without video. show()
+// opens the video for either kind before the switch lands, and it is closed
+// when a switch lands on a sketch that reads neither, so the decoder only
+// runs while footage is on screen. The close waits for the landing rather
+// than happening in show(), because the melt's still is taken from the frame
+// after show() and a clip closed before it would melt out of a blank.
+//
 // Sketches drive their own per-frame work through window.sketchUpdate(dt),
 // which this file calls every rendered frame; a sketch must never assign
 // window.update or window.afterUpdate itself, both of those belong to this
@@ -86,14 +99,15 @@
   const LOG_EVERY_MS = 10000;
 
   const canvas = document.getElementById('stage');
-  // numSources 8 rather than the default 4. s0 to s3 are the webcam, the
+  // numSources 9 rather than the default 4. s0 to s3 are the webcam, the
   // wordmark, the boot logo and the melt's frozen frame; s4 to s7 are the two
   // pattern slots, two sources each because a pattern sketch always draws a
-  // blend of two neighbouring sweep frames. makeGlobal defines a window.sN for
-  // each one (EvalSandbox's constructor walks Object.keys(synth), and
-  // _initSources has already run by then), which is why patterns.js can reach
-  // s4 without this file handing it anything.
-  const hydra = new Hydra({ canvas, width: RENDER_W, height: RENDER_H, detectAudio: false, makeGlobal: true, numSources: 8 });
+  // blend of two neighbouring sweep frames; s8 is the video clip, owned by
+  // video.js. makeGlobal defines a window.sN for each one (EvalSandbox's
+  // constructor walks Object.keys(synth), and _initSources has already run by
+  // then), which is why patterns.js can reach s4 and video.js s8 without this
+  // file handing them anything.
+  const hydra = new Hydra({ canvas, width: RENDER_W, height: RENDER_H, detectAudio: false, makeGlobal: true, numSources: 9 });
   // The width and height above do nothing when a canvas is supplied:
   // _initCanvas (vendor/hydra-synth.js:3154-3158) adopts canvas.width and
   // canvas.height instead and drops the options. #stage is sized in CSS only,
@@ -316,10 +330,34 @@
   // not what it is for. patterns.ready() goes true a few seconds after the
   // page loads and stays true, so this only ever excludes them at start-up or
   // when assets/patterns/ is missing altogether.
+  // A video sketch is the same again, on video.available(): a clip exists and
+  // not every clip has failed. It is not gated on video.ready(), which is
+  // false whenever no video sketch is on screen, because show() opens the
+  // clip as the sketch comes up.
+  const videoOk = () => !!window.video && video.available();
+  // A sketch that reads the video, either kind, while there is a clip to
+  // play. A vidMix sketch with no clip runs plain and asks for nothing.
+  const wantsVideo = (s) => !!(s.video || s.vidMix) && videoOk();
+  // The last clip failing under a sketch that is drawing it is the camera
+  // disappearing mid-sketch again: move on now rather than leaving a blank
+  // source up until the next switch. pickNext() no longer offers a video
+  // sketch, and a vidMix sketch picked next runs plain.
+  if (window.video) {
+    // The sketch the show is heading to, not only the one on screen: the
+    // last clip can fail while a switch to a video sketch is still landing.
+    video.onGiveUp(() => {
+      const s = queued || pending || current;
+      if (s && (s.video || s.vidMix)) {
+        console.log('visuals: video lost during', s.name);
+        show(pickNext());
+      }
+    });
+  }
   function eligible() {
     return window.sketches.filter(s =>
       (!s.cam || (window.camReady && feed.settings.camSketches === 1)) &&
-      (!s.pattern || (window.patterns && patterns.ready() && feed.settings.patterns === 1)));
+      (!s.pattern || (window.patterns && patterns.ready() && feed.settings.patterns === 1)) &&
+      (!s.video || videoOk()));
   }
 
   function pickNext() {
@@ -396,6 +434,10 @@
       camInit = false;
       console.log('visuals: camera released');
     }
+    // The video's half of the same decision. Opened here so the clip has the
+    // crossfade to come up in; closed in startPending(), once the still has
+    // been taken, for the reason in the header.
+    if (wantsVideo(sketch) && !video.isOpen()) video.open();
     // Arm the snapshot. The next rendered frame is copied into s3 by
     // grabStill() below and the switch happens on the frame after that.
     // Asking for a switch mid-melt snapshots the mix itself, so the picture
@@ -467,6 +509,9 @@
     // rotate. The textures it uploaded stay bound until something rebinds
     // them; this only releases the canvases behind them.
     if (window.patterns) patterns.release();
+    // The still of the outgoing frame is in s3 by now, so nothing on screen
+    // reads s8 any more if the incoming sketch does not.
+    if (window.video && !wantsVideo(sketch) && video.isOpen()) video.close();
     try {
       sketch.run();
     } catch (e) {

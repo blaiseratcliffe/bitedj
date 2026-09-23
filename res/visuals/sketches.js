@@ -1,8 +1,10 @@
-// The sketch library for the HDMI visuals page: twenty-four rotation sketches
+// The sketch library for the HDMI visuals page: twenty-seven rotation sketches
 // and the idle fallback. Sixteen are drawn from oscillators, noise and the
 // camera; the eight named pattern-* draw Book of Shapes SVG artwork that
-// patterns.js has rasterised, morphing it along a parameter sweep. The helpers
-// for those are grouped together below, after accent().
+// patterns.js has rasterised, morphing it along a parameter sweep; the three
+// named video-* draw a video clip that video.js plays into s8. The helpers
+// for the patterns are grouped together below, after accent(), and the
+// helpers for the video after the webcam's.
 //
 // The contract with director.js, which owns the rotation:
 //   - every chain here ends in .out(o0). o1 is free scratch for a sketch that
@@ -12,10 +14,12 @@
 //     nothing here may write to either; s3 holds the frozen outgoing frame
 //     and its texture is rewritten on every switch. o3 is written by nothing
 //     today and stays the director's as well. s4 to s7 belong to patterns.js
-//     and are reached through patterns.bind(), never by hand.
+//     and are reached through patterns.bind(), never by hand. s8 belongs to
+//     video.js: a sketch reads it with src(s8) and never inits or clears it.
 //   - a sketch that needs a pattern carries `pattern: true`, which keeps it
 //     out of the rotation until something has finished rasterising, exactly as
-//     `cam: true` keeps a sketch out until there is a camera.
+//     `cam: true` keeps a sketch out until there is a camera, and `video: true`
+//     keeps one out while there is no clip to play.
 //   - it clears the sketch-scoped beat listeners and sets window.sketchUpdate
 //     back to null on every switch, so run() is the right and the only place
 //     to call feed.onBeat(fn) or to assign window.sketchUpdate = (dt) => {}.
@@ -484,6 +488,85 @@
     return camOn() ? chain.blend(camEdges(), amount) : chain;
   }
 
+  // ---- video --------------------------------------------------------------
+  //
+  // video.js plays a clip into s8, 960x540 like the render target, so it
+  // needs no aspect correction. The three video sketches are the footage and
+  // carry `video: true`. Four others carry a `vidMix` naming how the footage
+  // is mixed into them, applied by the helpers below at run() time and only
+  // while a clip is open, so with no clips they run the chain they always
+  // did. The director opens the video for a vidMix sketch exactly as it
+  // opens the camera for a camMix one.
+  //
+  // Which four, and why those. Footage is a full-frame photograph, and it
+  // reads where the sketch gives it a shape to show through or a surface to
+  // move, not where it is laid over line work that is already dense:
+  //
+  //   bend   ridge-lines. The footage's luminance is added to the ridge
+  //          plot's warp, so sixty lines rise over the bright parts of the
+  //          picture and the film comes through as a line scan of itself.
+  //          vidBend(chain, amount).
+  //   lines  pattern-flow. The line work is lit by the footage, so the film
+  //          shows through the artwork's strokes and nowhere else; flow
+  //          patterns are the densest line work in the library, which is
+  //          what gives it enough lit pixels to be seen. vidLines(chain).
+  //   fill   logo-colour. The footage, in the palette, fills the boot logo's
+  //          letters in place of their stripes, inside the white outline.
+  //          vidFill(chain, shape) lays it inside a mask.
+  //   wash   scan-field. The palette wash under the scanline comb becomes
+  //          mostly footage, so the comb reads as a screen showing the film.
+  //          vidWash(chain, amount).
+  //
+  // The footage is never fed back through o0 beyond what these sketches
+  // already feed back: pattern-flow's smear and video-edges' are the only
+  // feedback that carries it.
+  const VID_BEND = 0.05;       // displacement, as a fraction of the frame
+  const VID_FLOOR = 0.4;     // how lit a stroke stays where the footage is black
+  const VID_SOFT = 3;          // video-edges' blur, in pixels of the footage
+  const vidOn = () => !!window.video && video.isOpen();
+  const vidGrey = () => src(s8).saturate(0);
+  // The footage graded into the palette: black to deep, mid grey to `mid`
+  // (magenta unless named), and the highlights on to pink. Each step is an
+  // add of a positive difference, so the grade rises with the footage's
+  // luminance everywhere; a layer() for the highlights dipped in brightness
+  // at the threshold, because luma() premultiplies. `con` is a number or a
+  // function, the contrast on the footage before it is graded, and `lift` a
+  // brightness added after it.
+  function vidGrade(con, mid, lift) {
+    const [dr, dg, db] = palette.rgb('deep');
+    const [mr, mg, mb] = palette.rgb(mid || 'magenta');
+    const [kr, kg, kb] = palette.rgb('pink');
+    const tone = () => vidGrey().contrast(con === undefined ? 1 : con).brightness(lift || 0);
+    // The 0 on each color() zeroes the added terms' alpha. add() sums alpha
+    // like any other channel, so without it the grade carried an alpha of 2
+    // to 3, and layer(), which mixes by the top layer's alpha, extrapolated
+    // past the footage: the first vidFill screenshot showed the logo's own
+    // stripes, inverted, through the footage in every letter.
+    return solid(dr, dg, db, 1)
+      .add(tone().color(mr - dr, mg - dg, mb - db, 0))
+      .add(tone().luma(0.62, 0.2).color(kr - mr, kg - mg, kb - mb, 0));
+  }
+  function vidBend(chain, amount) {
+    return vidOn() ? chain.modulate(vidGrey().brightness(-0.5), amount === undefined ? VID_BEND : amount) : chain;
+  }
+  // The contrast is there because the first screenshot, on a night-time
+  // clip, came out as dim line work with no film visible in it at all. The
+  // color(1, 1, 1, 0) keeps the multiplier's alpha at 1, for the reason at
+  // vidGrade(): smear() composites the work by its alpha.
+  function vidLines(chain) {
+    return vidOn() ? chain.mult(solid(VID_FLOOR, VID_FLOOR, VID_FLOOR, 1)
+      .add(vidGrey().contrast(1.5).color(1, 1, 1, 0), 1 - VID_FLOOR)) : chain;
+  }
+  // Lifted by 0.2. Without the lift a forest film graded to the same deep
+  // purples as logo-colour's field behind the letters, and on the
+  // screenshot the letters showed only as their white outline.
+  function vidFill(chain, shape, mid) {
+    return vidOn() ? chain.layer(vidGrade(1.1, mid, 0.2).mask(shape())) : chain;
+  }
+  function vidWash(chain, amount, mid) {
+    return vidOn() ? chain.blend(vidGrade(1, mid), amount) : chain;
+  }
+
   // ---- the Book of Shapes pattern family ---------------------------------
   //
   // patterns.js rasterises a pattern's seven SVG frames into 1024x1024
@@ -564,6 +647,13 @@
   }
   requestAnimationFrame(beatTick);
   const beats = () => beatT;
+  // video-kaleid's turn: 128 beats, 32 bars and 44 s at 174. It divides
+  // TURN_BEATS, so the wrap lands the turn where it would have been anyway.
+  // The corner of the frame moves about 3 px between rendered frames at that
+  // rate, a quarter of what pattern-grid measured at 32 beats, and footage
+  // is soft-edged where that sketch was thin lines.
+  const KALEID_BEATS = 128;
+  const VID_INSET = [0.15, 0.3];  // video-kaleid's sampling offset; see there
 
   // No pattern, no black screen: the wordmark is in memory from the first
   // frame the page ever drew.
@@ -680,12 +770,12 @@
     //
     // The modulator's red channel is zeroed, so the displacement is in y only
     // and the lines never slide along their own length.
-    { name: 'ridge-lines', cam: false, mono: true, camMix: 'bend', run() {
+    { name: 'ridge-lines', cam: false, mono: true, camMix: 'bend', vidMix: 'bend', run() {
         const bumps = () => noise(4.5, 0.006)
           .mult(noise(2.2, 0.005).thresh(0.3, 0.3))
           .mult(solid(0, 1, 0, 1));
-        camBend(osc(60 * TAU, 0, 0).rotate(Math.PI / 2)
-          .modulate(bumps(), () => (0.02 + 0.05 * feed.swell) * kick(KICK_WARP)()))
+        camBend(vidBend(osc(60 * TAU, 0, 0).rotate(Math.PI / 2)
+          .modulate(bumps(), () => (0.02 + 0.05 * feed.swell) * kick(KICK_WARP)())))
           .thresh(0.93, 0.01)
           .out(o0);
     } },
@@ -834,16 +924,18 @@
     // smear. The smear is doing the same job it does for ribbons: these
     // patterns are dense thin line work, and a soft edge moving a pixel
     // changes far less of the frame than a hard one.
-    { name: 'pattern-flow', cam: false, mono: true, pattern: true, camMix: 'bend', run() {
+    { name: 'pattern-flow', cam: false, mono: true, pattern: true, camMix: 'bend', vidMix: 'lines', run() {
         const p = patterns.take(['FLOW', 'PHYSICS']);
         if (!p) { patternFallback(); return; }
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
         const bright = accent(0.92, 0.06);
-        smear(swirl(camBend(sweepPair(0)
+        // The footage goes in after the square correction, so it is sampled
+        // at the screen's own aspect and not squeezed with the artwork.
+        smear(swirl(vidLines(camBend(sweepPair(0)
           .scrollX(driftX(0.02, 0.05))
           .scrollY(driftX(0.014, 0.037, 1.3)))
           .scale(kick(KICK_SCALE), 1, SQUARE_Y)
-          .mult(solid(bright, bright, bright, 1)), 0.3), 0.92, 1.0004)
+          .mult(solid(bright, bright, bright, 1))), 0.3), 0.92, 1.0004)
           .out(o0);
     } },
 
@@ -1010,6 +1102,30 @@
           .scale(() => 1.08 * kick(-KICK_SCALE)(), 1, SQUARE_Y);
         // The two layers twist against each other, as they turn.
         smear(camOver(swirl(left, 0.25).blend(swirl(right, -0.25), 0.5)), 0.88, 1.0004).out(o0);
+    } },
+
+    // Video 1. The footage as line work: grey, softened, posterised to four
+    // fixed levels and put through edges(), which is cam-contours' recipe on
+    // a film instead of a face. With five levels and no blur the first
+    // version outlined every leaf and every patch of grain, and the
+    // screenshot was a grey mesh of small closed contours over the whole
+    // frame; the blur and the fewer levels leave the shapes of the picture
+    // with black between them. The film
+    // moves on its own, so what the music adds is small: a warp that turns
+    // on the shared clock, sized by the swell and kicked on the beat, and a
+    // wake that lengthens with the swell. o1 holds the posterised footage so
+    // the detector's four copies are one texture read each.
+    { name: 'video-edges', cam: false, mono: true, video: true, camMix: 'bend', run() {
+        const field = () => osc(3, 0, 0).rotate(() => flow() * 0.05).brightness(-0.5);
+        // A four-tap blur, VID_SOFT pixels each way, before the levels.
+        const soft = (dx, dy) => vidGrey().scroll(dx * VID_SOFT / 960, dy * VID_SOFT / 540);
+        camBend(soft(1, 1).blend(soft(-1, -1), 0.5).blend(soft(1, -1).blend(soft(-1, 1), 0.5), 0.5)
+          .contrast(1.3)
+          .modulate(field(), () => (0.004 + 0.012 * feed.swell) * kick(KICK_WARP)()))
+          .scale(1.04)
+          .posterize(4, 1)
+          .out(o1);
+        smear(edges(() => src(o1), 3), 0.6, () => 1.001 + 0.003 * feed.swell).out(o0);
     } }
 
   ];
@@ -1032,7 +1148,7 @@
     // what is left of it on its side against the two edges: the logo was
     // unreadable on every frame the gate was open. Folding only the field
     // keeps the accent and keeps the type.
-    { name: 'logo-colour', cam: false, mono: false, camMix: 'edges', run() {
+    { name: 'logo-colour', cam: false, mono: false, camMix: 'edges', vidMix: 'fill', run() {
         const [dr, dg, db] = palette.rgb('deep');
         const [pr, pg, pb] = palette.rgb('purple');
         const [mr, mg, mb] = palette.rgb('magenta');
@@ -1046,11 +1162,18 @@
         // and the tile mask deals with fract(st), which otherwise stacks five
         // copies of the logo up the frame at this scale. Keying alone leaves
         // the repeats, masking alone leaves the black rectangle.
-        camOver(field()
+        const place = (c) => c.mask(oneTile())
+          .scale(() => (0.2 + 0.008 * feed.swell) * kick(KICK_SCALE)(), LOGO_X, 1);
+        // The letters' insides for the video fill: lit above the black key
+        // and below the white outline, whose luminance is 1 where the
+        // palest stripe, pink, is 0.70. So the footage replaces the
+        // stripes and the outline stays on top of it.
+        const letters = () => place(src(s2).thresh(LOGO_KEY[0], LOGO_KEY[1])
+          .diff(src(s2).thresh(0.85, 0.05)));
+        camOver(vidFill(field()
           .blend(field().kaleid(2), () => 0.12 + 0.5 * feed.swell)
           .modulate(noise(1.3, 0.015), () => 0.02 + 0.05 * feed.swell)
-          .layer(src(s2).luma(LOGO_KEY[0], LOGO_KEY[1]).mask(oneTile())
-            .scale(() => (0.2 + 0.008 * feed.swell) * kick(KICK_SCALE)(), LOGO_X, 1)), pink)
+          .layer(place(src(s2).luma(LOGO_KEY[0], LOGO_KEY[1]))), letters), pink)
           .out(o0);
     } },
 
@@ -1172,7 +1295,7 @@
     // at startup, and for the twenty seconds between a stop and the idle
     // fallback. Taken literally that is a quarter turn of hue, straight out of
     // the palette, so a missing tempo falls back to the target instead.
-    { name: 'scan-field', cam: false, mono: false, camMix: 'edges', run() {
+    { name: 'scan-field', cam: false, mono: false, camMix: 'edges', vidMix: 'wash', run() {
         const [mr, mg, mb] = palette.rgb('magenta');
         const [vr, vg, vb] = palette.rgb('violet');
         // The spacing goes through a slow spring rather than reading the
@@ -1198,9 +1321,11 @@
           .scrollY(() => (flow() * drift) % 1)
           .brightness(0.45).contrast(1.4)
           .mult(solid(lit, lit, lit, 1));
-        // The outline goes on after the comb, so it is not striped.
-        camOver(osc(18, 0.02, 0).color(mr, mg, mb)
-          .add(noise(3, 0.02).color(vr, vg, vb), 0.4)
+        // The outline goes on after the comb, so it is not striped. The
+        // footage goes into the wash before the hue drift, the warp and the
+        // kick, so it moves with the wash and is striped by the comb.
+        camOver(vidWash(osc(18, 0.02, 0).color(mr, mg, mb)
+          .add(noise(3, 0.02).color(vr, vg, vb), 0.4), 0.75, 'violet')
           .hue(() => {
             const bpm = feed.bpm > 20 ? feed.bpm : 174;
             return 0.02 * Math.sin(flow() * 0.2) + 0.25 * ((bpm - 174) / 174);
@@ -1282,6 +1407,51 @@
             .luma(0.12, 0.08)
             .color(cr, cg, cb), 0.3)),
           () => sweepPair(0).scale(0.55, 1, SQUARE_Y).luma(0.12, 0.08).color(kr, kg, kb))
+          .out(o0);
+    } },
+
+    // Video 2. The footage graded into the palette by vidGrade(): shadows
+    // deep, mid tones magenta, highlights pink, so a film of any colour
+    // arrives in the boot logo's colours. The swell lifts the contrast, which
+    // pushes more of the picture out to the deep and the pink ends through a
+    // loud passage. The kick is on the scale, which starts at 1.06 so the
+    // kick's undershoot never shrinks the footage below the frame and shows
+    // its repeat at the edges, and the swirl turns the middle of it.
+    { name: 'video-grade', cam: false, mono: false, video: true, camMix: 'edges', run() {
+        const pink = palette.rgb('pink');
+        camOver(swirl(vidGrade(() => 1.05 + 0.5 * feed.swell)
+          .scale(() => 1.06 * kick(KICK_SCALE)()), 0.3), pink)
+          .out(o0);
+    } },
+
+    // Video 3. The footage folded six ways, graded through violet rather
+    // than magenta so it is not video-grade folded. The fold count is fixed,
+    // for the reason at pattern-radial; what the beat clock drives is the
+    // rotation, one turn every KALEID_BEATS, and the swell is on a noise
+    // warp of the footage before it is folded, so a loud passage melts the
+    // wedges. Inside the person, as in plasma-kaleid: the same footage folded
+    // three ways at half size, turning the other way.
+    { name: 'video-kaleid', cam: false, mono: false, video: true, camMix: 'cut', run() {
+        const turn = () => 2 * Math.PI * beats() / KALEID_BEATS;
+        // kaleid() hands back points at 0 to 0.71 in x and 0 to 0.35 in y,
+        // so every fold line samples the footage's edge row, and the noise
+        // warp pushed those samples across it and wrapped them to the far
+        // edge: the first screenshot had a dark seam down each of the six
+        // fold lines. The scroll moves the wedge to 0.15 to 0.86 in x and
+        // 0.3 to 0.65 in y, more than the warp's 0.08 at full swell from
+        // every edge. An inset of 0.12 each way cured the seam too, but it
+        // kept the wedge within a third of the frame's edge, and on a night
+        // clip the screenshot came out a flat dark purple; with the wedge
+        // across the middle the same clip shows its lit buildings folded.
+        // scroll() adds its arguments to the coordinate, so these are
+        // positive.
+        const inset = (c) => c.scroll(VID_INSET[0], VID_INSET[1]);
+        camCut(inset(vidGrade(1.15, 'violet'))
+          .modulate(noise(1.3, 0.012), () => 0.02 + 0.06 * feed.swell)
+          .kaleid(6)
+          .rotate(turn)
+          .scale(() => (1 + 0.05 * feed.swell) * kick(KICK_SCALE)()),
+          () => inset(vidGrade(1.15, 'violet')).kaleid(3).rotate(() => -turn()).scale(0.5))
           .out(o0);
     } }
 
