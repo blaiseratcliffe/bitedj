@@ -445,7 +445,10 @@
     }
   }, 1000);
 
-  // Evidence for the load test.
+  // Evidence for the load test, and the knobs in force: ~/.bitedj-visuals.js
+  // on the Pi is optional, and this line is how to tell whether it loaded.
+  console.log('visuals: settings',
+    window.visualsSettings ? JSON.stringify(window.visualsSettings) : 'file absent, defaults in code');
   (function logRenderer() {
     const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
     const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');

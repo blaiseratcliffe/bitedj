@@ -147,10 +147,14 @@
   // energy at 1.00 on every kick; at 2 it peaks in the high 0.8s.
   const ENV_CREST = 2;
 
+  // ?react= on the URL wins, then `reactivity` in ~/.bitedj-visuals.js on
+  // the Pi (see index.html), then 1.
   const params = new URLSearchParams(location.search);
   const REACTIVITY = (() => {
-    const v = parseFloat(params.get('react'));
-    return v > 0 && v < 10 ? v : 1;
+    const fromUrl = parseFloat(params.get('react'));
+    if (fromUrl > 0 && fromUrl < 10) return fromUrl;
+    const fromFile = parseFloat((window.visualsSettings || {}).reactivity);
+    return fromFile > 0 && fromFile < 10 ? fromFile : 1;
   })();
 
   const feed = {

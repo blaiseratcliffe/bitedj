@@ -275,13 +275,43 @@
   // line field to be seen to kick without the whole field jumping a pixel;
   // the header explains why those fields cannot take the 0.08 treatment.
   // BOUNCE scales every amount at once, and is the number to change from
-  // the TV.
-  const BOUNCE = 1;
+  // the TV: `bounce` in ~/.bitedj-visuals.js on the Pi (see index.html).
+  const SETTINGS = window.visualsSettings || {};
+  const setting = (key, fallback) => (SETTINGS[key] === undefined ? fallback : SETTINGS[key]);
+  const BOUNCE = Number(setting('bounce', 1));
   function kick(amount) {
     return () => 1 + BOUNCE * amount * feed.bounce;
   }
   const KICK_SCALE = 0.08;
   const KICK_WARP = 0.4;
+
+  // ---- swirl ---------------------------------------------------------------
+  //
+  // A twist about the centre of the frame. hydra has no twist of its own, so
+  // it is modulateRotate by a soft disc: the centre turns by the full amount
+  // and the frame's edge not at all, which is a vortex rather than a
+  // rotation, and it can go on a sketch whose corners a rotation would
+  // smear. The amount rides the swell, so it winds up through a build and
+  // lets go on the drop, and the bounce adds a few degrees on the kick and
+  // springs back. Inside a feedback loop (flow-lines, tunnel) the amount is
+  // a trickle, because it is applied to the previous frame every frame and
+  // compounds into a spiral on its own.
+  //
+  // Which sketches take it and which do not is a judgement about line
+  // density, the same one the header makes about energy: a vortex on a
+  // ridge plot or a contour map is soup, and the scan-field comb and the
+  // edge sketches feed thresholds that a moving coordinate would flicker.
+  //
+  // `swirl: false` in ~/.bitedj-visuals.js turns it off, and swirl() then
+  // hands the chain back untouched; `swirlAmount` scales it.
+  const SWIRL_ON = setting('swirl', true) !== false;
+  const SWIRL = Number(setting('swirlAmount', 1));
+  const vortex = () => shape(64, 0, 1);
+  function swirl(chain, amount) {
+    if (!SWIRL_ON) return chain;
+    return chain.modulateRotate(vortex(),
+      () => SWIRL * amount * (0.4 + 0.6 * feed.swell + 0.3 * feed.bounce));
+  }
 
   // ---- the webcam in every sketch -----------------------------------------
   //
@@ -438,11 +468,11 @@
         const bright = accent(0.86, 0.1);
         const size = () => (0.325 + 0.02 * feed.swell) * kick(KICK_SCALE)();
         // Inside the person: the wordmark small and turned on its side.
-        smear(camCut(wordmark(size)
+        smear(swirl(camCut(wordmark(size)
           .scrollY(() => 0.012 * Math.sin(flow() * 0.23))
           .rotate(() => 0.035 * Math.sin(flow() * 0.5))
           .mult(solid(bright, bright, bright, 1)),
-          () => wordmark(0.16).rotate(Math.PI / 2).mult(solid(0.7, 0.7, 0.7, 1))), 0.85, 1.003)
+          () => wordmark(0.16).rotate(Math.PI / 2).mult(solid(0.7, 0.7, 0.7, 1))), 0.12), 0.85, 1.003)
           .out(o0);
     } },
 
@@ -483,12 +513,12 @@
           .rotate(a);
         const turn = () => flow() * 0.025
           + 0.03 * feed.spring('kaleid-kick', () => feed.pulse, 1);
-        smear(camOver(solid(0, 0, 0, 0)
+        smear(swirl(camOver(solid(0, 0, 0, 0)
           .layer(arm(0))
           .layer(arm(Math.PI / 2))
           .layer(arm(Math.PI))
           .layer(arm(-Math.PI / 2))
-          .rotate(turn)), 0.8, 1.0012)
+          .rotate(turn)), 0.2), 0.8, 1.0012)
           .out(o0);
     } },
 
@@ -514,9 +544,9 @@
         const lean = () => 0.07 + 0.06 * Math.sin(flow() * 0.9)
           + 0.04 * feed.energy + 0.01 * feed.pulse;
         const bright = accent(0.88, 0.08);
-        smear(camBend(wordmark(() => 0.34 * kick(KICK_SCALE)())
+        smear(swirl(camBend(wordmark(() => 0.34 * kick(KICK_SCALE)())
           .modulate(wave(), lean))
-          .mult(solid(bright, bright, bright, 1)), 0.88, 1.0015)
+          .mult(solid(bright, bright, bright, 1)), 0.12), 0.88, 1.0015)
           .out(o0);
     } },
 
@@ -605,8 +635,10 @@
         // feedback and an add would pile up to white where the person
         // stands still. Blended at a few percent it arrives as a ghost that
         // the flow field then carries off in trails.
-        camOverBlend(src(o0)
-          .modulate(noise(3.2, 0.03), () => (0.004 + 0.008 * feed.energy) * kick(KICK_WARP)())
+        // The swirl sits on the feedback read, a trickle per frame, so the
+        // trails spiral instead of streaming straight.
+        camOverBlend(swirl(src(o0)
+          .modulate(noise(3.2, 0.03), () => (0.004 + 0.008 * feed.energy) * kick(KICK_WARP)()), 0.012)
           .mult(solid(0.965, 0.965, 0.965, 1))
           .layer(keyed(noise(22, 0.06).thresh(0.8, 0.02))
             .mult(solid(seed, seed, seed, 1))), 0.08)
@@ -693,11 +725,11 @@
         if (!p) { patternFallback(); return; }
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
         const bright = accent(0.92, 0.06);
-        smear(camBend(sweepPair(0)
+        smear(swirl(camBend(sweepPair(0)
           .scrollX(driftX(0.02, 0.05))
           .scrollY(driftX(0.014, 0.037, 1.3)))
           .scale(kick(KICK_SCALE), 1, SQUARE_Y)
-          .mult(solid(bright, bright, bright, 1)), 0.92, 1.0004)
+          .mult(solid(bright, bright, bright, 1)), 0.3), 0.92, 1.0004)
           .out(o0);
     } },
 
@@ -776,9 +808,9 @@
         const p = patterns.take(['NOISE', 'ORGANIC']);
         if (!p) { patternFallback(); return; }
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
-        smear(camBend(sweepPair(0)
+        smear(swirl(camBend(sweepPair(0)
           .modulate(noise(2.1, 0.008), () => 0.025 + 0.07 * feed.swell + 0.01 * feed.energy))
-          .scale(kick(KICK_SCALE), 1, SQUARE_Y), 0.86, 1.0004)
+          .scale(kick(KICK_SCALE), 1, SQUARE_Y), 0.3), 0.86, 1.0004)
           .out(o0);
     } },
 
@@ -808,12 +840,12 @@
         window.sketchUpdate = () => patterns.bindFrames(p, base, top, wave(), 0);
         // Inside the person: the same dissolve at half size, leaning the
         // other way.
-        smear(camCut(sweepPair(0)
+        smear(swirl(camCut(sweepPair(0)
           .scrollX(driftX(0.03, 0.041))
           .scrollY(driftX(0.02, 0.029, 2.1))
           .rotate(() => 0.05 * Math.sin(flow() * 0.017))
           .scale(() => (1.05 + 0.04 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y),
-          () => sweepPair(0).rotate(() => -0.3 - 0.05 * Math.sin(flow() * 0.017)).scale(0.5, 1, SQUARE_Y)), 0.92, 1.0008)
+          () => sweepPair(0).rotate(() => -0.3 - 0.05 * Math.sin(flow() * 0.017)).scale(0.5, 1, SQUARE_Y)), 0.25), 0.92, 1.0008)
           .out(o0);
     } },
 
@@ -862,7 +894,8 @@
           .scrollX(driftX(-0.018, 0.045))
           .rotate(() => -flow() * 0.004)
           .scale(() => 1.08 * kick(-KICK_SCALE)(), 1, SQUARE_Y);
-        smear(camOver(left.blend(right, 0.5)), 0.88, 1.0004).out(o0);
+        // The two layers twist against each other, as they turn.
+        smear(camOver(swirl(left, 0.25).blend(swirl(right, -0.25), 0.5)), 0.88, 1.0004).out(o0);
     } }
 
   ];
@@ -941,12 +974,14 @@
         // from o0, because anything read back from o0 here is inside the
         // feedback loop, and an inverted or hue-shifted copy of the previous
         // frame flickers at the frame rate.
-        camCut(osc(() => 14 * kick(KICK_SCALE)(), 0.015, 0).color(r, g, b)
+        // The swirl is a trickle here too: it is inside the feedback and
+        // compounds into the tunnel's own spiral.
+        camCut(swirl(osc(() => 14 * kick(KICK_SCALE)(), 0.015, 0).color(r, g, b)
           .blend(osc(() => 22 * kick(KICK_SCALE)(), -0.011, 0).color(r2, g2, b2), 0.5)
           .modulate(src(o0), () => 0.15 + 0.04 * feed.swell)
           .scale(() => 1.002 + 0.006 * feed.energy + 0.003 * feed.pulse)
           .rotate(() => flow() * 0.02)
-          .kaleid(3),
+          .kaleid(3), 0.015),
           () => osc(40, 0.02, 0).color(kr, kg, kb).rotate(() => -flow() * 0.03).kaleid(5))
           .out(o0);
     } },
@@ -969,9 +1004,9 @@
           + 0.07 * feed.spring('drop-kick', () => feed.pulse, 2.2);
         camOver(solid(dr, dg, db, 1)
           .add(noise(2.4, 0.02).color(pr, pg, pb), 0.35)
-          .add(osc(16, 0.04, 0).color(kr, kg, kb).kaleid(5)
+          .add(swirl(osc(16, 0.04, 0).color(kr, kg, kb).kaleid(5)
             .modulate(noise(1.1, 0.015), () => 0.04 + 0.05 * feed.swell)
-            .scale(() => (1 + 0.06 * Math.sin(flow() * 0.23)) * kick(KICK_SCALE)()), bloom), [kr, kg, kb])
+            .scale(() => (1 + 0.06 * Math.sin(flow() * 0.23)) * kick(KICK_SCALE)()), 0.4), bloom), [kr, kg, kb])
           .out(o0);
     } },
 
@@ -1077,10 +1112,10 @@
           .add(noise(3, 0.04).color(vr, vg, vb), 0.45)
           .add(osc(24, -0.03, 0).thresh(0.7, 0.1).color(kr, kg, kb),
             () => 0.12 + 0.2 * feed.energy);
-        camCut(plasma()
+        camCut(swirl(plasma()
           .kaleid(6)
           .rotate(() => flow() * 0.11)
-          .scale(() => (1 + 0.05 * feed.swell) * kick(KICK_SCALE)()),
+          .scale(() => (1 + 0.05 * feed.swell) * kick(KICK_SCALE)()), 0.4),
           () => plasma().kaleid(3).rotate(() => -flow() * 0.11).scale(0.5))
           .out(o0);
     } },
@@ -1127,11 +1162,11 @@
           .add(osc(5, 0.012, 0).color(vr, vg, vb).rotate(() => flow() * 0.02), 0.1);
         // Inside the person: the artwork small and in solid pink.
         camCut(field()
-          .layer(sweepPair(0)
+          .layer(swirl(sweepPair(0)
             .scrollX(driftX(0.015, 0.04))
             .scale(() => (1.04 + 0.05 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y)
             .luma(0.12, 0.08)
-            .color(cr, cg, cb)),
+            .color(cr, cg, cb), 0.3)),
           () => sweepPair(0).scale(0.55, 1, SQUARE_Y).luma(0.12, 0.08).color(kr, kg, kb))
           .out(o0);
     } }
