@@ -58,14 +58,13 @@
 // so the morph always runs the whole sweep.
 //
 // Cost. Rasterising is not free and the heavy end of the library is very
-// heavy: the timings are in the cost comment below. Nothing here
-// rasterises on demand. A pattern is pulled into the cache in the background,
-// no more than one frame every couple of animation frames and with the
-// coverage readback in a frame of its own, so the main thread never stalls for
-// longer than one SVG decode. A sketch only ever gets a pattern that is
-// already sitting in memory: `take()` never blocks and returns null when the
-// cache is empty, which the director treats exactly like a camera sketch with
-// no camera.
+// heavy. Nothing here rasterises on demand: a pattern is pulled into the cache
+// in the background, no more than one frame every couple of animation frames,
+// with the coverage readback and the peak readback each in a frame of their
+// own, so no single animation frame carries more than one piece of that work.
+// A sketch only ever gets a pattern that is already sitting in memory:
+// `take()` never blocks and returns null when the cache is empty, which the
+// director treats exactly like a camera sketch with no camera.
 //
 // Memory. A frame is a 1024x1024 canvas, 4.19 MB of RGBA, so a pattern is
 // 29.4 MB and the peak is three patterns, 88 MB, plus 16.8 MB of GPU memory
@@ -120,44 +119,36 @@
   // Pi proved that twice over: concentric_arc_truchet_2 took 509 ms in its
   // worst frame there against 132 here, and noise_circle_1 took 225 ms on a
   // 137 KB frame, which is a worse cost per byte than patterns five times its
-  // size. So the cost is not predicted from the file at all any more. Every
-  // pattern is measured once, on the machine it is running on, and the result
-  // is remembered: `{worstMs, when}` per slug in localStorage. A pattern whose
-  // measured worst frame is over WORST_FRAME_BUDGET_MS is retired and is not
-  // offered again; one that is over by more than double is evicted on the
-  // spot as well, because it would otherwise hold the screen for a minute of a
-  // set on a box that has just said it cannot afford it, while one that is
-  // over by less is left in the cache it has already been rasterised into.
-  //
-  // A pattern nobody has measured stays eligible, which is what makes this
-  // converge: every pattern is tried exactly once per profile, the affordable
-  // set ends up the same whatever order they load in, and the cost of finding
-  // out is one hitch per pattern per install rather than one per pattern per
-  // boot. An earlier version ratcheted a byte cap down from the first pattern
-  // that overran, which stranded most of the library behind whichever heavy
-  // one happened to load first.
+  // size. So the cost is not predicted from the file at all. It is measured on
+  // the machine the page is running on and remembered per slug in
+  // localStorage, and calibrate() below is where those rules are written down:
+  // this comment deliberately does not repeat them, because there was a
+  // version of this file where the two descriptions disagreed and the one at
+  // the top was a round out of date.
   //
   // 120 ms is three dropped frames at the page's 30 fps cap.
-  //
-  // A retirement is not forever. A record older than COST_STALE_MS is dropped
-  // at startup and its pattern measured again, so a faster Chromium or a
-  // quicker box brings the library back on its own rather than needing the
-  // profile cleared.
   const MAX_FRAME_BYTES = 1.6e6;
   const COST_KEY = 'bitedj.patterns.cost';
   const COST_STALE_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days
   const STRIKES = 2;   // over-budget samples before a pattern is retired
 
   // slug -> {worstMs, when, n, over}: the last worst frame, when it was taken,
-  // how many samples there have been and how many of them in a row were over
-  // budget. Retirement needs STRIKES of those in a row, and any sample inside
-  // the budget puts the count back to zero.
+  // how many samples there have been, and how many of them were over budget.
+  // STRIKES of those retires the pattern. They do not have to be consecutive
+  // and an in-budget sample does not cancel one: the only thing that clears a
+  // strike is the record ageing out, thirty days later.
   //
   // One sample is not enough, and the Pi proved it: noise_circle_1 read 225 ms
   // on one deploy and 32 ms on the next. A single measurement taken while the
   // page happened to be busy would otherwise cost that pattern thirty days.
-  // Two samples in a row is still one hitch per pattern per install more than
-  // the old rule, which is nothing against losing a pattern to a coincidence.
+  //
+  // Two that have to be consecutive is not enough either, which is the fault
+  // this wording replaces. A pattern sitting on the line, 118 ms then 126 then
+  // 115 then 131, would reset its count on every good sample, never retire,
+  // and pay a fresh stall every time the rotation loaded it, for ever.
+  // Counting strikes within the thirty days converges instead: a pattern that
+  // is genuinely too slow reaches two and goes, and one that is genuinely
+  // quick enough never reaches one.
   //
   // localStorage is wrapped at both ends because a page on file:// with a
   // cleared profile can throw on either, and a loader that throws at startup
@@ -563,21 +554,23 @@
   const seen = [];
   const rejected = [];   // slugs whose load failed or was refused on its own
                          // merits; not retried this session
-  // Slugs whose load was abandoned by the watchdog. Separate from `rejected`
-  // and from the cost map on purpose: a timeout says nothing about the
-  // artwork. Every step of a load is paced by requestAnimationFrame and a
-  // blanked or occluded display stops those, so the commonest way to reach
-  // the watchdog is that nobody was looking at the screen. That must not cost
-  // a pattern thirty days, so it costs it this session and no longer.
+  // Slugs not to offer again this session, and nothing more than this session:
+  // a load the watchdog gave up on while the page was visible, and a pattern
+  // evicted for costing more than double the budget. Separate from `rejected`
+  // and from the cost map on purpose, because neither is a verdict about the
+  // artwork that should outlive the page.
   const skipped = [];
   let loading = false;
   let tagTurn = 0;
 
   // What take() will hand out and what ready() counts: the same predicate, so
   // the director cannot be told a pattern sketch is runnable and then handed
-  // nothing. A retired or skipped resident is neither.
+  // nothing. `skipped` is deliberately not tested here: a slug only reaches it
+  // by never finishing a load or by being evicted as it was added, so no
+  // resident is ever in it, and a test that cannot fire reads as protection
+  // and gives none.
   function usable(e) {
-    return !e.busy && !retired(e.meta.slug) && skipped.indexOf(e.meta.slug) < 0;
+    return !e.busy && !retired(e.meta.slug);
   }
 
   function pickFrom(pool) {
@@ -599,11 +592,16 @@
   // because a prewarm that declines to load anything leaves the family with
   // whatever it has: first to a pattern already seen, then to any group at
   // all.
-  // `absent` is the entry the caller is about to evict, if it has one. It is
-  // treated as already gone, both for the tag coverage and for cached(), so
-  // the eviction and the pick agree about what the cache will look like.
+  // `absent` is the entry the caller is about to evict, if it has one. Its tag
+  // group counts as uncovered, because that is the hole the new pattern is
+  // being fetched to fill, but its own slug still counts as present: a pick
+  // that returned the artwork about to be thrown away would free 29 MB of
+  // finished frames and then rasterise the identical file again, seven stalls
+  // to arrive back where it started. That gets likelier as `seen` fills and
+  // the pool tier runs out of unseen candidates, which is exactly when the box
+  // can least afford it.
   function pickPrewarm(absent) {
-    const here = (slug) => cache.some(e => e !== absent && e.meta.slug === slug)
+    const here = (slug) => cache.some(e => e.meta.slug === slug)
       || rejected.indexOf(slug) >= 0
       || skipped.indexOf(slug) >= 0;
     const covered = Object.create(null);
@@ -705,12 +703,9 @@
   // seconds later, which is the one-at-a-time invariant this loader is built
   // on and roughly doubles the per-frame cost while it lasts.
   //
-  // The watchdog writes no cost record and retires nothing. Every step of a
-  // load is paced by requestAnimationFrame and Chromium stops those for a
-  // hidden, occluded or blanked page, while setTimeout keeps running, so the
-  // commonest way to reach this code is that nobody was looking at the screen.
-  // The slug goes in `skipped` for the session, and the next boot may try it
-  // again.
+  // The watchdog writes no cost record and retires nothing, and if the page
+  // was hidden when it fired it does not even blame the slug. What it costs a
+  // pattern at worst is the rest of this session.
   const LOAD_TIMEOUT_MS = 60000;
   let generation = 0;
 
@@ -731,10 +726,7 @@
     const going = cache.length >= CACHE_MAX ? victim() : null;
     const meta = pickPrewarm(going);
     if (!meta) return;
-    if (going) {
-      evict(going);
-      lastSwapAt = performance.now();
-    }
+    if (going) evict(going);
     loading = true;
     const t0 = performance.now();
     const mine = ++generation;
@@ -745,6 +737,24 @@
       generation += 1;          // stops the orphan at its next resumption
       loading = false;
       if (building) freeFrames(building);
+      // Was anybody looking? Every step of a load is paced by
+      // requestAnimationFrame and Chromium stops those for a hidden, occluded
+      // or blanked page, so a timeout on a page nobody can see says nothing
+      // about the file. Blaming the slug for it walks the whole library into
+      // `skipped` at roughly one per 62 s, which is forty minutes of overnight
+      // blanking to leave the prewarm with nothing pickable for the rest of
+      // the session, and the log saying "skipped" forty times and nothing
+      // saying the prewarm is now inert. So a hidden page costs the partial
+      // load and one retry, and no more; `soon()` is not called either, since
+      // two seconds later the page is still hidden.
+      const seenIt = typeof document.visibilityState !== 'string'
+        || document.visibilityState === 'visible';
+      if (!seenIt) {
+        console.log('visuals: pattern load timed out', meta.slug,
+          'while the page was hidden, not counted');
+        setTimeout(prewarm, PREWARM_MS);
+        return;
+      }
       skipped.push(meta.slug);
       console.log('visuals: pattern load timed out', meta.slug,
         'skipped for this session');
@@ -767,6 +777,12 @@
       }
       cache.push(entry);
       trim(CACHE_MAX);
+      // The rotation clock runs from the moment the cache is full, not from
+      // the moment something was thrown out of it. Anchoring it on the
+      // eviction left it at zero through the whole fill, so the first
+      // replacement could fall due three minutes after the page started rather
+      // than three minutes after there was anything to replace.
+      if (cache.length >= CACHE_MAX) lastSwapAt = performance.now();
       console.log('visuals: pattern ready', meta.slug,
         (performance.now() - t0).toFixed(0) + ' ms total,',
         entry.ms.toFixed(0) + ' ms on the main thread,',
@@ -794,30 +810,34 @@
   // What the box actually did, written down so it is not discovered again.
   //
   // Every completed load writes {worstMs, when, n, over} against the slug.
-  // `over` counts over-budget samples in a row and any sample inside the
-  // budget puts it back to zero; at STRIKES in a row the pattern is retired
-  // and eligible() drops it, so neither the prewarm nor take() offers it again
-  // on this profile until the record goes stale.
+  // `over` is the number of over-budget samples inside the life of the record;
+  // at STRIKES the pattern is retired and eligible() drops it, so neither the
+  // prewarm nor take() offers it again until the record ages out thirty days
+  // later. An in-budget sample updates `worstMs` and `n` and leaves `over`
+  // alone, so two overruns retire a pattern whether or not anything good
+  // happened in between.
   //
   // One sample is not enough to retire anything. The worst frame of a load
   // depends on what else the page was doing, and the Pi read noise_circle_1 at
   // 225 ms on one deploy and 32 ms on the next: a rule that retired on the
   // first number would have lost that pattern for thirty days on a
-  // coincidence. Two in a row costs one extra hitch per pattern per install
-  // and cannot be reached by bad luck twice.
+  // coincidence.
   //
-  // The eviction at more than double the budget is separate and immediate, for
-  // the same reason as always: 240 ms is not something to leave on screen for
-  // a minute while the second sample is collected. It is one `over` sample
-  // like any other, not a retirement, and the pattern is eligible again the
-  // moment it has been evicted.
+  // The eviction at more than double the budget is separate and immediate:
+  // 240 ms is not something to leave on screen for a minute while a second
+  // sample is collected. It is one `over` sample like any other, not a
+  // retirement, and the slug goes into `skipped` with it, because the one
+  // pattern that should not be at the front of the queue two seconds later is
+  // the one just thrown out for costing too much. Its second sample comes from
+  // the next session.
   //
-  // An unmeasured pattern is always eligible. That is the whole design: every
-  // pattern is tried at most twice per profile, the affordable set converges
-  // to the same thing whatever order they load in, and none of it depends on
-  // predicting cost from the file. The version before this ratcheted a byte
-  // cap down from the first pattern that overran, which stranded most of the
-  // library behind whichever heavy one happened to load first.
+  // What this is not is a promise about how many times a pattern is measured.
+  // Every completed load calibrates, so a pattern comfortably inside the
+  // budget is re-measured every time the rotation loads it and never retires,
+  // and a pattern over the budget twice within thirty days retires. The
+  // version before this ratcheted a byte cap down from the first pattern that
+  // overran, which stranded most of the library behind whichever heavy one
+  // happened to load first.
   function calibrate(entry) {
     const slug = entry.meta.slug;
     const was = cost[slug];
@@ -826,7 +846,7 @@
       worstMs: Math.round(entry.worst),
       when: Date.now(),
       n: (was && isFinite(was.n) ? was.n : 0) + 1,
-      over: over ? strikes(slug) + 1 : 0
+      over: strikes(slug) + (over ? 1 : 0)
     };
     writeCost();
     if (!over) return;
@@ -839,6 +859,7 @@
     }
     if (entry.worst > 2 * WORST_FRAME_BUDGET_MS && !entry.held) {
       evict(entry, 'over the frame budget by more than double');
+      skipped.push(slug);
     }
     sweepRetired();
     soon();
