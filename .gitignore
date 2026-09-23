@@ -71,3 +71,9 @@ res/qrc_mixxx.cc
 # allows on-screen use but not redistribution as patterns, so they are deployed
 # from the working tree (deploy-skin.sh rsyncs res/) and never committed.
 res/visuals/assets/patterns/
+
+# Bite DJ: video clips for the visuals, and the index.js generated from them.
+# A clip is usually someone else's film, which we may show but not publish, so
+# clips are deployed from the working tree (deploy-skin.sh rsyncs res/) and
+# never committed. tools/prepare-video.py makes them.
+res/visuals/assets/video/
