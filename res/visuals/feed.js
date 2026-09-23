@@ -173,7 +173,10 @@
       return REACTIVITY_LEVELS[this.settings.reactivity] || 1;
     },
     _beatFns: [], _beatAlwaysFns: [], _beatFrames: 0,
-    _lastFrameAt: 0, _max: [AGC_FLOOR, AGC_FLOOR, AGC_FLOOR, AGC_FLOOR],
+    // -Infinity, not 0: performance.now() is under DEAD_AFTER_MS (2000) for
+    // the page's first two seconds, so 0 would read as a live frame before
+    // ingest() ever landed one.
+    _lastFrameAt: -Infinity, _max: [AGC_FLOOR, AGC_FLOOR, AGC_FLOOR, AGC_FLOOR],
     _prevBeat: [], _masterDeck: -1,
     // Targets set by ingest() at 30 Hz, chased by the render clock.
     _want: { bass: 0, lowmid: 0, mid: 0, high: 0, peak: 0, energy: 0, swell: 0 },
