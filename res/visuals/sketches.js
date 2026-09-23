@@ -288,11 +288,23 @@
 
   // ---- swirl ---------------------------------------------------------------
   //
-  // A twist about the centre of the frame. hydra has no twist of its own, so
-  // it is modulateRotate by a soft disc: the centre turns by the full amount
-  // and the frame's edge not at all, which is a vortex rather than a
-  // rotation, and it can go on a sketch whose corners a rotation would
-  // smear.
+  // A twist: the picture turns by the full angle at a centre point and by
+  // less further out, down to nothing at TWIST_R from it, which is a vortex
+  // rather than a rotation, and it can go on a sketch whose corners a
+  // rotation would smear.
+  //
+  // hydra has no twist of its own. The first version was modulateRotate by a
+  // soft disc, shape(64, 0, 1), and that had two faults. The centre was
+  // pinned to the middle of the frame. And both the rotation and the disc
+  // worked in 0..1 texture coordinates on a 16:9 frame, so the vortex was an
+  // ellipse 16:9 wide and anything inside it sheared as it turned instead of
+  // turning. twist() below is a coordinate function of our own, registered
+  // through hydra's setFunction: it measures the distance from the centre and
+  // does the rotation with x multiplied by the frame's aspect, so both happen
+  // in square units, then divides the aspect back out. The vortex is round
+  // and a shape inside it keeps its proportions as it turns. It is
+  // registered the first time swirl() runs rather than when this file loads,
+  // because director.js builds hydra after this file has run.
   //
   // The first version held the angle at a fixed bend, swirlAmount() * amount
   // * (0.4 + 0.6 * swell + 0.3 * bounce), and only swell moved it: swell is a
@@ -313,11 +325,16 @@
   // 43 to 54 on kaleid and plasma, the same three groupings as the numbers
   // above.
   //
+  // The centre wanders too, on a slow figure-eight about the middle of the
+  // frame, on the same beat clock, so a vortex that always sat dead centre
+  // now drifts across the picture over sixteen bars. pattern-stack's two
+  // layers share the centre and swing in opposite directions, as before.
+  //
   // Inside a feedback loop (flow-lines, tunnel) the angle is applied to the
   // previous frame every frame, so a swinging angle there would wind the
   // spiral up and unwind it again rather than turning it steadily; those two
-  // keep the original fixed-bend formula, unchanged, through
-  // swirlTrickle(chain, amount).
+  // keep the original fixed-bend formula and the original centred disc,
+  // unchanged, through swirlTrickle(chain, amount).
   //
   // Which sketches take it and which do not is a judgement about line
   // density, the same one the header makes about energy: a vortex on a
@@ -325,8 +342,8 @@
   // edge sketches feed thresholds that a moving coordinate would flicker.
   //
   // From the Swirl row, the same four levels as the bounce. 0 leaves the
-  // modulateRotate in the chain with an angle of 0, which is a no-op, so
-  // turning the swirl off takes effect on the next frame without a rebuild.
+  // twist in the chain with an angle of 0, which is a no-op, so turning the
+  // swirl off takes effect on the next frame without a rebuild.
   const SWIRL_LEVELS = [0, 0.5, 1, 1.5];
   const swirlAmount = () => {
     const v = SWIRL_LEVELS[feed.settings.swirl];
@@ -341,6 +358,22 @@
   // amount 0.4 to 0.5 (kaleid, plasma) to about 43 to 54.
   const SWING_BEATS = 8;
   const SWING = 2;
+  // The twist's reach, in units of the frame height: the angle falls from
+  // full at the centre to nothing at this distance. The old disc reached
+  // zero half the frame height above and below the centre (shape() spans
+  // -1..1 on each axis and its falloff ended at 1), so 0.5 keeps the vortex
+  // exactly as tall as it was; it is now as wide as it is tall, where the
+  // old one reached half the frame width to each side.
+  const TWIST_R = 0.5;
+  // The centre's figure-eight: x runs one sine over WANDER_BEATS and y two,
+  // which is what makes it an eight and not an ellipse. WANDER_BEATS = 64,
+  // sixteen bars, and 256 / 64 = 4 whole cycles, so the TURN_BEATS wrap
+  // lands the centre where it would have been anyway. WANDER_X = 0.12 and
+  // WANDER_Y = 0.08 of the frame keep it inside the middle third, 0.5 plus
+  // or minus 0.167, so the vortex never slides off towards an edge.
+  const WANDER_BEATS = 64;
+  const WANDER_X = 0.12;
+  const WANDER_Y = 0.08;
   const vortex = () => shape(64, 0, 1);
   // The trickle: the original fixed-bend formula, unchanged, for the two
   // feedback loops (flow-lines, tunnel) whose behaviour must not change.
@@ -348,11 +381,47 @@
     return chain.modulateRotate(vortex(),
       () => swirlAmount() * amount * (0.4 + 0.6 * feed.swell + 0.3 * feed.bounce));
   }
+  // twist(angle, cx, cy, aspect, radius) as a hydra coord function. The
+  // rotation matrix is the one hydra's rotate and modulateRotate use, so a
+  // positive angle turns the same way it did before. aspect is the frame's
+  // width over its height, read per frame from hydra.synth like the pixel
+  // step in edges(), so it follows the real render size (960x540, set by
+  // RENDER_W and RENDER_H in director.js).
+  let twistDefined = false;
+  function defineTwist() {
+    if (twistDefined) return;
+    hydra.synth.setFunction({
+      name: 'twist',
+      type: 'coord',
+      inputs: [
+        { type: 'float', name: 'angle', default: 0 },
+        { type: 'float', name: 'cx', default: 0.5 },
+        { type: 'float', name: 'cy', default: 0.5 },
+        { type: 'float', name: 'aspect', default: 1 },
+        { type: 'float', name: 'radius', default: 0.5 },
+      ],
+      glsl: `   vec2 c = vec2(cx, cy);
+   vec2 d = _st - c;
+   d.x *= aspect;
+   float w = 1.0 - smoothstep(0.0, radius, length(d));
+   float a = angle * w;
+   d = mat2(cos(a), -sin(a), sin(a), cos(a)) * d;
+   d.x /= aspect;
+   return d + c;`,
+    });
+    twistDefined = true;
+  }
+  const frameAspect = () => (hydra.synth.width || 960) / (hydra.synth.height || 540);
   function swirl(chain, amount) {
-    return chain.modulateRotate(vortex(),
+    defineTwist();
+    return chain.twist(
       () => swirlAmount() * amount * SWING * (0.4 + 0.6 * feed.swell)
         * Math.sin(2 * Math.PI * beats() / SWING_BEATS)
-        + swirlAmount() * amount * 0.3 * feed.bounce);
+        + swirlAmount() * amount * 0.3 * feed.bounce,
+      () => 0.5 + WANDER_X * Math.sin(2 * Math.PI * beats() / WANDER_BEATS),
+      () => 0.5 + WANDER_Y * Math.sin(4 * Math.PI * beats() / WANDER_BEATS),
+      frameAspect,
+      TWIST_R);
   }
 
   // ---- the webcam in every sketch -----------------------------------------
