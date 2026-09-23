@@ -274,13 +274,14 @@
   // itself a few hundredths of the frame, which is what it takes for a
   // line field to be seen to kick without the whole field jumping a pixel;
   // the header explains why those fields cannot take the 0.08 treatment.
-  // BOUNCE scales every amount at once, and is the number to change from
-  // the TV: `bounce` in ~/.bitedj-visuals.js on the Pi (see index.html).
-  const SETTINGS = window.visualsSettings || {};
-  const setting = (key, fallback) => (SETTINGS[key] === undefined ? fallback : SETTINGS[key]);
-  const BOUNCE = Number(setting('bounce', 1));
+  // From the Bounce row: 0 off, then half, the tuned size, and half again.
+  const BOUNCE_LEVELS = [0, 0.5, 1, 1.5];
+  const bounceAmount = () => {
+    const v = BOUNCE_LEVELS[feed.settings.bounce];
+    return v === undefined ? 1 : v;
+  };
   function kick(amount) {
-    return () => 1 + BOUNCE * amount * feed.bounce;
+    return () => 1 + bounceAmount() * amount * feed.bounce;
   }
   const KICK_SCALE = 0.08;
   const KICK_WARP = 0.4;
@@ -302,15 +303,18 @@
   // ridge plot or a contour map is soup, and the scan-field comb and the
   // edge sketches feed thresholds that a moving coordinate would flicker.
   //
-  // `swirl: false` in ~/.bitedj-visuals.js turns it off, and swirl() then
-  // hands the chain back untouched; `swirlAmount` scales it.
-  const SWIRL_ON = setting('swirl', true) !== false;
-  const SWIRL = Number(setting('swirlAmount', 1));
+  // From the Swirl row, the same four levels as the bounce. 0 leaves the
+  // modulateRotate in the chain with an angle of 0, which is a no-op, so
+  // turning the swirl off takes effect on the next frame without a rebuild.
+  const SWIRL_LEVELS = [0, 0.5, 1, 1.5];
+  const swirlAmount = () => {
+    const v = SWIRL_LEVELS[feed.settings.swirl];
+    return v === undefined ? 1 : v;
+  };
   const vortex = () => shape(64, 0, 1);
   function swirl(chain, amount) {
-    if (!SWIRL_ON) return chain;
     return chain.modulateRotate(vortex(),
-      () => SWIRL * amount * (0.4 + 0.6 * feed.swell + 0.3 * feed.bounce));
+      () => swirlAmount() * amount * (0.4 + 0.6 * feed.swell + 0.3 * feed.bounce));
   }
 
   // ---- the webcam in every sketch -----------------------------------------
@@ -345,7 +349,10 @@
   const CAM_BEND = 0.06;         // displacement, as a fraction of the frame
   const CAM_KEY = [0.45, 0.2];   // silhouette threshold and its softness
   const CAM_EDGE = 0.35;         // brightness of the overlaid outline
-  const camOn = () => !!window.camReady;
+  // The Camera row's Mix switch, and a camera to mix. Read at run(), because
+  // the mix is built into the chain; director.js melts to another sketch
+  // when the switch moves, which is what makes a change take effect.
+  const camOn = () => !!window.camReady && feed.settings.camMix === 1;
   // Grey and centred on zero, so a bright region pushes one way and a dark
   // one the other; modulate() reads red for x and green for y, and a grey
   // has them equal, so the push is along the diagonal.
