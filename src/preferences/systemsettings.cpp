@@ -239,6 +239,41 @@ SystemSettings::SystemSettings(UserSettingsPointer pConfig,
             this,
             &SystemSettings::onVisualsEnabledChanged);
 
+    // The Visuals page's knobs (see the member comment). The lambda captures
+    // the key by value so each CO persists under its own name; the engine
+    // side never interprets the number.
+    struct VisualsKnob {
+        const char* key;
+        double defaultValue;
+    };
+    const VisualsKnob knobs[] = {
+            {"visuals_reactivity", 1.0},
+            {"visuals_bounce", 2.0},
+            {"visuals_swirl", 2.0},
+            {"visuals_bars", 16.0},
+            {"visuals_cam_mix", 1.0},
+            {"visuals_cam_sketches", 1.0},
+            {"visuals_patterns", 1.0},
+    };
+    for (const VisualsKnob& knob : knobs) {
+        const ConfigKey key(kBiteDj, QString::fromLatin1(knob.key));
+        auto pCo = std::make_unique<ControlObject>(key);
+        pCo->set(m_pConfig->getValue(key, knob.defaultValue));
+        connect(pCo.get(), &ControlObject::valueChanged, this, [this, key](double value) {
+            m_pConfig->setValue(key, value);
+        });
+        m_visualsKnobs.push_back(std::move(pCo));
+    }
+
+    m_pCoVisualsNext = std::make_unique<ControlObject>(
+            ConfigKey(kBiteDj, QStringLiteral("visuals_next")));
+    m_pCoVisualsNextCount = std::make_unique<ControlObject>(
+            ConfigKey(kBiteDj, QStringLiteral("visuals_next_count")));
+    connect(m_pCoVisualsNext.get(),
+            &ControlObject::valueChanged,
+            this,
+            &SystemSettings::onVisualsNextRequested);
+
     // Hot cue gating (General settings tab). CueControl reads the config value
     // on each activation rather than holding a proxy, so writing back on every
     // change is what makes the choice take effect live as well as persist.
@@ -963,6 +998,16 @@ void SystemSettings::onVinylBrakeChanged(double value) {
 void SystemSettings::onVisualsEnabledChanged(double value) {
     m_pConfig->setValue(ConfigKey(kBiteDj, QStringLiteral("visuals_enabled")),
             value != 0.0 ? 1 : 0);
+}
+
+void SystemSettings::onVisualsNextRequested(double value) {
+    // Same handshake as onRefreshRequested: act on the rising edge only,
+    // then reset so the next tap is a fresh edge. The count is what travels.
+    if (value == 0.0) {
+        return;
+    }
+    m_pCoVisualsNextCount->set(m_pCoVisualsNextCount->get() + 1.0);
+    m_pCoVisualsNext->forceSet(0.0);
 }
 
 void SystemSettings::onHotcueActivatePlaysChanged(double value) {
