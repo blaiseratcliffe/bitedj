@@ -730,9 +730,9 @@
   }
 
   // Who would go if something had to. Least recently shown first, never one a
-  // sketch is currently drawing or the preview pin, and a resident the cost map has retired goes
-  // before any of them whatever its age: take() will not hand it out again, so
-  // it is 29 MB of nothing.
+  // sketch is currently drawing or the preview pin, and a resident the cost
+  // map has retired goes before any of them whatever its age: take() will not
+  // hand it out again, so it is 29 MB of nothing.
   function victim() {
     const age = (e) => Math.max(e.shownAt, e.at);
     const dead = (e) => !usable(e);
@@ -1007,7 +1007,9 @@
       console.log('visuals: pattern', slug, 'over budget',
         entry.worst.toFixed(0), 'ms, one strike');
     }
-    if (entry.worst > 2 * WORST_FRAME_BUDGET_MS && !entry.held) {
+    // Not the preview pin: a pin waiting on this very load would otherwise
+    // lose the pattern it asked for. `pinned` is null outside preview mode.
+    if (entry.worst > 2 * WORST_FRAME_BUDGET_MS && !entry.held && slug !== pinned) {
       evict(entry, 'over the frame budget by more than double');
       skipped.push(slug);
     }
@@ -1028,6 +1030,11 @@
   const PIN_RETRY_MS = 250;
   function pinLoad(meta, done) {
     pinWait = null;
+    // Checked on every retry, not once in pin(): the prewarm this pin was
+    // waiting for may have been loading the same slug, and loading it again
+    // would leave two entries with one slug, neither evictable while pinned.
+    const have = cache.find(e => e.meta.slug === meta.slug && !e.busy);
+    if (have) { done(have); return; }
     const retry = () => { pinWait = setTimeout(() => pinLoad(meta, done), PIN_RETRY_MS); };
     if (loading) { retry(); return; }
     if (cache.length >= CACHE_MAX) {
@@ -1050,8 +1057,16 @@
       pinJob = null;
       if (!entry) {
         console.log('visuals: pattern', meta.slug, 'failed to load for the preview pin');
+        // Nothing to pin: say so, rather than an overlay that goes on
+        // reading "pinned" over whatever the sketches fall back to.
+        if (pinned === meta.slug) pinned = null;
         done(null);
         return;
+      }
+      // A too-solid pattern is rejected for the rotation exactly as the
+      // prewarm would have done, so after `auto` it is not loaded again.
+      if (solid.indexOf(meta.slug) >= 0 && rejected.indexOf(meta.slug) < 0) {
+        rejected.push(meta.slug);
       }
       entry.outside = meta.frame > MAX_FRAME_BYTES || solid.indexOf(meta.slug) >= 0
         || retired(meta.slug);

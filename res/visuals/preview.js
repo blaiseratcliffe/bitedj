@@ -208,11 +208,14 @@
         flash('could not load ' + slug);
         return;
       }
+      // A pattern sketch restarts where it is. The jump to the first pattern
+      // sketch only happens if nobody moved while the pattern loaded; a step
+      // to another sketch in the meantime is where the show stays.
       const s = director.target();
       if (s && s.pattern) {
         const drawing = s === director.current() && pats.taken().indexOf(slug) === 0;
         if (!drawing) director.show(s);
-      } else {
+      } else if (s === target) {
         director.show(director.list().find(x => x.pattern));
       }
       render();
@@ -221,9 +224,17 @@
   }
 
   // Capture phase, so an arrow pressed with the list focused is ours and not
-  // the list's. Anything with a modifier is left to the browser.
+  // the list's. Anything with a modifier is left to the browser, and so are
+  // `n` and `h` while the list has focus. A held pattern key does not
+  // repeat: every step starts a load, and a burst of them only cancels each
+  // other.
   window.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.repeat && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();   // nor does the list, if it has focus
+      return;
+    }
+    if (document.activeElement === select && /^[nNhH]$/.test(e.key)) return;
     let act = null;
     switch (e.key) {
       case 'ArrowLeft': act = () => stepSketch(-1); break;
