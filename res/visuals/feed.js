@@ -20,6 +20,16 @@
 //                beat edge and decays with a time constant of a third of a
 //                beat. The fastest signal in the file, and the accents it
 //                drives should be worth a few percent, not a slam.
+//   feed.bounce  an underdamped spring kicked on every beat edge: it snaps
+//                to about 1 in 40 ms, overshoots below zero and settles in
+//                about 350 ms, a beat at 174 and half of one at 88. Read it
+//                as a multiplier on the scale of a sketch's main element,
+//                1 + 0.08 * feed.bounce, so the foreground pops on the kick
+//                and springs back while the background keeps drifting on
+//                the swell. This is the one signal here that is allowed to
+//                overshoot, and it is what the smoothness rework took out
+//                too completely: pulse is a brightness accent worth a few
+//                percent, bounce is motion.
 //   feed.phase   0..1 through the current beat, free running on the render
 //                clock and corrected forward from the master deck's
 //                beat_distance. Continuous rotation locked to tempo.
@@ -108,6 +118,16 @@
   // lower. 0.95 here is 0.84 at 174 BPM and 0.87 at 88 in the replay, which
   // is the "about 0.85" the header promises.
   const PULSE_PEAK = 0.95;
+  // The bounce oscillator. The rise time sets the natural frequency and the
+  // damping ratio sets how far it overshoots: at 0.35 the first undershoot
+  // is about a third of the peak and the second overshoot a tenth, which
+  // reads as one bounce and not a wobble. 40 ms is two rendered frames, the
+  // same rule as the pulse's attack: a thing that lands inside one frame is
+  // a cut, not a movement. Neither is tempo-aware on purpose. A kick is a
+  // kick at any tempo, and at 174 the settle overlapping the next kick is
+  // what makes a run of kicks read as a groove rather than a metronome.
+  const BOUNCE_RISE_MS = 40;
+  const BOUNCE_DAMPING = 0.35;
   const TARGET_BPM = 174;    // what the box is built for, and the bpm fallback
   const BARS_OF_SWELL = 4;
   const MAX_DT_MS = 100;     // a stall must not integrate as if it were real
@@ -140,7 +160,7 @@
     // line and the replay harness, not for sketches.
     rawBass: 0,
     bpm: 0, beat: false, beats: 0, playing: false, alive: false,
-    energy: 0, swell: 0, pulse: 0, phase: 0,
+    energy: 0, swell: 0, pulse: 0, bounce: 0, phase: 0,
     reactivity: REACTIVITY,
     _beatFns: [], _beatAlwaysFns: [], _beatFrames: 0,
     _lastFrameAt: 0, _max: [AGC_FLOOR, AGC_FLOOR, AGC_FLOOR, AGC_FLOOR],
@@ -148,7 +168,7 @@
     // Targets set by ingest() at 30 Hz, chased by the render clock.
     _want: { bass: 0, lowmid: 0, mid: 0, high: 0, peak: 0, energy: 0, swell: 0 },
     _env: 0, _bar: 0, _swell: 0, _ref: REF_FLOOR,
-    _pulseWant: 0, _springs: Object.create(null),
+    _pulseWant: 0, _bounceV: 0, _springs: Object.create(null),
     _renderAt: 0,
     onBeat(fn) { this._beatFns.push(fn); },
     onBeatAlways(fn) { this._beatAlwaysFns.push(fn); },
@@ -220,6 +240,21 @@
     const peak = tau / (tau - a) * (Math.exp(-tStar / tau) - Math.exp(-tStar / a));
     return PULSE_PEAK / peak;
   }
+
+  // The bounce oscillator's constants, solved once from the rise time and
+  // the damping ratio. x'' + 2 a x' + w^2 x = 0 with a = zeta w, whose
+  // impulse response from rest is x = (v0 / wd) e^(-a t) sin(wd t), peaking
+  // at t* = atan2(wd, a) / wd. w is chosen so t* is BOUNCE_RISE_MS and v0 so
+  // the peak is exactly 1.
+  const BOUNCE = (() => {
+    const zeta = BOUNCE_DAMPING;
+    const root = Math.sqrt(1 - zeta * zeta);
+    const w = Math.atan2(root, zeta) / (BOUNCE_RISE_MS * root);
+    const a = zeta * w, wd = w * root;
+    const tStar = Math.atan2(wd, a) / wd;
+    const peak = Math.exp(-a * tStar) * Math.sin(wd * tStar) / wd;
+    return { a, wd, v0: 1 / peak };
+  })();
 
   // Which deck the beat clock follows: playing, loudest, nudged toward the
   // crossfader side. Deck 1 and 3 are left, 2 and 4 right.
@@ -317,6 +352,10 @@
       feed._beatFrames = 0;
       feed.beats += 1;
       feed._pulseWant = pulseGain(feed.beatMs()) * REACTIVITY;
+      // An impulse added to whatever motion is left from the last kick,
+      // rather than a reset, so a fast run of kicks builds a groove and a
+      // kick that lands on a settling bounce does not snap it to rest first.
+      feed._bounceV += BOUNCE.v0 * REACTIVITY;
       // Each listener is guarded on its own. The director's rotation logic
       // is the last entry in _beatAlwaysFns, so an exception thrown by a
       // sketch listener earlier in the pass would otherwise stop the show
@@ -364,6 +403,23 @@
     pulseRaw += (feed._pulseWant - pulseRaw) * approach(dt, PULSE_ATTACK_MS);
     if (pulseRaw < 1e-4 && feed._pulseWant < 1e-4) { pulseRaw = 0; feed._pulseWant = 0; }
     feed.pulse = clamp01(pulseRaw);
+
+    // The bounce, advanced by the exact solution of the damped oscillator
+    // over dt, for the same reason the springs below are: a 100 ms frame
+    // must land on the curve, not fly off it. With A = x and
+    // B = (v + a x) / wd, x(t) = e^(-a t)(A cos wd t + B sin wd t) and
+    // v(t) is its derivative.
+    {
+      const { a, wd } = BOUNCE;
+      const x = feed.bounce, v = feed._bounceV;
+      const A = x, B = (v + a * x) / wd;
+      const e = Math.exp(-a * dt), c = Math.cos(wd * dt), s = Math.sin(wd * dt);
+      feed.bounce = e * (A * c + B * s);
+      feed._bounceV = e * ((wd * B - a * A) * c - (wd * A + a * B) * s);
+      if (Math.abs(feed.bounce) < 1e-4 && Math.abs(feed._bounceV) < 1e-5) {
+        feed.bounce = 0; feed._bounceV = 0;
+      }
+    }
 
     feed.phase += dt / beatMs;
     if (feed.phase >= 1) feed.phase -= Math.floor(feed.phase);

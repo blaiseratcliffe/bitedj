@@ -445,8 +445,8 @@
   // rawBass rather than bass: the raw band says whether the sidechain heard
   // anything, and bass is already through the auto-gain, which stretches
   // whatever it hears to full scale. The line prints it as "bass".
-  const RANGE_KEYS = ['rawBass', 'energy', 'swell', 'pulse'];
-  const RANGE_LABELS = { rawBass: 'bass', energy: 'energy', swell: 'swell', pulse: 'pulse' };
+  const RANGE_KEYS = ['rawBass', 'energy', 'swell', 'pulse', 'bounce'];
+  const RANGE_LABELS = { rawBass: 'bass', energy: 'energy', swell: 'swell', pulse: 'pulse', bounce: 'bounce' };
   const range = {};
   function resetRange() {
     RANGE_KEYS.forEach((k) => { range[k] = [Infinity, -Infinity]; });

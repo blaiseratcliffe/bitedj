@@ -255,10 +255,33 @@
   }
 
   // A grey, for .mult(solid(...)), that sits near one and lifts a few percent
-  // on the beat. This is what a kick is worth now.
+  // on the beat. This is what a kick is worth in brightness.
   function accent(base, lift) {
     return () => base + lift * feed.pulse;
   }
+
+  // What a kick is worth in motion. kick(amount) is a multiplier that sits
+  // at 1 and follows feed.bounce, which snaps to 1 on the beat edge,
+  // overshoots below zero and settles inside a beat; every sketch below
+  // multiplies it into the scale of its main element and nothing else, so
+  // the foreground pops on the kick and the background keeps its drift.
+  // Blaise's verdict on the smoothness rework was that it went too far:
+  // "too smooth / liquidy, they need to have some bounce in them too".
+  //
+  // Two sizes. 0.08 on a scale is an eight percent pop, visible on a
+  // wordmark or a piece of artwork and the size of a speaker cone moving.
+  // 0.4 on a warp amplitude is a forty percent change in a number that is
+  // itself a few hundredths of the frame, which is what it takes for a
+  // line field to be seen to kick without the whole field jumping a pixel;
+  // the header explains why those fields cannot take the 0.08 treatment.
+  // BOUNCE scales every amount at once, and is the number to change from
+  // the TV.
+  const BOUNCE = 1;
+  function kick(amount) {
+    return () => 1 + BOUNCE * amount * feed.bounce;
+  }
+  const KICK_SCALE = 0.08;
+  const KICK_WARP = 0.4;
 
   // ---- the Book of Shapes pattern family ---------------------------------
   //
@@ -356,7 +379,7 @@
     // and half a percent of size: present, not an event.
     { name: 'logo-outline', cam: false, mono: true, run() {
         const bright = accent(0.86, 0.1);
-        const size = () => 0.325 + 0.02 * feed.swell + 0.004 * feed.pulse;
+        const size = () => (0.325 + 0.02 * feed.swell) * kick(KICK_SCALE)();
         smear(wordmark(size)
           .scrollY(() => 0.012 * Math.sin(flow() * 0.23))
           .rotate(() => 0.035 * Math.sin(flow() * 0.5))
@@ -395,7 +418,7 @@
     // contributes its rgb unweighted, and the wordmark's soft glow would come
     // through as a solid white slab where the layers above are transparent.
     { name: 'logo-kaleid', cam: false, mono: true, run() {
-        wordmark(() => 0.255 + 0.012 * feed.swell).out(o1);
+        wordmark(() => (0.255 + 0.012 * feed.swell) * kick(KICK_SCALE)()).out(o1);
         const arm = (a) => src(o1)
           .scrollY(() => -0.28 - 0.016 * feed.swell)
           .rotate(a);
@@ -432,7 +455,7 @@
         const lean = () => 0.07 + 0.06 * Math.sin(flow() * 0.9)
           + 0.04 * feed.energy + 0.01 * feed.pulse;
         const bright = accent(0.88, 0.08);
-        smear(wordmark(0.34)
+        smear(wordmark(() => 0.34 * kick(KICK_SCALE)())
           .modulate(wave(), lean)
           .mult(solid(bright, bright, bright, 1)), 0.88, 1.0015)
           .out(o0);
@@ -459,7 +482,7 @@
           .mult(noise(2.2, 0.005).thresh(0.3, 0.3))
           .mult(solid(0, 1, 0, 1));
         osc(60 * TAU, 0, 0).rotate(Math.PI / 2)
-          .modulate(bumps(), () => 0.02 + 0.05 * feed.swell)
+          .modulate(bumps(), () => (0.02 + 0.05 * feed.swell) * kick(KICK_WARP)())
           .thresh(0.93, 0.01)
           .out(o0);
     } },
@@ -487,7 +510,7 @@
     // lines are near enough still and everything you see moving is the warp.
     { name: 'ribbons', cam: false, mono: true, run() {
         const work = osc(34 * TAU, 0.0015, 0)
-          .modulate(noise(1.4, 0.006), () => 0.08 + 0.06 * feed.swell)
+          .modulate(noise(1.4, 0.006), () => (0.08 + 0.06 * feed.swell) * kick(KICK_WARP)())
           .rotate(() => 0.35 + 0.02 * Math.sin(flow() * 0.17))
           .thresh(0.92, 0.02);
         smear(work, 0.92, 1.0008).out(o0);
@@ -502,7 +525,7 @@
     // at a time.
     { name: 'contours', cam: false, mono: true, run() {
         noise(2.6, 0.01)
-          .modulate(noise(1.1, 0.006), () => 0.1 + 0.16 * feed.swell)
+          .modulate(noise(1.1, 0.006), () => (0.1 + 0.16 * feed.swell) * kick(KICK_WARP)())
           .posterize(10, 1)
           .out(o1);
         edges(() => src(o1), () => 3 + 0.4 * feed.pulse).out(o0);
@@ -520,7 +543,7 @@
     { name: 'flow-lines', cam: false, mono: true, run() {
         const seed = () => 0.8 + 0.2 * feed.spring('flow-seed', () => feed.pulse, 1.6);
         src(o0)
-          .modulate(noise(3.2, 0.03), () => 0.004 + 0.008 * feed.energy)
+          .modulate(noise(3.2, 0.03), () => (0.004 + 0.008 * feed.energy) * kick(KICK_WARP)())
           .mult(solid(0.965, 0.965, 0.965, 1))
           .layer(keyed(noise(22, 0.06).thresh(0.8, 0.02))
             .mult(solid(seed, seed, seed, 1)))
@@ -561,7 +584,7 @@
         osc(32 * TAU, 0, 0).thresh(0.984, 0.006)
           .add(osc(20 * TAU, 0, 0).rotate(Math.PI / 2).thresh(0.984, 0.006))
           .modulate(noise(1.6, 0.006), () => 0.02 + 0.035 * feed.swell)
-          .modulateScale(yRamp(), 1.4, 1.0)
+          .modulateScale(yRamp(), () => 1.4 * kick(KICK_SCALE)(), 1.0)
           .out(o0);
     } },
 
@@ -573,7 +596,7 @@
     // ones. The swell lengthens the wake instead, which is the part that
     // actually reads.
     { name: 'cam-edges', cam: true, mono: true, run() {
-        smear(edges(() => src(s0), () => 3.5 + 0.5 * feed.pulse),
+        smear(edges(() => src(s0), () => 3.5 + 0.5 * feed.pulse).scale(kick(KICK_SCALE)),
           0.82, () => 1.002 + 0.003 * feed.swell)
           .out(o0);
     } },
@@ -594,7 +617,7 @@
           .contrast(() => 1 + 0.1 * feed.swell)
           .posterize(6, 1)
           .out(o1);
-        edges(() => src(o1), 3).out(o0);
+        edges(() => src(o1), 3).scale(kick(KICK_SCALE)).out(o0);
     } },
 
     // 11. A flow or physics pattern breathing through its sweep, drifting on
@@ -610,7 +633,7 @@
         smear(sweepPair(0)
           .scrollX(driftX(0.02, 0.05))
           .scrollY(driftX(0.014, 0.037, 1.3))
-          .scale(1, 1, SQUARE_Y)
+          .scale(kick(KICK_SCALE), 1, SQUARE_Y)
           .mult(solid(bright, bright, bright, 1)), 0.92, 1.0004)
           .out(o0);
     } },
@@ -645,7 +668,7 @@
         const turn = () => 2 * Math.PI * beats() / TURN_BEATS;
         smear(sweepPair(0)
           .rotate(turn)
-          .scale(() => 1.3 + 0.06 * feed.swell, 1, SQUARE_Y)
+          .scale(() => (1.3 + 0.06 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y)
           .modulateScale(yRamp(), () => 0.15 + 0.35 * feed.swell, 1.0), 0.85, 1.0004)
           .out(o0);
     } },
@@ -665,7 +688,7 @@
         const sides = 2 + Math.floor(Math.random() * 2);
         const bright = accent(0.84, 0.12);
         smear(sweepPair(0)
-          .scale(() => 1.05 + 0.06 * feed.swell, 1, SQUARE_Y)
+          .scale(() => (1.05 + 0.06 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y)
           .rotate(() => flow() * 0.008)
           .kaleid(sides)
           .mult(solid(bright, bright, bright, 1)), 0.84, 1.0004)
@@ -688,7 +711,7 @@
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
         smear(sweepPair(0)
           .modulate(noise(2.1, 0.008), () => 0.025 + 0.07 * feed.swell + 0.01 * feed.energy)
-          .scale(1, 1, SQUARE_Y), 0.86, 1.0004)
+          .scale(kick(KICK_SCALE), 1, SQUARE_Y), 0.86, 1.0004)
           .out(o0);
     } },
 
@@ -720,7 +743,7 @@
           .scrollX(driftX(0.03, 0.041))
           .scrollY(driftX(0.02, 0.029, 2.1))
           .rotate(() => 0.05 * Math.sin(flow() * 0.017))
-          .scale(() => 1.05 + 0.04 * feed.swell, 1, SQUARE_Y), 0.92, 1.0008)
+          .scale(() => (1.05 + 0.04 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y), 0.92, 1.0008)
           .out(o0);
     } },
 
@@ -736,7 +759,7 @@
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
         sweepPair(0)
           .scrollX(driftX(0.012, 0.04))
-          .scale(() => 1.02 + 0.05 * feed.swell, 1, SQUARE_Y)
+          .scale(() => (1.02 + 0.05 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y)
           .out(o1);
         edges(() => src(o1), () => 3 + 0.4 * feed.pulse).out(o0);
     } },
@@ -759,14 +782,16 @@
           patterns.bind(a, t, 0);
           patterns.bind(b, 5 - t, 1);
         };
+        // The two layers kick in opposite directions, so a beat pulls them
+        // apart and lets them fall back together.
         const left = sweepPair(0)
           .scrollX(driftX(0.018, 0.045))
           .rotate(() => flow() * 0.004)
-          .scale(1, 1, SQUARE_Y);
+          .scale(kick(KICK_SCALE), 1, SQUARE_Y);
         const right = sweepPair(1)
           .scrollX(driftX(-0.018, 0.045))
           .rotate(() => -flow() * 0.004)
-          .scale(() => 1.08, 1, SQUARE_Y);
+          .scale(() => 1.08 * kick(-KICK_SCALE)(), 1, SQUARE_Y);
         smear(left.blend(right, 0.5), 0.88, 1.0004).out(o0);
     } }
 
@@ -807,7 +832,7 @@
           .blend(field().kaleid(2), () => 0.12 + 0.5 * feed.swell)
           .modulate(noise(1.3, 0.015), () => 0.02 + 0.05 * feed.swell)
           .layer(src(s2).luma(LOGO_KEY[0], LOGO_KEY[1]).mask(oneTile())
-            .scale(() => 0.2 + 0.008 * feed.swell + 0.004 * feed.pulse, LOGO_X, 1))
+            .scale(() => (0.2 + 0.008 * feed.swell) * kick(KICK_SCALE)(), LOGO_X, 1))
           .out(o0);
     } },
 
@@ -834,8 +859,12 @@
     { name: 'tunnel', cam: false, mono: false, run() {
         const [r, g, b] = palette.rgb('magenta');
         const [r2, g2, b2] = palette.rgb('violet');
-        osc(14, 0.015, 0).color(r, g, b)
-          .blend(osc(22, -0.011, 0).color(r2, g2, b2), 0.5)
+        // The kick is on the ring density, not on the zoom: the zoom is
+        // inside the feedback loop and a pop there compounds frame on frame
+        // until the tunnel turns itself inside out. An oscillator frequency
+        // is read fresh every frame and feeds nothing back.
+        osc(() => 14 * kick(KICK_SCALE)(), 0.015, 0).color(r, g, b)
+          .blend(osc(() => 22 * kick(KICK_SCALE)(), -0.011, 0).color(r2, g2, b2), 0.5)
           .modulate(src(o0), () => 0.15 + 0.04 * feed.swell)
           .scale(() => 1.002 + 0.006 * feed.energy + 0.003 * feed.pulse)
           .rotate(() => flow() * 0.02)
@@ -863,7 +892,7 @@
           .add(noise(2.4, 0.02).color(pr, pg, pb), 0.35)
           .add(osc(16, 0.04, 0).color(kr, kg, kb).kaleid(5)
             .modulate(noise(1.1, 0.015), () => 0.04 + 0.05 * feed.swell)
-            .scale(() => 1 + 0.06 * Math.sin(flow() * 0.23)), bloom)
+            .scale(() => (1 + 0.06 * Math.sin(flow() * 0.23)) * kick(KICK_SCALE)()), bloom)
           .out(o0);
     } },
 
@@ -882,6 +911,7 @@
           .posterize(5, 1);
         face().color(mr, mg, mb)
           .add(face().invert().color(vr, vg, vb), 0.55)
+          .scale(kick(KICK_SCALE))
           .blend(src(o0), () => 0.55 + 0.1 * feed.swell)
           .out(o0);
     } },
@@ -947,6 +977,9 @@
             return 0.02 * Math.sin(flow() * 0.2) + 0.25 * ((bpm - 174) / 174);
           })
           .modulate(noise(1.2, 0.015), () => 0.02 + 0.05 * feed.swell)
+          // The wash kicks and the comb does not: a comb moving on the
+          // beat is the twitch this sketch was rebuilt to remove.
+          .scale(kick(KICK_SCALE))
           .mult(scan())
           .out(o0);
     } },
@@ -964,7 +997,7 @@
             () => 0.12 + 0.2 * feed.energy)
           .kaleid(6)
           .rotate(() => flow() * 0.11)
-          .scale(() => 1 + 0.05 * feed.swell + 0.01 * feed.pulse)
+          .scale(() => (1 + 0.05 * feed.swell) * kick(KICK_SCALE)())
           .out(o0);
     } },
 
@@ -1011,7 +1044,7 @@
         field()
           .layer(sweepPair(0)
             .scrollX(driftX(0.015, 0.04))
-            .scale(() => 1.04 + 0.05 * feed.swell, 1, SQUARE_Y)
+            .scale(() => (1.04 + 0.05 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y)
             .luma(0.12, 0.08)
             .color(cr, cg, cb))
           .out(o0);
