@@ -44,19 +44,23 @@
 //    patterns on screen have a flattened sweep end.
 //
 // Which patterns are in the rotation. Two rules, both below with their
-// measurements: a pattern whose biggest single frame passes MAX_FRAME_BYTES
+// measurements: a pattern whose biggest single frame is over the size cap
 // costs too long a stall to rasterise, and a pattern whose default frame is
-// lit past COVER_MAX is a filled sheet rather than line work. 54 patterns on
-// disk, 49 inside the size limit, 38 inside both. Membership is decided on the
+// lit past COVER_MAX is a filled sheet rather than line work. On a desktop, 54
+// patterns on disk, 49 inside the starting cap, 38 inside both. The size cap
+// is not a constant: it starts at MAX_FRAME_BYTES and is lowered by whatever
+// the box in front of the viewer turns out to cost, so the Pi settles at a
+// smaller library than a desktop does. Membership is otherwise decided on the
 // default frame alone; the six sweep frames are measured and logged and gate
 // nothing, so the morph always runs the whole sweep.
 //
 // Cost. Rasterising is not free and the heavy end of the library is very
-// heavy: the timings are in the size limit comment below. Nothing here
+// heavy: the timings are in the size cap comment below. Nothing here
 // rasterises on demand. A pattern is pulled into the cache in the background,
-// one frame per animation frame so the main thread never stalls for longer
-// than a single frame's draw, and a sketch only ever gets a pattern that is
-// already sitting in memory. `take()` never blocks and returns null when the
+// no more than one frame every couple of animation frames and with the
+// coverage readback in a frame of its own, so the main thread never stalls for
+// longer than one SVG decode. A sketch only ever gets a pattern that is
+// already sitting in memory: `take()` never blocks and returns null when the
 // cache is empty, which the director treats exactly like a camera sketch with
 // no camera.
 //
@@ -72,6 +76,14 @@
   const SIZE = 1024;
   const CACHE_MAX = 3;
   const PREWARM_MS = 20000;
+  const PREWARM_DELAY_MS = 10000;  // quiet while the page finds its feet: the
+                                   // first melt, the wordmark and the boot
+                                   // logo all happen in the first seconds and
+                                   // none of them should share a frame with an
+                                   // SVG decode
+  const FRAMES_PER_RASTER = 2;     // animation frames between one frame's draw
+                                   // and the next one's
+  const WORST_FRAME_BUDGET_MS = 120;  // see the size cap below
   const ROTATE_MS = 180000;  // a cached pattern nobody has shown for this long
                              // is fair game to replace, so a three hour set
                              // does not run on the first three patterns that
@@ -86,14 +98,13 @@
   // What a pattern costs, and what the size limit is a limit on.
   //
   // The number to hold a limit against is the biggest single frame, not the
-  // seven-frame total. A pattern rasterises one frame per animation frame, so
-  // the total is spread and the biggest frame is the stall: at the page's
-  // 30 fps cap, 250 ms is seven dropped frames in a row, and the Pi is roughly
-  // four times slower again. The generator puts both figures in the index and
-  // this gates on `frame`.
+  // seven-frame total. A pattern rasterises one frame every couple of
+  // animation frames, so the total is spread and the biggest frame is the
+  // stall. The generator puts both figures in the index and this gates on
+  // `frame`.
   //
-  // Measured here at 1024x1024, the decode plus the draw plus the coverage
-  // readback, all of them on the main thread and all inside the timed block:
+  // Measured on this desktop at 1024x1024, the decode plus the draw, which are
+  // both on the main thread:
   //
   //   pattern                 biggest frame   worst frame
   //   arcs_1                        0.03 MB         10 ms
@@ -105,19 +116,48 @@
   //   iso-sphere                    4.65 MB        608 ms
   //   deformed_grid_mesh_2          6.11 MB        597 ms
   //
-  // 1.6 MB a frame is the cut. It is not the largest number that ever came in
-  // under 250 ms: scattered-cube-grid at 1.81 MB measured 212 ms on one run
-  // and 251 ms on another, which is a pattern sitting on the ceiling rather
-  // than under it, and the same is true of iso-cross. Below 1.6 MB the worst
-  // anything measured was 99 ms, which leaves room for a slower box and for
-  // the run to run spread. It keeps 49 of the 54 patterns.
+  // 1.6 MB a frame is where that table puts the cut, and on the Pi it is
+  // wrong. The VideoCore measured two to four times slower than this desktop
+  // on the same patterns, and worse, not proportionally: concentric_arc
+  // truchet_2 took 3091 ms in total with a worst frame of 509 ms, chevron
+  // blocks 1174 ms with 211, noise_circle_1 613 ms with 225. Half a second is
+  // a visible hitch in the picture, and it arrived every time the prewarm ran.
   //
-  // The whole table is about twice what these same patterns cost before the
-  // stroke rule below went in, which is the price of white line work: 2.5 px
-  // of stroke is five times the fill of half a pixel. The `worst frame` figure
-  // is logged at the end of every load, so the cut can be re-derived on the Pi
-  // rather than assumed from this table.
+  // So the cap below is a starting point and not the answer. The real limit is
+  // learned from what the box in front of the viewer actually does: every
+  // completed load compares its worst frame against WORST_FRAME_BUDGET_MS, and
+  // a load that blows the budget lowers the cap to just under that pattern's
+  // biggest frame, so nothing that large is attempted again. The cap only ever
+  // goes down within a session, because a pattern that was slow once is not
+  // going to be fast later, and it is written to localStorage so the next boot
+  // starts from what the last one learned instead of rediscovering it one
+  // hitch at a time.
+  //
+  // 120 ms is three dropped frames at the page's 30 fps cap. A pattern that
+  // misses it by less than double is kept, because it is already rasterised
+  // and the cost is paid; one that misses it by more than double is evicted as
+  // well as excluded, on the grounds that it will be on screen for a minute
+  // and it is 29 MB.
   const MAX_FRAME_BYTES = 1.6e6;
+  const CAP_KEY = 'bitedj.patterns.frameCap';
+
+  // The learned cap. localStorage is wrapped because a page on file:// with a
+  // cleared profile can throw on the read, and a loader that throws at startup
+  // takes the whole family down.
+  let frameCap = MAX_FRAME_BYTES;
+  (function readCap() {
+    let stored = null;
+    try { stored = window.localStorage.getItem(CAP_KEY); } catch (e) { stored = null; }
+    const n = stored === null ? NaN : parseInt(stored, 10);
+    if (isFinite(n) && n > 0 && n < MAX_FRAME_BYTES) {
+      frameCap = n;
+      console.log('visuals: pattern cap read from storage', frameCap, 'bytes');
+    }
+  })();
+
+  function rememberCap() {
+    try { window.localStorage.setItem(CAP_KEY, String(frameCap)); } catch (e) { /* no storage */ }
+  }
 
   // The rewrite, in two halves.
   //
@@ -157,12 +197,18 @@
 
   const TAGS = ['GRID', 'RADIAL', 'NOISE', 'FLOW', 'ISOMETRIC', 'ORGANIC', 'DISTORTION', 'PHYSICS'];
 
-  const library = (window.patternIndex || []).filter(p => p.frame <= MAX_FRAME_BYTES);
+  // The whole catalogue. The size cap is applied at pick time rather than
+  // here, because it moves: a pattern that is eligible at boot can be ruled
+  // out an hour later by a load that overran the budget.
+  const library = window.patternIndex || [];
+  function eligible() {
+    return library.filter(p => p.frame <= frameCap);
+  }
   if (!window.patternIndex) {
     console.error('visuals: no pattern index; run tools/build-pattern-index.py');
   } else {
-    console.log('visuals: patterns', library.length, 'of', window.patternIndex.length,
-      'whose biggest frame is under', (MAX_FRAME_BYTES / 1e6).toFixed(1) + ' MB');
+    console.log('visuals: patterns', eligible().length, 'of', library.length,
+      'whose biggest frame is under', (frameCap / 1e6).toFixed(2) + ' MB');
   }
 
   function svgDoc(text, wire) {
@@ -176,6 +222,18 @@
       + text.slice(open + 4, close + 1) + RULE + text.slice(close + 1);
   }
 
+  // n animation frames from now. The pacing in this file is all in frames
+  // rather than milliseconds, because what it is trying not to do is put two
+  // expensive things in the same frame as each other or as the render.
+  function afterFrames(n, fn) {
+    let left = n;
+    const step = () => {
+      left -= 1;
+      if (left <= 0) fn(); else requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   // One frame: fetch the text, rewrite it, decode it through an <img>, and
   // draw it onto an opaque black canvas. The canvas is filled black first
   // rather than left transparent because hydra's blend() mixes rgb and ignores
@@ -183,14 +241,13 @@
   // arrives on screen as a white slab; sketches.js says the same thing about
   // the wordmark at smear().
   //
-  // The draw is the expensive half and it is synchronous, so it is the thing
-  // that gets a frame of its own. The fetch and the decode are not.
-  //
-  // The coverage readback happens inside the same timed block, deliberately.
-  // It is a 64x64 downscale and a getImageData, which forces a flush of
-  // everything queued behind it, and leaving it outside meant the `worst
-  // frame` figure in the log understated the real stall by the one part of it
-  // that has nothing to do with how complicated the artwork is.
+  // Three pieces of main-thread work, and each gets its own animation frame:
+  // the decode, which the browser does between `img.src` and `onload`; the
+  // draw, FRAMES_PER_RASTER frames later; and the coverage readback, a frame
+  // after that. The readback used to share the draw's frame, which was honest
+  // about the total but made the stall the sum of two unrelated things. Split
+  // apart, the worst single frame of a load is very nearly the decode alone,
+  // which is the number the size cap is trying to control.
   function rasterise(path, wire, done) {
     let xhr;
     try {
@@ -217,23 +274,32 @@
       let t0 = 0, decodeMs = 0;
       img.onload = () => {
         decodeMs = performance.now() - t0;
-        requestAnimationFrame(() => {
+        afterFrames(FRAMES_PER_RASTER, () => {
           const t1 = performance.now();
           let cv = document.createElement('canvas');
           cv.width = SIZE; cv.height = SIZE;
           const ctx = cv.getContext('2d');
           ctx.fillStyle = '#000';
           ctx.fillRect(0, 0, SIZE, SIZE);
-          let lit = 0;
           try {
             ctx.drawImage(img, 0, 0, SIZE, SIZE);
-            lit = coverage(cv);
           } catch (e) {
             console.error('visuals: pattern draw failed', path, e);
             cv = null;
           }
           URL.revokeObjectURL(url);
-          done(cv, decodeMs + (performance.now() - t1), lit);
+          const drawMs = decodeMs + (performance.now() - t1);
+          if (!cv) { done(null); return; }
+          afterFrames(1, () => {
+            const t2 = performance.now();
+            let lit = 0;
+            try {
+              lit = coverage(cv);
+            } catch (e) {
+              console.error('visuals: pattern coverage failed', path, e);
+            }
+            done(cv, drawMs, lit, performance.now() - t2);
+          });
         });
       };
       t0 = performance.now();
@@ -340,7 +406,9 @@
       if (i >= 7) {
         const t0 = performance.now();
         entry.peak = peak99(entry.frames[6]);
-        entry.ms += performance.now() - t0;
+        const peakMs = performance.now() - t0;
+        entry.ms += peakMs;
+        entry.worst = Math.max(entry.worst, peakMs);
         entry.busy = false;
         if (entry.cover[6] > COVER_MAX) {
           // Too solid to be line work; see COVER_MAX. The frames are freed
@@ -355,7 +423,7 @@
         done(entry);
         return;
       }
-      rasterise(meta.frames[i], meta.wire, (cv, ms, lit) => {
+      rasterise(meta.frames[i], meta.wire, (cv, ms, lit, litMs) => {
         if (!cv) {
           entry.busy = false;
           freeFrames(entry);
@@ -364,8 +432,11 @@
         }
         entry.frames[i] = cv;
         entry.cover[i] = lit;
-        entry.ms += ms;
-        entry.worst = Math.max(entry.worst, ms);
+        // `worst` is the worst single animation frame, which is what the cap
+        // is set against, so the draw and the readback count separately: they
+        // are in different frames now and neither waits for the other.
+        entry.ms += ms + litMs;
+        entry.worst = Math.max(entry.worst, ms, litMs);
         i += 1;
         step();
       });
@@ -419,7 +490,7 @@
     const wanted = order.filter(t => !covered[t]).concat(order.filter(t => covered[t]));
     for (let n = 0; n < wanted.length; n++) {
       const tag = wanted[n];
-      const pool = library.filter(p => p.tags.indexOf(tag) >= 0 && !cached(p.slug));
+      const pool = eligible().filter(p => p.tags.indexOf(tag) >= 0 && !cached(p.slug));
       const fresh = pool.filter(p => seen.indexOf(p.slug) < 0);
       const pick = pickFrom(fresh.length ? fresh : pool);
       if (pick) {
@@ -427,7 +498,7 @@
         return pick;
       }
     }
-    const any = library.filter(p => !cached(p.slug));
+    const any = eligible().filter(p => !cached(p.slug));
     const fresh = any.filter(p => seen.indexOf(p.slug) < 0);
     return pickFrom(fresh.length ? fresh : any);
   }
@@ -516,10 +587,53 @@
         'lit ' + entry.cover.slice(0, 6).map(c => (100 * c).toFixed(1)).join('/') + '%,',
         'default ' + (100 * entry.cover[6]).toFixed(1) + '%,',
         (meta.frame / 1e6).toFixed(2) + ' MB in its biggest frame');
+      calibrate(entry);
     });
   }
-  setInterval(prewarm, PREWARM_MS);
-  prewarm();
+
+  // What the box actually did, turned into the rule for what it is asked to do
+  // next. A load that overran the budget takes the cap down to just below its
+  // own biggest frame, which rules out that pattern and everything heavier for
+  // the rest of the session and, through localStorage, for the next boot too.
+  //
+  // The cap only ever falls. A pattern that took 500 ms once will take 500 ms
+  // again, and a cap that could rise would spend the whole set rediscovering
+  // that one hitch at a time, which is the fault this exists to fix.
+  //
+  // Over budget by less than double and the pattern stays in the cache: it is
+  // already rasterised, the stall has been paid for, and throwing away 29 MB
+  // of work to avoid a hitch that has already happened helps nobody. Over by
+  // more than double and it goes, because it would otherwise be on screen for
+  // a minute of a set that has just been told this box cannot afford it.
+  function calibrate(entry) {
+    if (entry.worst <= WORST_FRAME_BUDGET_MS) return;
+    const limit = Math.max(1, entry.meta.frame - 1);
+    if (limit < frameCap) {
+      frameCap = limit;
+      rememberCap();
+      console.log('visuals: pattern cap lowered to', frameCap, 'bytes after',
+        entry.meta.slug, 'worst frame', entry.worst.toFixed(0), 'ms');
+    }
+    if (entry.worst > 2 * WORST_FRAME_BUDGET_MS) {
+      const at = cache.indexOf(entry);
+      if (at >= 0 && !entry.held) {
+        cache.splice(at, 1);
+        freeFrames(entry);
+        console.log('visuals: pattern evicted', entry.meta.slug,
+          'over the frame budget by more than double');
+      }
+    }
+  }
+
+  // The first prewarm waits. A page that has just loaded is drawing its first
+  // melt out of a blank still and building the wordmark texture, and an SVG
+  // decode landing in the same frames as that is the one hitch a viewer is
+  // guaranteed to see, because it is the only one they are already looking at
+  // the screen for.
+  setTimeout(() => {
+    prewarm();
+    setInterval(prewarm, PREWARM_MS);
+  }, PREWARM_DELAY_MS);
 
   // The sweep clock. A full traverse of the six frames takes about 40 s when
   // the room is quiet and about 12 s when it is loud, and the position is
@@ -589,7 +703,10 @@
 
   window.patterns = {
     mix: mix,
-    count: library.length,
+    // The live size cap, for the load test and for anyone reading the log and
+    // wondering why the library shrank.
+    get cap() { return frameCap; },
+    get count() { return eligible().length; },
 
     ready() {
       return cache.some(e => !e.busy);
