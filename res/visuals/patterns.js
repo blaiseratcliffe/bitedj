@@ -92,6 +92,31 @@
                              // happened to load
   const DEAD_BAND = 0.05;    // sweep positions either side of a frame boundary
                              // that keep the pair already bound
+  const RAF_STALL_MS = 1000; // no serviced animation frame for this long means
+                             // the page cannot paint
+
+  // When an animation frame was last serviced. sweepTick() below is the only
+  // writer; it runs on requestAnimationFrame and is the cheapest true answer
+  // to "is this page still being drawn". Declared here rather than beside the
+  // sweep clock because prewarm() and the watchdog read it, and a `let` cannot
+  // be read before its declaration runs.
+  //
+  // Every step of a load is paced by requestAnimationFrame, so a load started
+  // while frames have stopped is guaranteed to reach the watchdog having done
+  // nothing, and to leave a parked frame callback and a parsed SVG behind
+  // while it waits. The page has to be asked before a load is started, not
+  // after it has failed.
+  //
+  // requestAnimationFrame rather than document.visibilityState, which is what
+  // this test replaced. visibilityState reports a surface that is hidden or
+  // occluded, and on a Wayland kiosk that is not the condition that breaks a
+  // load: an output blanked by DPMS stops the compositor's frame callbacks
+  // while the surface stays mapped, unoccluded and, as far as Chromium is
+  // concerned, visible. The frame clock is true in both cases.
+  let paintedAt = performance.now();
+  function canPaint() {
+    return performance.now() - paintedAt < RAF_STALL_MS;
+  }
 
   // What a pattern costs, and what is done about it.
   //
@@ -326,7 +351,7 @@
   // holding and stops. Checked at both resumption points, because the canvas
   // between the draw frame and the readback frame is reachable from nothing
   // else at all.
-  function rasterise(path, wire, live, done) {
+  function rasterise(path, wire, live, hold, done) {
     let xhr;
     try {
       xhr = new XMLHttpRequest();
@@ -342,8 +367,16 @@
       if (!doc) { console.error('visuals: pattern has no <svg>', path); done(null); return; }
       const url = URL.createObjectURL(new Blob([doc], { type: 'image/svg+xml' }));
       const img = new Image();
+      // The two things a parked load is holding, where something other than
+      // the parked frame callback can reach them. Between the decode and the
+      // draw the only references to the Blob behind this URL and to the parsed
+      // SVG are in this closure, and the callback that would release them
+      // cannot run while frames have stopped, so an abandoned load used to
+      // leave both alive until the screen came back.
+      hold.url = url;
+      hold.img = img;
       img.onerror = () => {
-        URL.revokeObjectURL(url);
+        release(hold);
         console.error('visuals: pattern decode failed', path);
         done(null);
       };
@@ -351,7 +384,7 @@
       img.onload = () => {
         decodeMs = performance.now() - t0;
         afterFrames(FRAMES_PER_RASTER, () => {
-          if (!live()) { URL.revokeObjectURL(url); return; }
+          if (!live()) { release(hold); return; }
           const t1 = performance.now();
           let cv = document.createElement('canvas');
           cv.width = SIZE; cv.height = SIZE;
@@ -365,7 +398,7 @@
             console.error('visuals: pattern draw failed', path, e);
             drew = false;
           }
-          URL.revokeObjectURL(url);
+          release(hold);
           const drawMs = performance.now() - t1;
           if (!drew) {
             // Shrink before dropping it. This is the one allocation in the
@@ -479,6 +512,26 @@
     entry.frames.forEach(cv => { if (cv) { cv.width = 1; cv.height = 1; } });
   }
 
+  // The Blob URL and the parsed image a load is holding between its decode and
+  // its draw. Called by rasterise() when it is finished with them and by the
+  // watchdog when it gives up on a load that is parked between two frames.
+  // The handlers go first: clearing `src` is what releases the decoded bitmap,
+  // and it also fires `onerror` a moment later, which would otherwise log a
+  // decode failure for an image nobody is waiting for any more.
+  function release(hold) {
+    if (!hold) return;
+    if (hold.img) {
+      hold.img.onload = null;
+      hold.img.onerror = null;
+      try { hold.img.src = ''; } catch (e) { /* already gone */ }
+      hold.img = null;
+    }
+    if (hold.url) {
+      try { URL.revokeObjectURL(hold.url); } catch (e) { /* already revoked */ }
+      hold.url = null;
+    }
+  }
+
   // Seven frames, strictly one after another, so two patterns are never
   // rasterising into the same animation frames. Returns the entry it is
   // building, so a caller that gives up on the load can free what was built.
@@ -492,7 +545,11 @@
     const entry = {
       meta: meta, frames: new Array(7), busy: true,
       ms: 0, worst: 0, decodeMs: 0, peak: 0,
-      cover: [], shownAt: 0, at: performance.now(), held: 0
+      cover: [], shownAt: 0, at: performance.now(), held: 0,
+      // What rasterise() is holding right now, so a caller that abandons the
+      // load can let go of it without waiting for a frame callback that may
+      // never run.
+      hold: { url: null, img: null }
     };
     let i = 0;
     (function step() {
@@ -525,7 +582,7 @@
         });
         return;
       }
-      rasterise(meta.frames[i], meta.wire, live, (cv, lit, decodeMs, drawMs, litMs) => {
+      rasterise(meta.frames[i], meta.wire, live, entry.hold, (cv, lit, decodeMs, drawMs, litMs) => {
         if (!cv) {
           entry.busy = false;
           freeFrames(entry);
@@ -704,13 +761,21 @@
   // on and roughly doubles the per-frame cost while it lasts.
   //
   // The watchdog writes no cost record and retires nothing, and if the page
-  // was hidden when it fired it does not even blame the slug. What it costs a
-  // pattern at worst is the rest of this session.
+  // could not paint when it fired it does not even blame the slug. What it
+  // costs a pattern at worst is the rest of this session.
   const LOAD_TIMEOUT_MS = 60000;
   let generation = 0;
 
   function prewarm() {
     if (loading) return;
+    // Nothing is started while the page cannot paint. A load is paced by
+    // animation frames from end to end, so one begun now would allocate an
+    // entry, take a victim out of the cache, fetch and parse an SVG, and then
+    // sit on all of it for sixty seconds until the watchdog gave up. Overnight
+    // that is one doomed load a minute, each one parking a Blob and a parsed
+    // image that nothing can release until the screen comes back. The interval
+    // will be round again in twenty seconds; that is the only retry there is.
+    if (!canPaint()) return;
     sweepRetired();
     if (!hasRoom()) return;
     // Evict before allocating, not after: pushing a fourth entry and trimming
@@ -736,23 +801,22 @@
       if (!live()) return;
       generation += 1;          // stops the orphan at its next resumption
       loading = false;
-      if (building) freeFrames(building);
-      // Was anybody looking? Every step of a load is paced by
-      // requestAnimationFrame and Chromium stops those for a hidden, occluded
-      // or blanked page, so a timeout on a page nobody can see says nothing
-      // about the file. Blaming the slug for it walks the whole library into
-      // `skipped` at roughly one per 62 s, which is forty minutes of overnight
-      // blanking to leave the prewarm with nothing pickable for the rest of
-      // the session, and the log saying "skipped" forty times and nothing
-      // saying the prewarm is now inert. So a hidden page costs the partial
-      // load and one retry, and no more; `soon()` is not called either, since
-      // two seconds later the page is still hidden.
-      const seenIt = typeof document.visibilityState !== 'string'
-        || document.visibilityState === 'visible';
-      if (!seenIt) {
+      if (building) {
+        freeFrames(building);
+        release(building.hold);   // the Blob and the parsed SVG, which the
+                                  // parked frame callback cannot reach
+      }
+      // Could the page paint? A load is paced by animation frames from end to
+      // end, so a timeout on a page that has stopped getting them says nothing
+      // about the file, and blaming the slug for it walks the whole library
+      // into `skipped` at roughly one a minute until the prewarm has nothing
+      // pickable left. prewarm() now declines to start a load in that state at
+      // all, so reaching this branch means frames stopped after the load
+      // began. Either way it costs the slug nothing and there is no extra
+      // retry: the interval is the only timer.
+      if (!canPaint()) {
         console.log('visuals: pattern load timed out', meta.slug,
-          'while the page was hidden, not counted');
-        setTimeout(prewarm, PREWARM_MS);
+          'while the page was not painting, not counted');
         return;
       }
       skipped.push(meta.slug);
@@ -804,6 +868,7 @@
   // removes a candidate permanently, so the supply of them is finite.
   const RETRY_MS = 2000;
   function soon() {
+    if (!canPaint()) return;   // the interval will come round; see prewarm()
     setTimeout(prewarm, RETRY_MS);
   }
 
@@ -842,9 +907,17 @@
     const slug = entry.meta.slug;
     const was = cost[slug];
     const over = entry.worst > WORST_FRAME_BUDGET_MS;
+    // `when` is the age of the strikes, not of the last sighting. It is
+    // stamped when the record is created and again by an over-budget sample,
+    // and an in-budget one leaves it alone, so the thirty days run from the
+    // last strike. Refreshing it on every load, which is what it used to do,
+    // meant a pattern the rotation keeps picking never expired at all: one
+    // unlucky sample and another six weeks later would retire it, which is the
+    // outcome the expiry exists to prevent.
+    const had = was && isFinite(was.when) ? was.when : null;
     cost[slug] = {
       worstMs: Math.round(entry.worst),
-      when: Date.now(),
+      when: (over || had === null) ? Date.now() : had,
       n: (was && isFinite(was.n) ? was.n : 0) + 1,
       over: strikes(slug) + (over ? 1 : 0)
     };
@@ -892,6 +965,7 @@
     const now = performance.now();
     const dt = Math.min(100, now - phaseAt);
     phaseAt = now;
+    paintedAt = now;   // the frame clock canPaint() reads
     const energy = window.feed ? feed.energy : 0;
     phase += Math.PI * dt / (40000 - 28000 * energy);
     if (phase > 2 * Math.PI) phase -= 2 * Math.PI;
@@ -948,6 +1022,10 @@
     get retired() { return library.filter(p => retired(p.slug)).length; },
     get onestrike() { return library.filter(p => strikes(p.slug) === 1).length; },
     cost() { return cost; },
+    // The two session-scoped lists, for the console on the box: why the
+    // prewarm has gone quiet is otherwise unanswerable from outside.
+    skipped() { return skipped.slice(); },
+    rejected() { return rejected.slice(); },
     get count() { return eligible().length; },
 
     // The same predicate take() uses, not merely "something has finished
