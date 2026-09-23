@@ -31,9 +31,11 @@ from the files rather than assumed:
           degenerate frame replaced by its nearest usable neighbour. Eight
           patterns have a sweep frame 0 that is not artwork at all: with the
           slider at its minimum the site emits a 1591 byte paperclip icon,
-          which would land on the screen as a paperclip. One of the eight is
-          iso-sphere, which patterns.js keeps out of the rotation on size, so
-          seven of them reach the screen with a flattened sweep end.
+          which would land on the screen as a paperclip. Three of the eight
+          never reach the screen anyway, iso-sphere because patterns.js keeps
+          it out on size and backpack-grid and masked_letter_grid because it
+          keeps them out on coverage, so five of them are on screen with a
+          flattened sweep end.
 """
 
 import json

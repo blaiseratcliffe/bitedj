@@ -39,23 +39,26 @@
 //    is exactly what the screen would show. The generator detects those (the
 //    root `<svg>` of a real export carries `class="svg-preview"`) and repeats
 //    the nearest usable frame in their place, so the sweep is always seven
-//    frames and simply flattens at that end. One of the eight is iso-sphere,
-//    which the size limit below keeps out of the rotation anyway, so seven
-//    patterns on screen have a flattened sweep end.
+//    frames and simply flattens at that end. Three of the eight never reach
+//    the screen anyway, iso-sphere on size and backpack-grid and
+//    masked_letter_grid on coverage, so five patterns in the rotation have a
+//    flattened sweep end.
 //
-// Which patterns are in the rotation. Two rules, both below with their
-// measurements: a pattern whose biggest single frame is over the size cap
-// costs too long a stall to rasterise, and a pattern whose default frame is
-// lit past COVER_MAX is a filled sheet rather than line work. On a desktop, 54
-// patterns on disk, 49 inside the starting cap, 38 inside both. The size cap
-// is not a constant: it starts at MAX_FRAME_BYTES and is lowered by whatever
-// the box in front of the viewer turns out to cost, so the Pi settles at a
-// smaller library than a desktop does. Membership is otherwise decided on the
-// default frame alone; the six sweep frames are measured and logged and gate
-// nothing, so the morph always runs the whole sweep.
+// Which patterns are in the rotation. Three rules, all below with their
+// measurements. A pattern whose biggest single frame is over MAX_FRAME_BYTES
+// is dropped before anything is fetched. A pattern whose default frame is lit
+// past COVER_MAX is a filled sheet rather than line work. And a pattern whose
+// measured worst animation frame is over WORST_FRAME_BUDGET_MS is retired,
+// which is the only one of the three that depends on the hardware: the record
+// is kept per slug in localStorage, so the Pi ends up with a smaller library
+// than a desktop and neither has to be told which. On a desktop, 54 patterns
+// on disk, 49 inside the size limit, 38 inside that and the coverage ceiling,
+// and nothing retired on cost. Membership is otherwise decided on the default
+// frame alone; the six sweep frames are measured and logged and gate nothing,
+// so the morph always runs the whole sweep.
 //
 // Cost. Rasterising is not free and the heavy end of the library is very
-// heavy: the timings are in the size cap comment below. Nothing here
+// heavy: the timings are in the cost comment below. Nothing here
 // rasterises on demand. A pattern is pulled into the cache in the background,
 // no more than one frame every couple of animation frames and with the
 // coverage readback in a frame of its own, so the main thread never stalls for
@@ -83,28 +86,21 @@
                                    // SVG decode
   const FRAMES_PER_RASTER = 2;     // animation frames between one frame's draw
                                    // and the next one's
-  const WORST_FRAME_BUDGET_MS = 120;  // see the size cap below
+  const WORST_FRAME_BUDGET_MS = 120;  // see the cost map below
   const ROTATE_MS = 180000;  // a cached pattern nobody has shown for this long
                              // is fair game to replace, so a three hour set
                              // does not run on the first three patterns that
                              // happened to load
-  const RECENT = 8;          // slugs take() steers around, one per sketch in
-                             // the family, so a full round of them can only
-                             // repeat an artwork once the cache has nothing
-                             // else to offer
   const DEAD_BAND = 0.05;    // sweep positions either side of a frame boundary
                              // that keep the pair already bound
 
-  // What a pattern costs, and what the size limit is a limit on.
+  // What a pattern costs, and what is done about it.
   //
-  // The number to hold a limit against is the biggest single frame, not the
-  // seven-frame total. A pattern rasterises one frame every couple of
-  // animation frames, so the total is spread and the biggest frame is the
-  // stall. The generator puts both figures in the index and this gates on
-  // `frame`.
-  //
-  // Measured on this desktop at 1024x1024, the decode plus the draw, which are
-  // both on the main thread:
+  // Two filters, and they are different kinds of thing. The first is static
+  // and is about file size: a pattern rasterises one frame every couple of
+  // animation frames, so the seven-frame total is spread and the biggest
+  // single frame is the stall. Measured on this desktop, the decode plus the
+  // draw, both on the main thread:
   //
   //   pattern                 biggest frame   worst frame
   //   arcs_1                        0.03 MB         10 ms
@@ -116,48 +112,81 @@
   //   iso-sphere                    4.65 MB        608 ms
   //   deformed_grid_mesh_2          6.11 MB        597 ms
   //
-  // 1.6 MB a frame is where that table puts the cut, and on the Pi it is
-  // wrong. The VideoCore measured two to four times slower than this desktop
-  // on the same patterns, and worse, not proportionally: concentric_arc
-  // truchet_2 took 3091 ms in total with a worst frame of 509 ms, chevron
-  // blocks 1174 ms with 211, noise_circle_1 613 ms with 225. Half a second is
-  // a visible hitch in the picture, and it arrived every time the prewarm ran.
+  // 1.6 MB is where that table puts the cut, and it keeps the five patterns
+  // nobody should attempt on any hardware out of the way before anything is
+  // fetched.
   //
-  // So the cap below is a starting point and not the answer. The real limit is
-  // learned from what the box in front of the viewer actually does: every
-  // completed load compares its worst frame against WORST_FRAME_BUDGET_MS, and
-  // a load that blows the budget lowers the cap to just under that pattern's
-  // biggest frame, so nothing that large is attempted again. The cap only ever
-  // goes down within a session, because a pattern that was slow once is not
-  // going to be fast later, and it is written to localStorage so the next boot
-  // starts from what the last one learned instead of rediscovering it one
-  // hitch at a time.
+  // The second filter is the real one, and bytes are a poor proxy for it. The
+  // Pi proved that twice over: concentric_arc_truchet_2 took 509 ms in its
+  // worst frame there against 132 here, and noise_circle_1 took 225 ms on a
+  // 137 KB frame, which is a worse cost per byte than patterns five times its
+  // size. So the cost is not predicted from the file at all any more. Every
+  // pattern is measured once, on the machine it is running on, and the result
+  // is remembered: `{worstMs, when}` per slug in localStorage. A pattern whose
+  // measured worst frame is over WORST_FRAME_BUDGET_MS is retired and is not
+  // offered again; one that is over by more than double is evicted on the
+  // spot as well, because it would otherwise hold the screen for a minute of a
+  // set on a box that has just said it cannot afford it, while one that is
+  // over by less is left in the cache it has already been rasterised into.
   //
-  // 120 ms is three dropped frames at the page's 30 fps cap. A pattern that
-  // misses it by less than double is kept, because it is already rasterised
-  // and the cost is paid; one that misses it by more than double is evicted as
-  // well as excluded, on the grounds that it will be on screen for a minute
-  // and it is 29 MB.
+  // A pattern nobody has measured stays eligible, which is what makes this
+  // converge: every pattern is tried exactly once per profile, the affordable
+  // set ends up the same whatever order they load in, and the cost of finding
+  // out is one hitch per pattern per install rather than one per pattern per
+  // boot. An earlier version ratcheted a byte cap down from the first pattern
+  // that overran, which stranded most of the library behind whichever heavy
+  // one happened to load first.
+  //
+  // 120 ms is three dropped frames at the page's 30 fps cap.
+  //
+  // A retirement is not forever. A record older than COST_STALE_MS is dropped
+  // at startup and its pattern measured again, so a faster Chromium or a
+  // quicker box brings the library back on its own rather than needing the
+  // profile cleared.
   const MAX_FRAME_BYTES = 1.6e6;
-  const CAP_KEY = 'bitedj.patterns.frameCap';
+  const COST_KEY = 'bitedj.patterns.cost';
+  const COST_STALE_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days
 
-  // The learned cap. localStorage is wrapped because a page on file:// with a
-  // cleared profile can throw on the read, and a loader that throws at startup
-  // takes the whole family down.
-  let frameCap = MAX_FRAME_BYTES;
-  (function readCap() {
-    let stored = null;
-    try { stored = window.localStorage.getItem(CAP_KEY); } catch (e) { stored = null; }
-    const n = stored === null ? NaN : parseInt(stored, 10);
-    if (isFinite(n) && n > 0 && n < MAX_FRAME_BYTES) {
-      frameCap = n;
-      console.log('visuals: pattern cap read from storage', frameCap, 'bytes');
+  // slug -> {worstMs, when}. localStorage is wrapped at both ends because a
+  // page on file:// with a cleared profile can throw on either, and a loader
+  // that throws at startup takes the whole family down with it.
+  let cost = {};
+  (function readCost() {
+    let raw = null;
+    try { raw = window.localStorage.getItem(COST_KEY); } catch (e) { raw = null; }
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') cost = parsed;
+    } catch (e) {
+      cost = {};   // somebody else's data, or a truncated write
     }
   })();
 
-  function rememberCap() {
-    try { window.localStorage.setItem(CAP_KEY, String(frameCap)); } catch (e) { /* no storage */ }
+  function writeCost() {
+    try { window.localStorage.setItem(COST_KEY, JSON.stringify(cost)); } catch (e) { /* no storage */ }
   }
+
+  function retired(slug) {
+    const rec = cost[slug];
+    return !!(rec && rec.worstMs > WORST_FRAME_BUDGET_MS);
+  }
+
+  // One sweep at startup rather than a check on every pick: an expired record
+  // is deleted, and the pattern is then simply unmeasured again.
+  (function expireCost() {
+    const now = Date.now();
+    let dropped = 0;
+    Object.keys(cost).forEach(slug => {
+      const rec = cost[slug];
+      if (rec && rec.worstMs > WORST_FRAME_BUDGET_MS && now - rec.when > COST_STALE_MS) {
+        delete cost[slug];
+        dropped += 1;
+        console.log('visuals: pattern', slug, 'cost record expired, measuring it again');
+      }
+    });
+    if (dropped) writeCost();
+  })();
 
   // The rewrite, in two halves.
   //
@@ -182,11 +211,13 @@
   // antialiased edge either side.
   //
   // `vector-effect` is forced on as well, for the 13 patterns that do not ask
-  // for it: without it the width is in user units and scales by the viewBox,
-  // which is between 2 and 20 here, so the same rule would give one pattern a
-  // 5 px stroke and another a 50 px one. A CSS rule beats a presentation
-  // attribute in the cascade whatever its specificity, which is why this works
-  // on files that carry `stroke-width="0.5"` on every path.
+  // for it. Without it the width is in user units, and a user unit is 1024
+  // divided by the viewBox: those 13 run from arcs_1's 259 units to
+  // masked_letter_grid's 10,395, which is 3.95 px per unit at one end and 0.10
+  // at the other. The same 2.5 would be a 9.9 px slab on the first and a
+  // quarter of a pixel, invisible again, on the last. A CSS rule beats a
+  // presentation attribute in the cascade whatever its specificity, which is
+  // why this works on files that carry `stroke-width="0.5"` on every path.
   const STROKE_PX = 2.5;
   const RULE = '<style>*{vector-effect:non-scaling-stroke;stroke-width:'
     + STROKE_PX + 'px}</style>';
@@ -197,18 +228,20 @@
 
   const TAGS = ['GRID', 'RADIAL', 'NOISE', 'FLOW', 'ISOMETRIC', 'ORGANIC', 'DISTORTION', 'PHYSICS'];
 
-  // The whole catalogue. The size cap is applied at pick time rather than
-  // here, because it moves: a pattern that is eligible at boot can be ruled
-  // out an hour later by a load that overran the budget.
-  const library = window.patternIndex || [];
+  // The catalogue, after the static size filter. What is left of it is
+  // narrowed again at pick time by the cost map, which moves: a pattern that
+  // is eligible at boot is retired the moment it is measured over budget.
+  const library = (window.patternIndex || []).filter(p => p.frame <= MAX_FRAME_BYTES);
   function eligible() {
-    return library.filter(p => p.frame <= frameCap);
+    return library.filter(p => !retired(p.slug));
   }
   if (!window.patternIndex) {
     console.error('visuals: no pattern index; run tools/build-pattern-index.py');
   } else {
-    console.log('visuals: patterns', eligible().length, 'of', library.length,
-      'whose biggest frame is under', (frameCap / 1e6).toFixed(2) + ' MB');
+    console.log('visuals: patterns', eligible().length, 'eligible,',
+      library.length - eligible().length, 'retired by measured cost;',
+      library.length, 'of', window.patternIndex.length,
+      'under the', (MAX_FRAME_BYTES / 1e6).toFixed(1) + ' MB frame size limit');
   }
 
   function svgDoc(text, wire) {
@@ -395,7 +428,8 @@
   }
 
   // Seven frames, strictly one after another, so two patterns are never
-  // rasterising into the same animation frames.
+  // rasterising into the same animation frames. Returns the entry it is
+  // building, so a caller that gives up on the load can free what was built.
   function load(meta, done) {
     const entry = {
       meta: meta, frames: new Array(7), busy: true, ms: 0, worst: 0, peak: 0,
@@ -404,23 +438,30 @@
     let i = 0;
     (function step() {
       if (i >= 7) {
-        const t0 = performance.now();
-        entry.peak = peak99(entry.frames[6]);
-        const peakMs = performance.now() - t0;
-        entry.ms += peakMs;
-        entry.worst = Math.max(entry.worst, peakMs);
-        entry.busy = false;
-        if (entry.cover[6] > COVER_MAX) {
-          // Too solid to be line work; see COVER_MAX. The frames are freed
-          // rather than kept, and prewarm() remembers the slug so the cost is
-          // paid once a session and not once every twenty seconds.
-          freeFrames(entry);
-          console.log('visuals: pattern too solid', meta.slug,
-            (100 * entry.cover[6]).toFixed(0) + '% of the default frame lit');
-          done(null);
-          return;
-        }
-        done(entry);
+        // peak99() reads a quarter of a million pixels and gets a frame of its
+        // own for the same reason the coverage readback does: landing it in
+        // the same tick as the seventh raster made the worst frame of a load
+        // the sum of two unrelated stalls, and the worst frame is the number
+        // the budget is checked against.
+        afterFrames(1, () => {
+          const t0 = performance.now();
+          entry.peak = peak99(entry.frames[6]);
+          const peakMs = performance.now() - t0;
+          entry.ms += peakMs;
+          entry.worst = Math.max(entry.worst, peakMs);
+          entry.busy = false;
+          if (entry.cover[6] > COVER_MAX) {
+            // Too solid to be line work; see COVER_MAX. The frames are freed
+            // rather than kept, and the caller remembers the slug so the cost
+            // is paid once a session and not once every twenty seconds.
+            freeFrames(entry);
+            console.log('visuals: pattern too solid', meta.slug,
+              (100 * entry.cover[6]).toFixed(0) + '% of the default frame lit');
+            done(null);
+            return;
+          }
+          done(entry);
+        });
         return;
       }
       rasterise(meta.frames[i], meta.wire, (cv, ms, lit, litMs) => {
@@ -441,17 +482,12 @@
         step();
       });
     })();
+    return entry;
   }
 
   const cache = [];
-  // Slugs shown, most recent last: `recent` is the last RECENT of them and is
-  // what take() steers around, `seen` is every one this session and is what
-  // the prewarm steers around. They are separate because they answer
-  // different questions. take() is choosing between three things in memory
-  // and only needs to know which of them the room has just watched; the
-  // prewarm is choosing between 38 files and should be pulling in something
-  // the room has never seen at all.
-  const recent = [];
+  // Every slug shown this session. The prewarm steers around it, so a pattern
+  // the room has never seen beats one that has already been round.
   const seen = [];
   const rejected = [];   // slugs whose load failed; never retried this session
   let loading = false;
@@ -504,13 +540,22 @@
   }
 
   // Least recently shown first, and never one a sketch is currently drawing.
+  // A resident that has been retired by the cost map goes before any of them,
+  // whatever its age: take() will not hand it out again, so it is 29 MB of
+  // nothing.
   function trim(limit) {
     const age = (e) => Math.max(e.shownAt, e.at);
+    const dead = (e) => retired(e.meta.slug);
     while (cache.length > limit) {
       let worst = -1;
       for (let i = 0; i < cache.length; i++) {
         if (cache[i].held || cache[i].busy) continue;
-        if (worst < 0 || age(cache[i]) < age(cache[worst])) worst = i;
+        if (worst < 0) { worst = i; continue; }
+        if (dead(cache[i]) !== dead(cache[worst])) {
+          if (dead(cache[i])) worst = i;
+        } else if (age(cache[i]) < age(cache[worst])) {
+          worst = i;
+        }
       }
       if (worst < 0) return;
       const gone = cache.splice(worst, 1)[0];
@@ -542,28 +587,42 @@
   // generation counter: the abandoned load's callbacks, if they ever arrive,
   // see a stale generation and free what they built rather than joining the
   // cache behind the one that replaced them.
+  //
+  // The watchdog also frees the partial entry itself, which is up to six full
+  // frames and 25 MB, and writes the slug into the cost map as an hour, so a
+  // file that hangs once is not offered again on this profile. Waiting for the
+  // abandoned callbacks to do that freeing is no good, because the whole point
+  // of the watchdog is that they may never arrive.
   const LOAD_TIMEOUT_MS = 60000;
   let generation = 0;
 
   function prewarm() {
     if (loading || !hasRoom()) return;
+    // Evict before allocating, not after. Pushing a fourth entry and trimming
+    // afterwards is a second or two of four patterns in memory, 117 MB rather
+    // than 88, at exactly the moment the page is also decoding an SVG. The
+    // trim comes before the pick, so an entry that is about to be evicted does
+    // not count as covering its tag group.
+    trim(CACHE_MAX - 1);
     const meta = pickPrewarm();
     if (!meta) return;
     loading = true;
-    // Evict before allocating, not after. Pushing a fourth entry and trimming
-    // afterwards is a second or two of four patterns in memory, 117 MB rather
-    // than 88, at exactly the moment the page is also decoding an SVG.
-    trim(CACHE_MAX - 1);
     if (cache.length >= CACHE_MAX - 1) lastSwapAt = performance.now();
     const t0 = performance.now();
     const mine = ++generation;
+    let building = null;
     const watchdog = setTimeout(() => {
       if (generation !== mine) return;
       generation += 1;
       loading = false;
-      console.log('visuals: pattern load timed out', meta.slug);
+      if (building) freeFrames(building);
+      cost[meta.slug] = { worstMs: LOAD_TIMEOUT_MS, when: Date.now(), why: 'timed out' };
+      writeCost();
+      rejected.push(meta.slug);
+      console.log('visuals: pattern load timed out', meta.slug, 'retired');
+      soon();
     }, LOAD_TIMEOUT_MS);
-    load(meta, (entry) => {
+    building = load(meta, (entry) => {
       if (generation !== mine) {
         if (entry) freeFrames(entry);
         return;
@@ -575,6 +634,7 @@
         // properties of the artwork rather than of the moment, so neither is
         // retried.
         rejected.push(meta.slug);
+        soon();
         return;
       }
       cache.push(entry);
@@ -591,38 +651,52 @@
     });
   }
 
-  // What the box actually did, turned into the rule for what it is asked to do
-  // next. A load that overran the budget takes the cap down to just below its
-  // own biggest frame, which rules out that pattern and everything heavier for
-  // the rest of the session and, through localStorage, for the next boot too.
+  // A rejection leaves the cache one short, and waiting the full PREWARM_MS to
+  // notice means twenty seconds of a smaller library for a load that cost
+  // nothing to decide. Not instant, because a run of rejections back to back
+  // would be a run of rasterises back to back, which is the thing the pacing
+  // in this file exists to avoid. It cannot loop for ever: every rejection
+  // removes a candidate permanently, so the supply of them is finite.
+  const RETRY_MS = 2000;
+  function soon() {
+    setTimeout(prewarm, RETRY_MS);
+  }
+
+  // What the box actually did, written down so it is not discovered again.
   //
-  // The cap only ever falls. A pattern that took 500 ms once will take 500 ms
-  // again, and a cap that could rise would spend the whole set rediscovering
-  // that one hitch at a time, which is the fault this exists to fix.
+  // Every completed load records its worst single animation frame against the
+  // slug, and a pattern whose record is over WORST_FRAME_BUDGET_MS is retired:
+  // eligible() drops it, so neither the prewarm nor take() will offer it
+  // again on this profile until the record goes stale. Over budget by more
+  // than double and it is evicted on the spot as well, because it would
+  // otherwise hold the screen for a minute of a set on a box that has just
+  // said it cannot afford it; over by less and it stays in the cache it has
+  // already been rasterised into, though take() will not hand it out, so it
+  // leaves at the next eviction.
   //
-  // Over budget by less than double and the pattern stays in the cache: it is
-  // already rasterised, the stall has been paid for, and throwing away 29 MB
-  // of work to avoid a hitch that has already happened helps nobody. Over by
-  // more than double and it goes, because it would otherwise be on screen for
-  // a minute of a set that has just been told this box cannot afford it.
+  // An unmeasured pattern is always eligible. That is the whole design: every
+  // pattern is tried exactly once per profile, the affordable set converges to
+  // the same thing whatever order they load in, and the cost of finding out is
+  // one hitch per pattern per install. The version before this ratcheted a
+  // byte cap down from the first pattern that overran, which stranded most of
+  // the library behind whichever heavy one happened to load first.
   function calibrate(entry) {
+    const slug = entry.meta.slug;
+    cost[slug] = { worstMs: Math.round(entry.worst), when: Date.now() };
+    writeCost();
     if (entry.worst <= WORST_FRAME_BUDGET_MS) return;
-    const limit = Math.max(1, entry.meta.frame - 1);
-    if (limit < frameCap) {
-      frameCap = limit;
-      rememberCap();
-      console.log('visuals: pattern cap lowered to', frameCap, 'bytes after',
-        entry.meta.slug, 'worst frame', entry.worst.toFixed(0), 'ms');
-    }
+    console.log('visuals: pattern', slug, 'over budget',
+      entry.worst.toFixed(0), 'ms, retired');
     if (entry.worst > 2 * WORST_FRAME_BUDGET_MS) {
       const at = cache.indexOf(entry);
       if (at >= 0 && !entry.held) {
         cache.splice(at, 1);
         freeFrames(entry);
-        console.log('visuals: pattern evicted', entry.meta.slug,
+        console.log('visuals: pattern evicted', slug,
           'over the frame budget by more than double');
       }
     }
+    soon();
   }
 
   // The first prewarm waits. A page that has just loaded is drawing its first
@@ -703,9 +777,10 @@
 
   window.patterns = {
     mix: mix,
-    // The live size cap, for the load test and for anyone reading the log and
-    // wondering why the library shrank.
-    get cap() { return frameCap; },
+    // What has been measured, for the load test and for anyone reading the
+    // log and wondering why the library shrank.
+    get retired() { return library.filter(p => retired(p.slug)).length; },
+    cost() { return cost; },
     get count() { return eligible().length; },
 
     ready() {
@@ -716,44 +791,31 @@
     // never rasterises, and returns null only when nothing has finished
     // loading.
     //
-    // Four tiers, in this order, first non-empty one wins:
+    // Two tiers: a pattern whose tags match, least recently shown first, and
+    // failing that any ready pattern, least recently shown first.
     //
-    //   1. matches the tags and has not been shown in the last RECENT picks
-    //   2. matches the tags, least recently shown first
-    //   3. has not been shown recently, any tag
-    //   4. anything ready, least recently shown first
-    //
-    // The two halves of that are both scars. The first version sorted by tag
-    // and then by last-shown, and with three patterns in the cache against
-    // eight tag groups the tag filter usually picked out exactly one entry,
-    // which then came up under sketch after sketch: four of eight screenshots
-    // of this family were the same artwork. The second put freshness first
-    // and fixed the repetition by throwing the tag away, so pattern-grid drew
-    // a sparse radial pattern and pattern-radial drew a grid. Tiers 1 and 2
-    // keep the tag, tiers 3 and 4 are what happens when the cache cannot
-    // answer for the group at all, and prewarm's job is to keep tier 1 from
-    // being empty by filling the groups the ready set is missing.
+    // There were four for a while, with a "not shown in the last eight picks"
+    // test in front of each of these, and two of them could never fire. The
+    // cache holds three patterns and the recency list held the last eight
+    // picks, so after the first few switches every cached pattern was in it
+    // and the unshown tiers were always empty; when they were not empty, the
+    // least-recently-shown sort picked the same entry anyway. What actually
+    // stops one artwork coming up under sketch after sketch is the two things
+    // left: the tag comes first, so a sketch is choosing between the patterns
+    // that suit it rather than the whole cache, and pickPrewarm() fills the
+    // tag groups the cache cannot answer for, so that choice has more than one
+    // candidate in it.
     take(tags, exclude) {
-      const pool = cache.filter(e => !e.busy && e !== exclude);
+      const pool = cache.filter(e => !e.busy && e !== exclude && !retired(e.meta.slug));
       if (!pool.length) return null;
       const byAge = (a, b) => a.shownAt - b.shownAt;
-      const unshown = (e) => recent.indexOf(e.meta.slug) < 0;
       const want = tags && tags.length ? tags : [];
-      const fits = (e) => e.meta.tags.some(t => want.indexOf(t) >= 0);
-      const tagged = want.length ? pool.filter(fits) : [];
-      const tiers = [
-        tagged.filter(unshown),
-        tagged.filter(e => !unshown(e)),
-        pool.filter(unshown),
-        pool
-      ];
-      let pick = null;
-      for (let i = 0; i < tiers.length && !pick; i++) {
-        if (tiers[i].length) pick = tiers[i].slice().sort(byAge)[0];
-      }
+      const tagged = want.length
+        ? pool.filter(e => e.meta.tags.some(t => want.indexOf(t) >= 0))
+        : [];
+      const from = tagged.length ? tagged : pool;
+      const pick = from.slice().sort(byAge)[0];
       pick.shownAt = performance.now();
-      recent.push(pick.meta.slug);
-      while (recent.length > RECENT) recent.shift();
       if (seen.indexOf(pick.meta.slug) < 0) seen.push(pick.meta.slug);
       return pick;
     },

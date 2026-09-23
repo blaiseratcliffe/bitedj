@@ -613,11 +613,12 @@
           .out(o0);
     } },
 
-    // 12. A grid or isometric pattern turning once every 32 beats, which is
-    // eight bars: slow enough that the motion is felt rather than watched, and
-    // locked to the tempo rather than to a clock, so it comes round on a bar
-    // line at any BPM. The angle comes off beats(), the tempo-integrated
-    // accumulator above, for the reason written out there.
+    // 12. A grid or isometric pattern turning once every 256 beats, which is
+    // 64 bars and about 88 s at 174: slow enough that the motion is felt
+    // rather than watched, and locked to the tempo rather than to a clock, so
+    // it comes round on a bar line at any BPM. The angle comes off beats(),
+    // the tempo-integrated accumulator above, which also carries the reason
+    // the rate is 256 and not the eight bars this was first written with.
     //
     // This is the widest spread in the family, 0.8 to 2.5 percent frame to
     // frame across three runs on the same pattern, and the cause is the
