@@ -54,6 +54,10 @@ const QString kBiteDj = QStringLiteral("[BiteDJ]");
 // controller mapping's historical hard-coded behaviour.
 constexpr double kVinylModeDefault = 1.0;
 
+// HDMI visuals (System settings tab). Off until the DJ turns the row on; the
+// persisted value is what makes every later boot autonomous.
+constexpr double kVisualsEnabledDefault = 0.0;
+
 // Vinyl brake (General settings tab). Seconds a jog wheel released at normal
 // (1x) speed takes to coast to a standstill, so throwing the platter gives a
 // backspin whose length the DJ picks here; 0 restores stock Mixxx's near-instant
@@ -221,6 +225,19 @@ SystemSettings::SystemSettings(UserSettingsPointer pConfig,
             &ControlObject::valueChanged,
             this,
             &SystemSettings::onVinylBrakeChanged);
+
+    // HDMI visuals on/off (System settings tab). VisualsFeed reads this CO on
+    // the main thread, from its own timer, and publishes the result to the
+    // sidechain thread as an atomic flag, which is what decides whether the
+    // mix is analysed and frames are emitted. pi/bin/bitedj-visuals reads the
+    // same value through VisualsServer's /status.
+    const ConfigKey visualsKey(kBiteDj, QStringLiteral("visuals_enabled"));
+    m_pCoVisualsEnabled = std::make_unique<ControlObject>(visualsKey);
+    m_pCoVisualsEnabled->set(m_pConfig->getValue(visualsKey, kVisualsEnabledDefault));
+    connect(m_pCoVisualsEnabled.get(),
+            &ControlObject::valueChanged,
+            this,
+            &SystemSettings::onVisualsEnabledChanged);
 
     // Hot cue gating (General settings tab). CueControl reads the config value
     // on each activation rather than holding a proxy, so writing back on every
@@ -941,6 +958,11 @@ void SystemSettings::onVinylModeChanged(double value) {
 void SystemSettings::onVinylBrakeChanged(double value) {
     // Persist so the brake time is restored on the next launch.
     m_pConfig->setValue(ConfigKey(kBiteDj, QStringLiteral("vinyl_brake")), value);
+}
+
+void SystemSettings::onVisualsEnabledChanged(double value) {
+    m_pConfig->setValue(ConfigKey(kBiteDj, QStringLiteral("visuals_enabled")),
+            value != 0.0 ? 1 : 0);
 }
 
 void SystemSettings::onHotcueActivatePlaysChanged(double value) {

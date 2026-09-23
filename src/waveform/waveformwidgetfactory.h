@@ -273,6 +273,9 @@ class WaveformWidgetFactory : public QObject, public Singleton<WaveformWidgetFac
     //Debug
     PerformanceTimer m_time;
     float m_frameCnt;
+    // Bite DJ: last droppedFrames() value a warning was logged for, so the
+    // once-a-second block only warns while the count is rising.
+    int m_lastReportedDroppedFrames = 0;
     double m_actualFrameRate;
     int m_vSyncType;
     double m_playMarkerPosition;

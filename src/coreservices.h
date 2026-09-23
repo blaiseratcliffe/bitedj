@@ -30,6 +30,7 @@ class ControllerSettings;
 class SystemSettings;
 class WifiSettings;
 class ControlSocket;
+class VisualsServer;
 class HighContrast;
 
 namespace mixxx {
@@ -161,6 +162,10 @@ class CoreServices : public QObject {
     std::unique_ptr<SystemSettings> m_pSystemSettings;
     std::unique_ptr<WifiSettings> m_pWifiSettings;
     std::unique_ptr<ControlSocket> m_pControlSocket;
+    // Bite DJ: the HDMI visuals feed. The analyser it publishes is a sidechain
+    // worker owned and deleted by EngineSideChain, so only the server lives
+    // here. Reset before the engine in finalize().
+    std::unique_ptr<VisualsServer> m_pVisualsServer;
     // Constructed after SystemSettings, which is what it enumerates and watches
     // removable drives through.
     std::unique_ptr<SamplerDrive> m_pSamplerDrive;

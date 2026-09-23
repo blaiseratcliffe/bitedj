@@ -141,6 +141,7 @@ class SystemSettings : public QObject {
     void onPowerDisarmTimeout();
     void onVinylModeChanged(double value);
     void onVinylBrakeChanged(double value);
+    void onVisualsEnabledChanged(double value);
     void onHotcueActivatePlaysChanged(double value);
     void onScreenRotationChanged(double value);
     void onRecordingFormatChanged(double value);
@@ -284,6 +285,10 @@ class SystemSettings : public QObject {
     // the brake. Persisted to config; read by ControllerScriptInterfaceLegacy
     // on each jog release.
     std::unique_ptr<ControlObject> m_pCoVinylBrake;
+    // [BiteDJ],visuals_enabled — 1 = Chromium visuals run on the HDMI output,
+    // 0 = off. Persisted to config; read by VisualsFeed and, via
+    // VisualsServer's /status, by pi/bin/bitedj-visuals.
+    std::unique_ptr<ControlObject> m_pCoVisualsEnabled;
     // [Controls],HotcueActivatePlays — 1 = ungated (a hotcue press plays on
     // from the cue), 0 = gated (previews only while held, then seeks back and
     // stops). CO and config share the key; CueControl reads the config value.

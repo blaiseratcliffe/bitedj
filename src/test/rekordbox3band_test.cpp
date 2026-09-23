@@ -354,7 +354,10 @@ TEST_F(Rekordbox3BandTest, PreviewOnlyFileFallsBackForTheScrollingWaveform) {
     ASSERT_NO_FATAL_FAILURE(writeFile(builder, &path));
 
     const TrackPointer pTrack = createTrack();
-    pTrack->setWaveform(ConstWaveformPointer(new Waveform(44100, 441000, 441, -1)));
+    // A finished analysis: storeResults() forces completion to the full size.
+    const WaveformPointer pWaveform(new Waveform(44100, 441000, 441, -1));
+    pWaveform->setCompletion(pWaveform->getDataSize());
+    pTrack->setWaveform(pWaveform);
     mixxx::rekordbox::read3BandWaveform(pTrack, path);
 
     // The importer attached PWV6 and nothing else.
@@ -370,6 +373,43 @@ TEST_F(Rekordbox3BandTest, PreviewOnlyFileFallsBackForTheScrollingWaveform) {
     EXPECT_TRUE(pResolved->hasPreview());
     EXPECT_EQ(kPwv6Entries, pResolved->preview().size());
     EXPECT_EQ(mixxx::Rekordbox3BandWaveform::Source::MixxxFallback, pResolved->source());
+}
+
+// The analyzer hands its Waveform to the track before it has filled a single
+// entry (AnalyzerWaveform::initialize), and completion climbs from 0 to
+// getDataSize() only as it runs. The first paint after a load lands inside
+// that window, so a fallback built from what is there is a snapshot of
+// silence, and caching it on the track made that permanent: the 3Band pane
+// stayed blank for as long as the track was loaded. Seen on the appliance on
+// 2026-09-22 for every track under ~/Music, where the analysis cache cannot
+// write and so every load analyses afresh.
+TEST_F(Rekordbox3BandTest, AnalysisStillRunningIsNotSnapshotted) {
+    const TrackPointer pTrack = createTrack();
+    const WaveformPointer pWaveform(new Waveform(44100, 441000, 441, -1));
+    ASSERT_GT(pWaveform->getDataSize(), 0);
+    ASSERT_EQ(0, pWaveform->getCompletion());
+    pTrack->setWaveform(pWaveform);
+
+    // Not ready: nothing to draw, and nothing cached for a later call to keep
+    // handing back.
+    EXPECT_TRUE(mixxx::Rekordbox3BandWaveform::fromMixxxWaveform(pWaveform).isNull());
+    EXPECT_TRUE(mixxx::resolveRekordbox3BandWaveform(pTrack).isNull());
+    EXPECT_TRUE(pTrack->getRekordbox3BandWaveform().isNull());
+
+    // Half way through is still not ready.
+    pWaveform->setCompletion(pWaveform->getDataSize() / 2);
+    EXPECT_TRUE(mixxx::resolveRekordbox3BandWaveform(pTrack).isNull());
+    EXPECT_TRUE(pTrack->getRekordbox3BandWaveform().isNull());
+
+    // AnalyzerWaveform::storeResults() forces completion to the full size.
+    pWaveform->setCompletion(pWaveform->getDataSize());
+    const mixxx::ConstRekordbox3BandWaveformPointer pResolved =
+            mixxx::resolveRekordbox3BandWaveform(pTrack);
+    ASSERT_FALSE(pResolved.isNull());
+    EXPECT_TRUE(pResolved->hasDetail());
+    EXPECT_EQ(pWaveform->getDataSize(), pResolved->detail().size());
+    EXPECT_EQ(mixxx::Rekordbox3BandWaveform::Source::MixxxFallback, pResolved->source());
+    EXPECT_EQ(pResolved.data(), pTrack->getRekordbox3BandWaveform().data());
 }
 
 // ---------------------------------------------------------------------------

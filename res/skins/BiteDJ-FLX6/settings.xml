@@ -897,6 +897,43 @@
                 </Connection>
               </WidgetGroup>
 
+              <!-- Visuals. One segment pair on [BiteDJ],visuals_enabled. Off
+                   by default; once on it persists, and pi/bin/bitedj-visuals
+                   starts Chromium on the HDMI output whenever a display is
+                   connected. There is nothing else to configure here on
+                   purpose: the visuals run themselves. -->
+              <WidgetGroup>
+                <ObjectName>SettingsRow</ObjectName>
+                <Layout>horizontal</Layout>
+                <Size>0me,68f</Size>
+                <Children>
+                  <Label>
+                    <ObjectName>SettingsRowLabel</ObjectName>
+                    <Text>Visuals (HDMI)</Text>
+                    <Size>0me,0me</Size>
+                  </Label>
+                  <WidgetGroup>
+                    <ObjectName>VisualsSegmented</ObjectName>
+                    <Layout>horizontal</Layout>
+                    <Size>120f,44f</Size>
+                    <Children>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
+                        <SetVariable name="Text">Off</SetVariable>
+                        <SetVariable name="ConfigKey">[BiteDJ],visuals_enabled</SetVariable>
+                        <SetVariable name="Value">0</SetVariable>
+                      </Template>
+                      <Template src="skin:templates/setting_segment_button.xml">
+                        <SetVariable name="ObjectName">SettingsSegmentRight</SetVariable>
+                        <SetVariable name="Text">On</SetVariable>
+                        <SetVariable name="ConfigKey">[BiteDJ],visuals_enabled</SetVariable>
+                        <SetVariable name="Value">1</SetVariable>
+                      </Template>
+                    </Children>
+                  </WidgetGroup>
+                </Children>
+              </WidgetGroup>
+
               <!-- Power. [System],power_arm carries the arm state and the page
                    index of the stack below in one number: 0 idle, 1 restart
                    app armed, 2 reboot armed, 3 shut down armed. Those can be

@@ -101,6 +101,13 @@ bool shouldRenderWaveform(WaveformWidgetAbstract* pWaveformWidget) {
 }
 
 const QRegularExpression openGLVersionRegex(QStringLiteral("^(\\d+)\\.(\\d+).*$"));
+
+// Bite DJ: only warn once the dropped-frame count has risen by this many
+// since the last report. A window-mapping hiccup drops one to three frames
+// in the first seconds after launch and then stops; real GPU starvation
+// drops many every second. Five clears the hiccup and still catches
+// starvation within a second or two.
+constexpr int kDroppedFramesWarnStep = 5;
 }  // anonymous namespace
 
 ///////////////////////////////////////////
@@ -973,6 +980,22 @@ void WaveformWidgetFactory::renderSelf() {
             m_time.start();
             m_frameCnt = m_frameCnt * 1000 / timeCnt.toIntegerMillis(); // latency correction
             emit waveformMeasured(m_frameCnt, m_vsyncThread->droppedFrames());
+
+            // Bite DJ: the only place the dropped-frame counter was visible was
+            // a preferences dialog this keyboardless panel cannot open. One
+            // warning per second at most, only once the count has risen by
+            // kDroppedFramesWarnStep or more, so GPU starvation (two
+            // waveforms plus the HDMI visuals) shows up in ~/bitedj.log where
+            // check-log.sh can see it, without a mapping hiccup's one to
+            // three frames tripping it.
+            const int dropped = m_vsyncThread->droppedFrames();
+            const int droppedIncrease = dropped - m_lastReportedDroppedFrames;
+            if (droppedIncrease >= kDroppedFramesWarnStep) {
+                qWarning() << "waveform: dropped frames rose by" << droppedIncrease
+                           << "to" << dropped << "at" << m_frameCnt << "fps";
+                m_lastReportedDroppedFrames = dropped;
+            }
+
             m_frameCnt = 0.0;
         }
     }

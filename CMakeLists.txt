@@ -599,6 +599,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/engine/sidechain/enginesidechain.cpp
   src/engine/sidechain/networkinputstreamworker.cpp
   src/engine/sidechain/networkoutputstreamworker.cpp
+  src/engine/sidechain/visualsfeed.cpp
+  src/engine/sidechain/visualsserver.cpp
   src/engine/sync/enginesync.cpp
   src/engine/sync/internalclock.cpp
   src/engine/sync/syncreference.cpp
@@ -1675,6 +1677,7 @@ if(BUILD_TESTING)
     src/test/trackreftest.cpp
     src/test/trackupdate_test.cpp
     src/test/uuid_test.cpp
+    src/test/visualsfeed_test.cpp
     src/test/waveformmarkset_test.cpp
     src/test/wbatterytest.cpp
     src/test/wcontrollerlist_test.cpp
