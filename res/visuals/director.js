@@ -65,10 +65,13 @@
   // seconds where 960x540 drops none. Usable, at a cost to the instrument.
   const RENDER_W = 960, RENDER_H = 540;
   const FPS = 30;
-  // From the Switch every row: 8, 16, 32 or 64 bars, read on every beat so a
-  // change takes effect at the next multiple. The floor below is what stops
-  // a fast tempo strobing through the library; 8 bars at 174 is 11 s, so
-  // the floor sits under that.
+  // From the Switch every row: 8, 16, 32 or 64 bars, read on every beat. The
+  // count runs from the last switch, whatever caused it, so a sketch reached
+  // by Next or by a settings melt gets a full interval too; the switches
+  // were never aligned to phrases (fork issue #3), so nothing is lost by
+  // resetting the count. The floor below is what stops a fast tempo
+  // strobing through the library; 8 bars at 174 is 11 s, so the floor sits
+  // under that.
   const beatsPerSwitch = () => 4 * (feed.settings.bars || 16);
   const MIN_SKETCH_MS = 8000;
   // How many sketches the picker keeps out of the next draw. With a switch
@@ -127,7 +130,7 @@
   s2.initImage('assets/boot-logo.png');
 
   // Rotation.
-  let current = null, currentSince = 0, lastBeatAt = performance.now(), idle = false;
+  let current = null, currentSince = 0, currentSinceBeat = 0, lastBeatAt = performance.now(), idle = false;
   let history = [];
   // Whether s0 currently holds an open camera stream. Only show() moves this.
   let camInit = false;
@@ -469,7 +472,7 @@
       .blend(src(s3).modulate(noise(1.5, 0.08), () => 0.05 * melt), () => melt)
       .out(o2);
     render(o2);
-    current = sketch; currentSince = performance.now();
+    current = sketch; currentSince = performance.now(); currentSinceBeat = feed.beats;
     history.push(sketch); if (history.length > HISTORY_LENGTH) history.shift();
     console.log('visuals: sketch', sketch.name);
   }
@@ -504,11 +507,13 @@
     lastBeatAt = performance.now();
     if (idle) { idle = false; show(pickNext()); return; }
     // The rotation, unlike the idle and camera paths, has no reason to be
-    // held: it comes round every beatsPerSwitch() beats and can simply wait
-    // for the next one rather than queueing behind a melt that is still
-    // running.
+    // held: it comes round beatsPerSwitch() beats after the last switch and
+    // can simply wait for the next one rather than queueing behind a melt
+    // that is still running. The count is >= rather than ==, because a beat
+    // that lands while busy() is true is not lost here; the switch happens
+    // on the next beat instead.
     if (busy()) return;
-    if (feed.beats % beatsPerSwitch() === 0 && performance.now() - currentSince > MIN_SKETCH_MS) {
+    if (feed.beats - currentSinceBeat >= beatsPerSwitch() && performance.now() - currentSince > MIN_SKETCH_MS) {
       show(pickNext());
     }
   });
