@@ -82,7 +82,8 @@
                                    // first melt, the wordmark and the boot
                                    // logo all happen in the first seconds and
                                    // none of them should share a frame with an
-                                   // SVG decode
+                                   // SVG decode. It must also stay longer than
+                                   // RAF_STALL_MS; see there
   const FRAMES_PER_RASTER = 2;     // animation frames between one frame's draw
                                    // and the next one's
   const WORST_FRAME_BUDGET_MS = 120;  // see the cost map below
@@ -93,7 +94,22 @@
   const DEAD_BAND = 0.05;    // sweep positions either side of a frame boundary
                              // that keep the pair already bound
   const RAF_STALL_MS = 1000; // no serviced animation frame for this long means
-                             // the page cannot paint
+                             // the page cannot paint. PREWARM_DELAY_MS has to
+                             // stay longer than this: paintedAt starts at the
+                             // module's load time rather than at a real frame,
+                             // so canPaint() answers true for the first
+                             // RAF_STALL_MS of the page whether or not
+                             // anything has been drawn, and the first prewarm
+                             // has to fall outside that window. Initialising
+                             // paintedAt to 0 would not help, because
+                             // performance.now() is measured from the
+                             // navigation start and the subtraction is still
+                             // small; -Infinity is the value that means "no
+                             // frame yet" if the two constants ever meet
+  const STALL_FRAMES = 60;   // frames a load must see across its whole timeout
+                             // to count as having run on a painting page: one
+                             // a second averaged over the sixty, against the
+                             // 1500 a healthy page serves in that time
 
   // When an animation frame was last serviced. sweepTick() below is the only
   // writer; it runs on requestAnimationFrame and is the cheapest true answer
@@ -114,6 +130,7 @@
   // while the surface stays mapped, unoccluded and, as far as Chromium is
   // concerned, visible. The frame clock is true in both cases.
   let paintedAt = performance.now();
+  let painted = 0;
   function canPaint() {
     return performance.now() - paintedAt < RAF_STALL_MS;
   }
@@ -765,6 +782,7 @@
   // costs a pattern at worst is the rest of this session.
   const LOAD_TIMEOUT_MS = 60000;
   let generation = 0;
+  let heldForPaint = false;
 
   function prewarm() {
     if (loading) return;
@@ -775,7 +793,23 @@
     // that is one doomed load a minute, each one parking a Blob and a parsed
     // image that nothing can release until the screen comes back. The interval
     // will be round again in twenty seconds; that is the only retry there is.
-    if (!canPaint()) return;
+    //
+    // Said once per stall rather than once per tick. A prewarm that declines
+    // silently is indistinguishable from one that has run out of candidates,
+    // and a rotation that runs on three patterns all evening with nothing in
+    // the log is the kind of failure this project has a rule about; a line
+    // every twenty seconds all night is the other kind.
+    if (!canPaint()) {
+      if (!heldForPaint) {
+        heldForPaint = true;
+        console.log('visuals: pattern prewarm held, page not painting');
+      }
+      return;
+    }
+    if (heldForPaint) {
+      heldForPaint = false;
+      console.log('visuals: pattern prewarm resumed');
+    }
     sweepRetired();
     if (!hasRoom()) return;
     // Evict before allocating, not after: pushing a fourth entry and trimming
@@ -794,6 +828,7 @@
     if (going) evict(going);
     loading = true;
     const t0 = performance.now();
+    const paintedAtStart = painted;
     const mine = ++generation;
     const live = () => generation === mine;
     let building = null;
@@ -806,15 +841,25 @@
         release(building.hold);   // the Blob and the parsed SVG, which the
                                   // parked frame callback cannot reach
       }
-      // Could the page paint? A load is paced by animation frames from end to
-      // end, so a timeout on a page that has stopped getting them says nothing
-      // about the file, and blaming the slug for it walks the whole library
-      // into `skipped` at roughly one a minute until the prewarm has nothing
-      // pickable left. prewarm() now declines to start a load in that state at
-      // all, so reaching this branch means frames stopped after the load
-      // began. Either way it costs the slug nothing and there is no extra
-      // retry: the interval is the only timer.
-      if (!canPaint()) {
+      // Could the page paint while this load was running? Not "is it painting
+      // now": a load that spent fifty-five of its sixty seconds parked and
+      // resumed just before the watchdog fired would pass an instantaneous
+      // test and be blamed for what the screen did. So the question is asked
+      // over the load's whole window, by counting the frames served since it
+      // started, and the instantaneous test is kept alongside it for the case
+      // where painting stopped a moment ago and has not come back.
+      //
+      // A healthy page serves about 1500 frames in sixty seconds. STALL_FRAMES
+      // is 60, so this only fires when the page was not painting for the great
+      // majority of the timeout, which is the difference between a file that
+      // hangs and a screen that blanked.
+      //
+      // A timeout on a page that could not paint says nothing about the file,
+      // and blaming the slug for it walks the whole library into `skipped` at
+      // roughly one a minute until the prewarm has nothing pickable left.
+      // Either way it costs the slug nothing and there is no extra retry: the
+      // interval is the only timer.
+      if (!canPaint() || painted - paintedAtStart < STALL_FRAMES) {
         console.log('visuals: pattern load timed out', meta.slug,
           'while the page was not painting, not counted');
         return;
@@ -966,6 +1011,7 @@
     const dt = Math.min(100, now - phaseAt);
     phaseAt = now;
     paintedAt = now;   // the frame clock canPaint() reads
+    painted += 1;      // and the count a load is judged over
     const energy = window.feed ? feed.energy : 0;
     phase += Math.PI * dt / (40000 - 28000 * energy);
     if (phase > 2 * Math.PI) phase -= 2 * Math.PI;
@@ -1026,6 +1072,7 @@
     // prewarm has gone quiet is otherwise unanswerable from outside.
     skipped() { return skipped.slice(); },
     rejected() { return rejected.slice(); },
+    canPaint: canPaint,
     get count() { return eligible().length; },
 
     // The same predicate take() uses, not merely "something has finished
