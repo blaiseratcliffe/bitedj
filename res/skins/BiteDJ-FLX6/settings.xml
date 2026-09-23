@@ -2081,11 +2081,14 @@
                (style.qss ~858-880). So those groups are sized 246f for
                three segments and 328f for four, the same measured basis as
                Overview and Height. Rows 6 and 7 also use SettingsSegmented
-               rather than a dedicated ObjectName (fork ruling R5): row 7's
-               pair is 164f. Row 6's two camera groups started at 240f, 120px
-               a segment, but "Sketches off" measured at the full 120px cell
-               and touched both borders on the 2026-09-23 capture, so they
-               are now 300f each, 150px a segment (fix round 1, ruling R10). -->
+               rather than a dedicated ObjectName: neither VisualsSegmented's
+               60px min-width nor the plain 80px one fits row 6's "Sketches
+               off" label without touching both borders, so both rows take
+               the same measured 82px basis as rows 2 to 5. Row 7's pair is
+               164f. Row 6's two camera groups started at 240f, 120px a
+               segment, but "Sketches off" measured the full 120px of a
+               120px cell and touched both borders on the 2026-09-23
+               capture, so they are now 300f each, 150px a segment. -->
           <WidgetGroup trigger="[SettingsTab],visuals">
             <ObjectName>SettingsPanel</ObjectName>
             <Layout>vertical</Layout>
@@ -2319,14 +2322,14 @@
                 </Children>
               </WidgetGroup>
 
-              <!-- Row 6: Camera, two independent pairs. Both SettingsSegmented
-                   per ruling R5: neither VisualsSegmented's 60px min-width nor
-                   the plain 80px one leaves room for a dedicated ObjectName
-                   here. Each pair is now its own 300f group, 150px a
-                   segment, after "Sketches off" measured at the full 120px
-                   cell and touched both borders on the 2026-09-23 capture
-                   (fix round 1, ruling R10); the first attempt at 240f,
-                   120px a segment, is what the capture caught. -->
+              <!-- Row 6: Camera, two independent pairs. Both use
+                   SettingsSegmented: neither VisualsSegmented's 60px
+                   min-width nor the plain 80px one fits "Sketches off"
+                   without touching both borders. Each pair is now its own
+                   300f group, 150px a segment, after "Sketches off" measured
+                   the full 120px of a 120px cell on the 2026-09-23 capture;
+                   the first attempt at 240f, 120px a segment, is what the
+                   capture caught. -->
               <WidgetGroup>
                 <ObjectName>SettingsRow</ObjectName>
                 <Layout>horizontal</Layout>

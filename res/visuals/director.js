@@ -216,18 +216,38 @@
   // its own the moment that first frame lands. Once alive, the baseline is
   // kept current every frame, so a drop in next (an app restart resets it
   // to 0) simply becomes the new baseline rather than reading as a tap.
+  //
+  // The knobs in force are logged here too, not at page load: a load-time
+  // log always prints SETTING_DEFAULTS, because the EventSource has not
+  // delivered a frame yet, whatever mixxx.cfg actually holds. So
+  // `console.log('visuals: settings', ...)` fires once, on the same first
+  // call where feed.alive is true that takes the next baseline above, and
+  // again whenever JSON.stringify(s) differs from the last line logged;
+  // lastSettingsJson holds that line. A tap and a melt still log themselves
+  // below.
   const watched = { camMix: null, camSketches: null, patterns: null, next: null };
+  let lastSettingsJson = null;
   function watchSettings() {
     const s = feed.settings;
     const first = watched.next === null;
+    // camMix only matters to a sketch that is actually reading the camera;
+    // with no camera camOn() is false either way, so a camMix change melts
+    // nothing and window.camReady guards the clause against that no-op.
     const affected =
-      (watched.camMix !== s.camMix && current && current.camMix) ||
+      (watched.camMix !== s.camMix && current && current.camMix && window.camReady) ||
       (watched.camSketches !== s.camSketches && current && current.cam && s.camSketches !== 1) ||
       (watched.patterns !== s.patterns && current && current.pattern && s.patterns !== 1);
     const tapped = watched.next !== null && s.next > watched.next;
     watched.camMix = s.camMix; watched.camSketches = s.camSketches;
     watched.patterns = s.patterns;
     if (feed.alive) watched.next = s.next;
+    if (feed.alive) {
+      const json = JSON.stringify(s);
+      if (json !== lastSettingsJson) {
+        console.log('visuals: settings', json);
+        lastSettingsJson = json;
+      }
+    }
     if (first) return;
     if (tapped) {
       console.log('visuals: next tapped');
@@ -501,8 +521,6 @@
     }
   }, 1000);
 
-  // The knobs in force, once at start; changes log themselves above.
-  console.log('visuals: settings', JSON.stringify(feed.settings));
   (function logRenderer() {
     const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
     const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
