@@ -124,6 +124,12 @@ class VisualsFeed : public QObject, public SideChainWorker {
     // bundles. Called from the constructor and again from buildFrame()
     // whenever [App],num_decks has moved since the last rebuild.
     void rebuildDecks(int count);
+    // Main thread only. The Visuals settings page's controls, read on every
+    // tick into the frame's `settings` object. Each proxy is re-resolved
+    // while it is not bound to a real CO, the same treatment enabled() gives
+    // visuals_enabled and for the same reason: SystemSettings may construct
+    // after this worker.
+    void resolveSettings();
 
     // Sidechain-thread state.
     PollingControlProxy m_sampleRateControl;
@@ -160,4 +166,12 @@ class VisualsFeed : public QObject, public SideChainWorker {
     Bands m_lastBands;
     std::vector<Deck> m_decks;
     std::unique_ptr<ControlProxy> m_pCrossfader;
+
+    struct Setting {
+        const char* key;      // item under [BiteDJ]
+        const char* jsonName; // key in the frame's settings object
+    };
+    static constexpr int kSettingCount = 8;
+    static const Setting kSettings[kSettingCount];
+    std::vector<std::unique_ptr<PollingControlProxy>> m_settingProxies;
 };

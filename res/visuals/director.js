@@ -37,19 +37,50 @@
 // screen, so a switch during a melt freezes the mix with no special case.
 //
 // The webcam is opened on demand rather than at load: s0.initCam(0) runs when
-// a cam sketch is about to start and s0.clear() when the rotation leaves one,
-// so the camera LED is dark through the thirteen sketches that never look at
-// it. hush() is still never called anywhere, for the reason by clearScratch().
+// a sketch that reads it is about to start and s0.clear() when the rotation
+// reaches one that does not. Two kinds of sketch read it. `cam: true` is a
+// camera sketch, which is the picture and drops out of the rotation when
+// there is no camera; `camMix` names a treatment (bend, cut or edges) that
+// mixes the camera into a sketch that stands on its own, and such a sketch
+// stays in the rotation without a camera and simply runs plain. Every
+// non-camera sketch carries a camMix today, so with a camera present it is
+// open for the whole show, unless the Camera row's Mix switch is off, in
+// which case show() never asks for it for those sketches and the release
+// path below is what closes the camera when the rotation reaches one; the
+// same release path is also what a library with a sketch that carries
+// neither flag would use. hush() is still never called anywhere, for the
+// reason by clearScratch().
 //
 // Sketches drive their own per-frame work through window.sketchUpdate(dt),
 // which this file calls every rendered frame; a sketch must never assign
 // window.update or window.afterUpdate itself, both of those belong to this
 // file (see the notes by the assignments below for why).
 (function () {
+  // 960x540, shown at 1920x1080 on the TV. 1920x1080 was tried on bitepi on
+  // 2026-09-22 with one deck playing: the page fell from 24 fps to 8 to 15,
+  // and the panel's waveform dropped to 34 to 38 fps with a dropped-frame
+  // warning every ten seconds. The VideoCore cannot carry both at that size.
+  // 1280x720 the same evening: the page ran 14 to 23 fps, mostly 17 to 21,
+  // and the waveform held 60 fps but dropped 5 to 9 frames every ten
+  // seconds where 960x540 drops none. Usable, at a cost to the instrument.
   const RENDER_W = 960, RENDER_H = 540;
   const FPS = 30;
-  const BEATS_PER_SWITCH = 256;     // 64 bars at 4/4
-  const MIN_SKETCH_MS = 60000;
+  // From the Switch every row: 8, 16, 32 or 64 bars, read on every beat. The
+  // count runs from the last switch, whatever caused it, so a sketch reached
+  // by Next or by a settings melt gets a full interval too; the switches
+  // were never aligned to phrases (fork issue #3), so nothing is lost by
+  // resetting the count. The floor below is what stops a fast tempo
+  // strobing through the library; 8 bars at 174 is 11 s, so the floor sits
+  // under that.
+  const beatsPerSwitch = () => 4 * (feed.settings.bars || 16);
+  const MIN_SKETCH_MS = 8000;
+  // How many sketches the picker keeps out of the next draw. With a switch
+  // every 22 s and a colour family of seven, remembering only the last one
+  // brought plasma-kaleid back seven times in an evening of twenty-two
+  // switches; eight of twenty-four means everything gets a turn before
+  // anything repeats, and the family preference still applies within what
+  // is left.
+  const HISTORY_LENGTH = 8;
   const IDLE_AFTER_MS = 20000;      // no beat for this long: idle sketch
   const MELT_MS = 2000;             // length of the crossfade
   const LOG_EVERY_MS = 10000;
@@ -99,21 +130,29 @@
   s2.initImage('assets/boot-logo.png');
 
   // Rotation.
-  let current = null, currentSince = 0, lastBeatAt = performance.now(), idle = false;
+  let current = null, currentSince = 0, currentSinceBeat = 0, lastBeatAt = performance.now(), idle = false;
   let history = [];
   // Whether s0 currently holds an open camera stream. Only show() moves this.
   let camInit = false;
+  // Preview mode's two hooks, set only by preview.js and only under
+  // ?preview=1 (see window.director at the bottom). `paused` stops the beat
+  // rotation and nothing else; `switchHook` is told about every landed switch.
+  // Outside preview mode they stay false and null for the life of the page.
+  let paused = false, switchHook = null;
 
   // Crossfade. `melt` is 1 the moment a new sketch starts and eases to 0 over
   // MELT_MS; `pending` holds a sketch whose snapshot frame has been armed but
   // not yet captured, and `queued` a request that arrived while all that was
-  // in flight.
+  // in flight. `nextPending` is separate: it counts Next taps that arrive
+  // while busy(), up to three, and endMelt() drains one into its own show()
+  // each time a melt ends, so three taps in a row still give three melts.
   //
   // `grabbing` is set by show() and cleared by the afterUpdate hook that
   // takes the still; `swapNext` is then read by the driveFrame after it, so
   // the new sketch starts on the first tick that has a still to melt out of.
   let melt = 0, meltElapsed = 0, melting = false, pending = null, queued = null;
   let grabbing = false, swapNext = false;
+  let nextPending = 0;
 
   // The frozen frame. 960x540 like the render target, so the copy is one to
   // one and s3 needs no aspect correction.
@@ -151,11 +190,12 @@
       window.camReady = cams.length > 0;
       console.log('visuals: camera', window.camReady ? 'present' : 'absent',
         '(' + devs.length + ' media devices, ' + cams.length + ' video inputs)');
-      if (!window.camReady && current && current.cam) {
+      if (!window.camReady && current && (current.cam || current.camMix)) {
         // The camera went away underneath a sketch that is drawing it. Waiting
         // for the next beat switch could mean a minute of a frozen last frame,
         // so move on now; pickNext() already excludes cam sketches while
-        // camReady is false, and show() releases s0 on the way out.
+        // camReady is false, a camMix sketch picked next runs plain, and
+        // show() releases s0 on the way out.
         console.log('visuals: camera lost during', current.name);
         show(pickNext());
       }
@@ -169,6 +209,67 @@
     navigator.mediaDevices.addEventListener('devicechange', probeCamera);
   }
 
+  // The three switches that change what a sketch is built from, and the
+  // Next counter, watched on every rendered frame. A change that affects
+  // the sketch on screen melts to another one now; one that does not waits
+  // for the rotation. A Next tap always takes the show out of idle at once,
+  // even when the switch itself has to wait: taps during a melt are
+  // counted, up to three, and each runs as its own melt when the previous
+  // one ends.
+  //
+  // watched.next stays null, and next is never treated as tapped, until
+  // feed.alive: a frame has to have been ingested for feed.settings.next to
+  // carry a real value, and taking the baseline any earlier would let a
+  // count left over from taps earlier in the app's session melt the show on
+  // its own the moment that first frame lands. Once alive, the baseline is
+  // kept current every frame, so a drop in next (an app restart resets it
+  // to 0) simply becomes the new baseline rather than reading as a tap.
+  //
+  // The knobs in force are logged here too, not at page load: a load-time
+  // log always prints SETTING_DEFAULTS, because the EventSource has not
+  // delivered a frame yet, whatever mixxx.cfg actually holds. So
+  // `console.log('visuals: settings', ...)` fires once, on the same first
+  // call where feed.alive is true that takes the next baseline above, and
+  // again whenever JSON.stringify(s) differs from the last line logged;
+  // lastSettingsJson holds that line. A tap and a melt still log themselves
+  // below.
+  const watched = { camMix: null, camSketches: null, patterns: null, next: null };
+  let lastSettingsJson = null;
+  function watchSettings() {
+    const s = feed.settings;
+    const first = watched.next === null;
+    // camMix only matters to a sketch that is actually reading the camera;
+    // with no camera camOn() is false either way, so a camMix change melts
+    // nothing and window.camReady guards the clause against that no-op.
+    const affected =
+      (watched.camMix !== s.camMix && current && current.camMix && window.camReady) ||
+      (watched.camSketches !== s.camSketches && current && current.cam && s.camSketches !== 1) ||
+      (watched.patterns !== s.patterns && current && current.pattern && s.patterns !== 1);
+    const tapped = watched.next !== null && s.next > watched.next;
+    watched.camMix = s.camMix; watched.camSketches = s.camSketches;
+    watched.patterns = s.patterns;
+    if (feed.alive) watched.next = s.next;
+    if (feed.alive) {
+      const json = JSON.stringify(s);
+      if (json !== lastSettingsJson) {
+        console.log('visuals: settings', json);
+        lastSettingsJson = json;
+      }
+    }
+    if (first) return;
+    if (tapped) {
+      console.log('visuals: next tapped');
+      // A tap always leaves idle right away, whether or not the switch
+      // itself can happen this instant: with no beat following, the 1 s
+      // interval below drops back to the idle sketch after IDLE_AFTER_MS
+      // as usual, rather than the idle sketch just sitting there stale.
+      idle = false; lastBeatAt = performance.now();
+      if (busy()) { nextPending = Math.min(nextPending + 1, 3); } else { show(pickNext()); }
+      return;
+    }
+    if (affected && !idle) { console.log('visuals: settings changed under', current.name); show(pickNext()); }
+  }
+
   // window.update, not hydra.synth.update: same makeGlobal mirroring as
   // fps above (EvalSandbox.tick() copies window.update onto synth.update
   // every frame), so this is the assignment that has to stick. It both
@@ -179,6 +280,8 @@
   let frames = 0;
   function driveFrame(dt) {
     frames += 1;
+    sampleRange();
+    watchSettings();
     if (swapNext) {
       swapNext = false;
       startPending();
@@ -215,15 +318,19 @@
   // when assets/patterns/ is missing altogether.
   function eligible() {
     return window.sketches.filter(s =>
-      (!s.cam || window.camReady) &&
-      (!s.pattern || (window.patterns && patterns.ready())));
+      (!s.cam || (window.camReady && feed.settings.camSketches === 1)) &&
+      (!s.pattern || (window.patterns && patterns.ready() && feed.settings.patterns === 1)));
   }
 
   function pickNext() {
     const list = eligible();
     if (!list.length) return window.idleSketch;
     const last = history[history.length - 1];
-    let candidates = list.filter(s => s !== last);
+    // Everything shown recently is out, as long as that leaves something;
+    // on a box with no camera and no patterns the pool is thirteen and the
+    // memory still leaves five. Only the last one is out unconditionally.
+    let candidates = list.filter(s => !history.includes(s));
+    if (!candidates.length) candidates = list.filter(s => s !== last);
     if (last) {
       // Step 1: prefer a sketch from the other family (colour vs monochrome).
       const otherFamily = candidates.filter(s => s.mono !== last.mono);
@@ -269,7 +376,11 @@
     // does, would still see the previous non-cam `current`, skip the release,
     // and leave camInit stuck true with the stream open. No later cam sketch
     // could re-init after that.
-    if (sketch.cam && !camInit) {
+    // A camMix sketch only asks for the camera when there is one to open and
+    // the Camera row's Mix switch is on; a cam sketch cannot be here without
+    // one, since eligible() drops it.
+    const wantsCam = sketch.cam || (sketch.camMix && window.camReady && feed.settings.camMix === 1);
+    if (wantsCam && !camInit) {
       try {
         s0.initCam(0);
         camInit = true;
@@ -277,7 +388,7 @@
       } catch (e) {
         console.error('visuals: initCam failed', e);
       }
-    } else if (!sketch.cam && camInit) {
+    } else if (!wantsCam && camInit) {
       // s0.clear() stops the stream's tracks and leaves a 1x1 blank behind.
       // It is safe here, and only here, because no cam sketch is about to
       // draw s0; hush() would do this to s1 and s2 as well.
@@ -366,9 +477,12 @@
       .blend(src(s3).modulate(noise(1.5, 0.08), () => 0.05 * melt), () => melt)
       .out(o2);
     render(o2);
-    current = sketch; currentSince = performance.now();
-    history.push(sketch); if (history.length > 8) history.shift();
+    current = sketch; currentSince = performance.now(); currentSinceBeat = feed.beats;
+    history.push(sketch); if (history.length > HISTORY_LENGTH) history.shift();
     console.log('visuals: sketch', sketch.name);
+    if (switchHook) {
+      try { switchHook(sketch); } catch (e) { console.error('visuals: switch hook failed', e); }
+    }
   }
 
   function endMelt() {
@@ -386,6 +500,12 @@
       const next = queued;
       queued = null;
       show(next);
+    } else if (nextPending > 0) {
+      // Drain one counted tap per melt end. pickNext() runs now, not at tap
+      // time, so a settings change that landed during the wait is already
+      // reflected in what the drained melt shows.
+      nextPending -= 1;
+      show(pickNext());
     }
   }
 
@@ -394,11 +514,17 @@
   feed.onBeatAlways(() => {
     lastBeatAt = performance.now();
     if (idle) { idle = false; show(pickNext()); return; }
+    // Preview mode holds the sketch until someone moves it. Leaving idle
+    // above still happens, so a paused page does not sit on the idle sketch.
+    if (paused) return;
     // The rotation, unlike the idle and camera paths, has no reason to be
-    // held: it comes round every 256 beats and can simply wait for the next
-    // one rather than queueing behind a melt that is still running.
+    // held: it comes round beatsPerSwitch() beats after the last switch and
+    // can simply wait for the next one rather than queueing behind a melt
+    // that is still running. The count is >= rather than ==, because a beat
+    // that lands while busy() is true is not lost here; the switch happens
+    // on the next beat instead.
     if (busy()) return;
-    if (feed.beats % BEATS_PER_SWITCH === 0 && performance.now() - currentSince > MIN_SKETCH_MS) {
+    if (feed.beats - currentSinceBeat >= beatsPerSwitch() && performance.now() - currentSince > MIN_SKETCH_MS) {
       show(pickNext());
     }
   });
@@ -411,7 +537,6 @@
     }
   }, 1000);
 
-  // Evidence for the load test.
   (function logRenderer() {
     const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
     const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
@@ -419,10 +544,47 @@
   })();
   let lastLog = performance.now();
   window.update = driveFrame;
+  // The range each envelope covered since the last log line, sampled on every
+  // rendered frame in driveFrame. This is what fork issue #4 was missing: the
+  // old line said the beatgrid was arriving and nothing about whether the
+  // bands were, or how far the envelopes the sketches read ever travelled.
+  // Read off the line whether a reaction exists before judging its size on
+  // the TV; a swell that spans 0.2 in ten seconds of a drop is a feed problem
+  // and not a sketch amount problem.
+  // rawBass rather than bass: the raw band says whether the sidechain heard
+  // anything, and bass is already through the auto-gain, which stretches
+  // whatever it hears to full scale. The line prints it as "bass".
+  const RANGE_KEYS = ['rawBass', 'energy', 'swell', 'pulse', 'bounce'];
+  const RANGE_LABELS = { rawBass: 'bass', energy: 'energy', swell: 'swell', pulse: 'pulse', bounce: 'bounce' };
+  const range = {};
+  function resetRange() {
+    RANGE_KEYS.forEach((k) => { range[k] = [Infinity, -Infinity]; });
+  }
+  resetRange();
+  // A declaration rather than an assignment so driveFrame, defined above
+  // and first called by hydra after this file has finished, can reach it.
+  function sampleRange() {
+    RANGE_KEYS.forEach((k) => {
+      const v = feed[k];
+      if (v < range[k][0]) range[k][0] = v;
+      if (v > range[k][1]) range[k][1] = v;
+    });
+  }
   setInterval(() => {
     const now = performance.now();
-    console.log('visuals: fps', (frames * 1000 / (now - lastLog)).toFixed(1), 'feed', feed.alive ? 'alive' : 'dead', 'bpm', feed.bpm.toFixed(1));
+    const spans = RANGE_KEYS.map((k) => {
+      const [lo, hi] = range[k];
+      const label = RANGE_LABELS[k];
+      return lo <= hi ? `${label} ${lo.toFixed(2)}..${hi.toFixed(2)}` : `${label} -`;
+    }).join(' ');
+    console.log('visuals: fps', (frames * 1000 / (now - lastLog)).toFixed(1),
+      'feed', feed.alive ? 'alive' : 'dead',
+      feed.playing ? 'playing' : 'stopped',
+      'bpm', feed.bpm.toFixed(1), 'beats', feed.beats,
+      'set', [feed.settings.reactivity, feed.settings.bounce, feed.settings.swirl, feed.settings.bars].join('/'),
+      spans);
     frames = 0; lastLog = now;
+    resetRange();
   }, LOG_EVERY_MS);
 
   // The first switch of the page has nothing behind it: the still is a blank
@@ -430,4 +592,20 @@
   // is deliberate and is the boot fade; it is not the black crossfade bug.
   show(window.idleSketch);
   idle = true;
+
+  // The handle preview.js drives the show through, and nothing else reads it.
+  // preview.js returns at once unless the URL carries ?preview=1, so on the Pi
+  // this object exists and is never called. `target` is where the show is
+  // heading: a request held behind a melt, then one armed but not landed,
+  // then the sketch on screen, so stepping twice during a melt moves two
+  // places rather than one.
+  window.director = {
+    list: () => window.sketches,
+    current: () => current,
+    target: () => queued || pending || current,
+    show: show,
+    pickNext: pickNext,
+    onSwitch(fn) { switchHook = typeof fn === 'function' ? fn : null; },
+    pause(on) { paused = !!on; }
+  };
 })();

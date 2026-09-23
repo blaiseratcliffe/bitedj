@@ -131,6 +131,7 @@ class SystemSettings : public QObject {
 
   private slots:
     void onRefreshRequested(double value);
+    void onVisualsNextRequested(double value);
     void onShutdownRequested(double value);
     void onRebootRequested(double value);
     void onRestartAppRequested(double value);
@@ -289,6 +290,18 @@ class SystemSettings : public QObject {
     // 0 = off. Persisted to config; read by VisualsFeed and, via
     // VisualsServer's /status, by pi/bin/bitedj-visuals.
     std::unique_ptr<ControlObject> m_pCoVisualsEnabled;
+    // The Visuals settings page's knobs, one CO each, seeded from config and
+    // persisted on change. Small integers: the levels a segment row can
+    // show, mapped to amounts by res/visuals; a retune never touches this
+    // file. Order and defaults: reactivity 1, bounce 2, swirl 2, bars 16,
+    // cam_mix 1, cam_sketches 1, patterns 1.
+    std::vector<std::unique_ptr<ControlObject>> m_visualsKnobs;
+    // [BiteDJ],visuals_next is the momentary trigger the Next button latches
+    // at 1 (the USB refresh handshake); onVisualsNextRequested bumps
+    // visuals_next_count and resets the trigger, and VisualsFeed sends the
+    // count, so the page sees a rise per tap.
+    std::unique_ptr<ControlObject> m_pCoVisualsNext;
+    std::unique_ptr<ControlObject> m_pCoVisualsNextCount;
     // [Controls],HotcueActivatePlays — 1 = ungated (a hotcue press plays on
     // from the cue), 0 = gated (previews only while held, then seeks back and
     // stops). CO and config share the key; CueControl reads the config value.

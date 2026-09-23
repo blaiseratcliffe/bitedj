@@ -58,7 +58,9 @@
 // frame, because every line crosses into where it was not. That is the whole
 // difference between smooth and twitchy, and it means the amplitude of a warp
 // on such a field has to come from feed.swell and not from feed.energy: the
-// energy envelope ripples by about seven hundredths over each beat at 174,
+// energy envelope ripples over each beat, by about seven hundredths on the
+// mock feed and by 0.3 on a real drum and bass drop captured on the box
+// (feed.js replayed on a capture read energy 0.55..0.85 through a drop),
 // which is small enough to be invisible as brightness and quite large enough
 // to shove sixty lines a pixel sideways four times a second. Sparse bright
 // things, a wordmark or a scatter of dots, are an order of magnitude less
@@ -253,9 +255,233 @@
   }
 
   // A grey, for .mult(solid(...)), that sits near one and lifts a few percent
-  // on the beat. This is what a kick is worth now.
+  // on the beat. This is what a kick is worth in brightness.
   function accent(base, lift) {
     return () => base + lift * feed.pulse;
+  }
+
+  // What a kick is worth in motion. kick(amount) is a multiplier that sits
+  // at 1 and follows feed.bounce, which snaps to 1 on the beat edge,
+  // overshoots below zero and settles inside a beat; every sketch below
+  // multiplies it into the scale of its main element and nothing else, so
+  // the foreground pops on the kick and the background keeps its drift.
+  // Blaise's verdict on the smoothness rework was that it went too far:
+  // "too smooth / liquidy, they need to have some bounce in them too".
+  //
+  // Two sizes. 0.08 on a scale is an eight percent pop, visible on a
+  // wordmark or a piece of artwork and the size of a speaker cone moving.
+  // 0.4 on a warp amplitude is a forty percent change in a number that is
+  // itself a few hundredths of the frame, which is what it takes for a
+  // line field to be seen to kick without the whole field jumping a pixel;
+  // the header explains why those fields cannot take the 0.08 treatment.
+  // From the Bounce row: 0 off, then half, the tuned size, and half again.
+  const BOUNCE_LEVELS = [0, 0.5, 1, 1.5];
+  const bounceAmount = () => {
+    const v = BOUNCE_LEVELS[feed.settings.bounce];
+    return v === undefined ? 1 : v;
+  };
+  function kick(amount) {
+    return () => 1 + bounceAmount() * amount * feed.bounce;
+  }
+  const KICK_SCALE = 0.08;
+  const KICK_WARP = 0.4;
+
+  // ---- swirl ---------------------------------------------------------------
+  //
+  // A twist: the picture turns by the full angle at a centre point and by
+  // less further out, down to nothing at TWIST_R from it, which is a vortex
+  // rather than a rotation, and it can go on a sketch whose corners a
+  // rotation would smear.
+  //
+  // hydra has no twist of its own. The first version was modulateRotate by a
+  // soft disc, shape(64, 0, 1), and that had two faults. The centre was
+  // pinned to the middle of the frame. And both the rotation and the disc
+  // worked in 0..1 texture coordinates on a 16:9 frame, so the vortex was an
+  // ellipse 16:9 wide and anything inside it sheared as it turned instead of
+  // turning. twist() below is a coordinate function of our own, registered
+  // through hydra's setFunction: it measures the distance from the centre and
+  // does the rotation with x multiplied by the frame's aspect, so both happen
+  // in square units, then divides the aspect back out. The vortex is round
+  // and a shape inside it keeps its proportions as it turns. It is
+  // registered the first time swirl() runs rather than when this file loads,
+  // because director.js builds hydra after this file has run.
+  //
+  // The first version held the angle at a fixed bend, swirlAmount() * amount
+  // * (0.4 + 0.6 * swell + 0.3 * bounce), and only swell moved it: swell is a
+  // four-bar average that travels a few degrees over many seconds, and the
+  // bounce adds up to 30 percent for about 0.3 s a beat. Measured off that
+  // formula, Medium with swell 0.9 held a fixed 6 degrees on the wordmarks
+  // (amount 0.12), 14 to 16 on the pattern sketches (0.25 to 0.3) and 22 to
+  // 27 on kaleid and plasma (0.4 to 0.5). A fixed bend on artwork that
+  // already flows reads as the artwork's own shape, so Swirl Off and Medium
+  // looked the same on the TV; Blaise's verdict on 2026-09-23 was that it
+  // does not seem to do anything.
+  //
+  // swirl() now swings instead of holding a bend: the angle winds one way
+  // and back over SWING_BEATS beats, locked to the beat clock, with swell
+  // still setting how far it swings and the bounce still adding a little on
+  // the kick. At Medium with swell 0.9 the swing runs to about plus and
+  // minus 12 degrees on the wordmarks, 27 to 32 on the pattern sketches and
+  // 43 to 54 on kaleid and plasma, the same three groupings as the numbers
+  // above.
+  //
+  // The centre wanders too, on a slow figure-eight about the middle of the
+  // frame, on the same beat clock, so a vortex that always sat dead centre
+  // now drifts across the picture over sixteen bars. pattern-stack's two
+  // layers share the centre and swing in opposite directions, as before.
+  //
+  // Inside a feedback loop (flow-lines, tunnel) the angle is applied to the
+  // previous frame every frame, so a swinging angle there would wind the
+  // spiral up and unwind it again rather than turning it steadily; those two
+  // keep the original fixed-bend formula and the original centred disc,
+  // unchanged, through swirlTrickle(chain, amount).
+  //
+  // Which sketches take it and which do not is a judgement about line
+  // density, the same one the header makes about energy: a vortex on a
+  // ridge plot or a contour map is soup, and the scan-field comb and the
+  // edge sketches feed thresholds that a moving coordinate would flicker.
+  //
+  // From the Swirl row, the same four levels as the bounce. 0 leaves the
+  // twist in the chain with an angle of 0, which is a no-op, so turning the
+  // swirl off takes effect on the next frame without a rebuild.
+  const SWIRL_LEVELS = [0, 0.5, 1, 1.5];
+  const swirlAmount = () => {
+    const v = SWIRL_LEVELS[feed.settings.swirl];
+    return v === undefined ? 1 : v;
+  };
+  // SWING_BEATS = 8, two bars: beats() is the tempo-integrated clock defined
+  // below, wrapping at TURN_BEATS = 256, and 256 / 8 = 32 whole swing cycles,
+  // so the wrap lands the sine back where it would have been anyway and is
+  // never seen. SWING = 2 is what puts the numbers in the header above on the
+  // screen: at Medium with swell 0.9, amount 0.12 (wordmarks) swings to about
+  // 13 degrees, amount 0.25 to 0.3 (pattern sketches) to about 27 to 32, and
+  // amount 0.4 to 0.5 (kaleid, plasma) to about 43 to 54.
+  const SWING_BEATS = 8;
+  const SWING = 2;
+  // The twist's reach, in units of the frame height: the angle falls from
+  // full at the centre to nothing at this distance. The old disc reached
+  // zero half the frame height above and below the centre (shape() spans
+  // -1..1 on each axis and its falloff ended at 1), so 0.5 keeps the vortex
+  // exactly as tall as it was; it is now as wide as it is tall, where the
+  // old one reached half the frame width to each side.
+  const TWIST_R = 0.5;
+  // The centre's figure-eight: x runs one sine over WANDER_BEATS and y two,
+  // which is what makes it an eight and not an ellipse. WANDER_BEATS = 64,
+  // sixteen bars, and 256 / 64 = 4 whole cycles, so the TURN_BEATS wrap
+  // lands the centre where it would have been anyway. WANDER_X = 0.12 and
+  // WANDER_Y = 0.08 of the frame keep it inside the middle third, 0.5 plus
+  // or minus 0.167, so the vortex never slides off towards an edge.
+  const WANDER_BEATS = 64;
+  const WANDER_X = 0.12;
+  const WANDER_Y = 0.08;
+  const vortex = () => shape(64, 0, 1);
+  // The trickle: the original fixed-bend formula, unchanged, for the two
+  // feedback loops (flow-lines, tunnel) whose behaviour must not change.
+  function swirlTrickle(chain, amount) {
+    return chain.modulateRotate(vortex(),
+      () => swirlAmount() * amount * (0.4 + 0.6 * feed.swell + 0.3 * feed.bounce));
+  }
+  // twist(angle, cx, cy, aspect, radius) as a hydra coord function. The
+  // rotation matrix is the one hydra's rotate and modulateRotate use, so a
+  // positive angle turns the same way it did before. aspect is the frame's
+  // width over its height, read per frame from hydra.synth like the pixel
+  // step in edges(), so it follows the real render size (960x540, set by
+  // RENDER_W and RENDER_H in director.js).
+  let twistDefined = false;
+  function defineTwist() {
+    if (twistDefined) return;
+    hydra.synth.setFunction({
+      name: 'twist',
+      type: 'coord',
+      inputs: [
+        { type: 'float', name: 'angle', default: 0 },
+        { type: 'float', name: 'cx', default: 0.5 },
+        { type: 'float', name: 'cy', default: 0.5 },
+        { type: 'float', name: 'aspect', default: 1 },
+        { type: 'float', name: 'radius', default: 0.5 },
+      ],
+      glsl: `   vec2 c = vec2(cx, cy);
+   vec2 d = _st - c;
+   d.x *= aspect;
+   float w = 1.0 - smoothstep(0.0, radius, length(d));
+   float a = angle * w;
+   d = mat2(cos(a), -sin(a), sin(a), cos(a)) * d;
+   d.x /= aspect;
+   return d + c;`,
+    });
+    twistDefined = true;
+  }
+  const frameAspect = () => (hydra.synth.width || 960) / (hydra.synth.height || 540);
+  function swirl(chain, amount) {
+    defineTwist();
+    return chain.twist(
+      () => swirlAmount() * amount * SWING * (0.4 + 0.6 * feed.swell)
+        * Math.sin(2 * Math.PI * beats() / SWING_BEATS)
+        + swirlAmount() * amount * 0.3 * feed.bounce,
+      () => 0.5 + WANDER_X * Math.sin(2 * Math.PI * beats() / WANDER_BEATS),
+      () => 0.5 + WANDER_Y * Math.sin(4 * Math.PI * beats() / WANDER_BEATS),
+      frameAspect,
+      TWIST_R);
+  }
+
+  // ---- the webcam in every sketch -----------------------------------------
+  //
+  // The three cam sketches are the picture. Every other sketch now carries a
+  // `camMix` naming one of three treatments, applied through the helpers
+  // below at run() time and only when window.camReady is true, so a box with
+  // no webcam runs the same chain it always did. The director opens s0 for a
+  // camMix sketch exactly as for a cam one. Blaise asked for this: "mix the
+  // webcam into the other sketches so it interacts with the sketch", and for
+  // all three of the shapes offered.
+  //
+  //   bend   the person's luminance is added to the sketch's own warp, so
+  //          lines flow round them and artwork warps where they stand.
+  //          camBend(chain) puts it after the sketch's field and before its
+  //          threshold or scale.
+  //   cut    a second layer, the sketch's own material at another scale,
+  //          shows only inside the person's outline: a figure made of the
+  //          sketch. camCut(chain, inner) lays inner over chain masked by
+  //          the silhouette.
+  //   edges  the outline laid over the picture in white or the palette at
+  //          about a third brightness. camOver(chain, rgb) adds it; a chain
+  //          that feeds back into itself must use camOverBlend() instead,
+  //          because an add inside a feedback loop is a geometric series
+  //          and the outline would pile up to white wherever the person
+  //          stands still, while a blend is bounded by its inputs.
+  //
+  // The silhouette is a luminance threshold and assumes the person is
+  // brighter than what is behind them, which is true of someone lit by the
+  // TV in a dark room and false of someone standing in front of a window.
+  // CAM_KEY is the number to move if the mask comes out inverted or empty.
+  const CAM_BEND = 0.06;         // displacement, as a fraction of the frame
+  const CAM_KEY = [0.45, 0.2];   // silhouette threshold and its softness
+  const CAM_EDGE = 0.35;         // brightness of the overlaid outline
+  // The Camera row's Mix switch, and a camera to mix. Read at run(), because
+  // the mix is built into the chain; director.js melts to another sketch
+  // when the switch moves, which is what makes a change take effect.
+  const camOn = () => !!window.camReady && feed.settings.camMix === 1;
+  // Grey and centred on zero, so a bright region pushes one way and a dark
+  // one the other; modulate() reads red for x and green for y, and a grey
+  // has them equal, so the push is along the diagonal.
+  const camField = () => src(s0).saturate(0).brightness(-0.5);
+  // White inside the person, black outside. mask() reads the luminance of
+  // its argument, which is why this is a thresh and not a luma.
+  const camMask = () => src(s0).saturate(0).thresh(CAM_KEY[0], CAM_KEY[1]);
+  const camEdges = (rgb) => {
+    const [r, g, b] = rgb || [1, 1, 1];
+    return edges(() => src(s0), 3).mult(solid(r * CAM_EDGE, g * CAM_EDGE, b * CAM_EDGE, 1));
+  };
+  function camBend(chain) {
+    return camOn() ? chain.modulate(camField(), CAM_BEND) : chain;
+  }
+  function camCut(chain, inner) {
+    return camOn() ? chain.layer(inner().mask(camMask())) : chain;
+  }
+  function camOver(chain, rgb) {
+    return camOn() ? chain.add(camEdges(rgb), 1) : chain;
+  }
+  function camOverBlend(chain, amount) {
+    return camOn() ? chain.blend(camEdges(), amount) : chain;
   }
 
   // ---- the Book of Shapes pattern family ---------------------------------
@@ -352,13 +578,15 @@
     // break, and the outward smear turns the strokes into a soft glow that
     // never resolves to a hard edge. The beat is four percent of brightness
     // and half a percent of size: present, not an event.
-    { name: 'logo-outline', cam: false, mono: true, run() {
+    { name: 'logo-outline', cam: false, mono: true, camMix: 'cut', run() {
         const bright = accent(0.86, 0.1);
-        const size = () => 0.325 + 0.02 * feed.swell + 0.004 * feed.pulse;
-        smear(wordmark(size)
+        const size = () => (0.325 + 0.02 * feed.swell) * kick(KICK_SCALE)();
+        // Inside the person: the wordmark small and turned on its side.
+        smear(swirl(camCut(wordmark(size)
           .scrollY(() => 0.012 * Math.sin(flow() * 0.23))
           .rotate(() => 0.035 * Math.sin(flow() * 0.5))
-          .mult(solid(bright, bright, bright, 1)), 0.85, 1.003)
+          .mult(solid(bright, bright, bright, 1)),
+          () => wordmark(0.16).rotate(Math.PI / 2).mult(solid(0.7, 0.7, 0.7, 1))), 0.12), 0.85, 1.003)
           .out(o0);
     } },
 
@@ -392,19 +620,19 @@
     // layer(c0, c1) mixes by c1's alpha only, so whatever sits at the bottom
     // contributes its rgb unweighted, and the wordmark's soft glow would come
     // through as a solid white slab where the layers above are transparent.
-    { name: 'logo-kaleid', cam: false, mono: true, run() {
-        wordmark(() => 0.255 + 0.012 * feed.swell).out(o1);
+    { name: 'logo-kaleid', cam: false, mono: true, camMix: 'edges', run() {
+        wordmark(() => (0.255 + 0.012 * feed.swell) * kick(KICK_SCALE)()).out(o1);
         const arm = (a) => src(o1)
           .scrollY(() => -0.28 - 0.016 * feed.swell)
           .rotate(a);
         const turn = () => flow() * 0.025
           + 0.03 * feed.spring('kaleid-kick', () => feed.pulse, 1);
-        smear(solid(0, 0, 0, 0)
+        smear(swirl(camOver(solid(0, 0, 0, 0)
           .layer(arm(0))
           .layer(arm(Math.PI / 2))
           .layer(arm(Math.PI))
           .layer(arm(-Math.PI / 2))
-          .rotate(turn), 0.8, 1.0012)
+          .rotate(turn)), 0.2), 0.8, 1.0012)
           .out(o0);
     } },
 
@@ -424,15 +652,15 @@
     // than modulateScrollX because the scroll variants fract the coordinate
     // and the wordmark would wrap instead of sliding. brightness(-0.5)
     // centres the red channel on zero so the shear goes both ways.
-    { name: 'logo-shear', cam: false, mono: true, run() {
+    { name: 'logo-shear', cam: false, mono: true, camMix: 'bend', run() {
         const wave = () => osc(4.2, 0.07, 0).rotate(Math.PI / 2)
           .brightness(-0.5).mult(solid(1, 0, 0, 1));
         const lean = () => 0.07 + 0.06 * Math.sin(flow() * 0.9)
           + 0.04 * feed.energy + 0.01 * feed.pulse;
         const bright = accent(0.88, 0.08);
-        smear(wordmark(0.34)
-          .modulate(wave(), lean)
-          .mult(solid(bright, bright, bright, 1)), 0.88, 1.0015)
+        smear(swirl(camBend(wordmark(() => 0.34 * kick(KICK_SCALE)())
+          .modulate(wave(), lean))
+          .mult(solid(bright, bright, bright, 1)), 0.12), 0.88, 1.0015)
           .out(o0);
     } },
 
@@ -452,12 +680,12 @@
     //
     // The modulator's red channel is zeroed, so the displacement is in y only
     // and the lines never slide along their own length.
-    { name: 'ridge-lines', cam: false, mono: true, run() {
+    { name: 'ridge-lines', cam: false, mono: true, camMix: 'bend', run() {
         const bumps = () => noise(4.5, 0.006)
           .mult(noise(2.2, 0.005).thresh(0.3, 0.3))
           .mult(solid(0, 1, 0, 1));
-        osc(60 * TAU, 0, 0).rotate(Math.PI / 2)
-          .modulate(bumps(), () => 0.02 + 0.05 * feed.swell)
+        camBend(osc(60 * TAU, 0, 0).rotate(Math.PI / 2)
+          .modulate(bumps(), () => (0.02 + 0.05 * feed.swell) * kick(KICK_WARP)()))
           .thresh(0.93, 0.01)
           .out(o0);
     } },
@@ -483,9 +711,9 @@
     // dense line field moving a pixel between rendered frames is the single
     // largest source of frame to frame change in the library. At 0.0015 the
     // lines are near enough still and everything you see moving is the warp.
-    { name: 'ribbons', cam: false, mono: true, run() {
-        const work = osc(34 * TAU, 0.0015, 0)
-          .modulate(noise(1.4, 0.006), () => 0.08 + 0.06 * feed.swell)
+    { name: 'ribbons', cam: false, mono: true, camMix: 'bend', run() {
+        const work = camBend(osc(34 * TAU, 0.0015, 0)
+          .modulate(noise(1.4, 0.006), () => (0.08 + 0.06 * feed.swell) * kick(KICK_WARP)()))
           .rotate(() => 0.35 + 0.02 * Math.sin(flow() * 0.17))
           .thresh(0.92, 0.02);
         smear(work, 0.92, 1.0008).out(o0);
@@ -498,9 +726,9 @@
     // count and the edge gain are both fixed, because both feed thresholds
     // and a threshold moved by the music adds and drops whole contour lines
     // at a time.
-    { name: 'contours', cam: false, mono: true, run() {
-        noise(2.6, 0.01)
-          .modulate(noise(1.1, 0.006), () => 0.1 + 0.16 * feed.swell)
+    { name: 'contours', cam: false, mono: true, camMix: 'bend', run() {
+        camBend(noise(2.6, 0.01)
+          .modulate(noise(1.1, 0.006), () => (0.1 + 0.16 * feed.swell) * kick(KICK_WARP)()))
           .posterize(10, 1)
           .out(o1);
         edges(() => src(o1), () => 3 + 0.4 * feed.pulse).out(o0);
@@ -515,13 +743,19 @@
     // threshold. Moving the threshold is what the first version did, and it
     // switched whole dots into existence at once; moving the brightness fades
     // the same dots up and down.
-    { name: 'flow-lines', cam: false, mono: true, run() {
+    { name: 'flow-lines', cam: false, mono: true, camMix: 'edges', run() {
         const seed = () => 0.8 + 0.2 * feed.spring('flow-seed', () => feed.pulse, 1.6);
-        src(o0)
-          .modulate(noise(3.2, 0.03), () => 0.004 + 0.008 * feed.energy)
+        // The outline is blended in, not added: this chain is its own
+        // feedback and an add would pile up to white where the person
+        // stands still. Blended at a few percent it arrives as a ghost that
+        // the flow field then carries off in trails.
+        // The swirl sits on the feedback read, a trickle per frame, so the
+        // trails spiral instead of streaming straight.
+        camOverBlend(swirlTrickle(src(o0)
+          .modulate(noise(3.2, 0.03), () => (0.004 + 0.008 * feed.energy) * kick(KICK_WARP)()), 0.012)
           .mult(solid(0.965, 0.965, 0.965, 1))
           .layer(keyed(noise(22, 0.06).thresh(0.8, 0.02))
-            .mult(solid(seed, seed, seed, 1)))
+            .mult(solid(seed, seed, seed, 1))), 0.08)
           .out(o0);
     } },
 
@@ -554,12 +788,12 @@
     // low frequency oscillator: gradient gives a true 0 to 1 in red, which is
     // the channel modulateScale reads, where osc(1) only covers 0.5 to 0.92
     // and barely leans the grid at all.
-    { name: 'wire-terrain', cam: false, mono: true, run() {
+    { name: 'wire-terrain', cam: false, mono: true, camMix: 'bend', run() {
         const yRamp = () => gradient(0).rotate(Math.PI / 2);
-        osc(32 * TAU, 0, 0).thresh(0.984, 0.006)
+        camBend(osc(32 * TAU, 0, 0).thresh(0.984, 0.006)
           .add(osc(20 * TAU, 0, 0).rotate(Math.PI / 2).thresh(0.984, 0.006))
-          .modulate(noise(1.6, 0.006), () => 0.02 + 0.035 * feed.swell)
-          .modulateScale(yRamp(), 1.4, 1.0)
+          .modulate(noise(1.6, 0.006), () => 0.02 + 0.035 * feed.swell))
+          .modulateScale(yRamp(), () => 1.4 * kick(KICK_SCALE)(), 1.0)
           .out(o0);
     } },
 
@@ -571,7 +805,7 @@
     // ones. The swell lengthens the wake instead, which is the part that
     // actually reads.
     { name: 'cam-edges', cam: true, mono: true, run() {
-        smear(edges(() => src(s0), () => 3.5 + 0.5 * feed.pulse),
+        smear(edges(() => src(s0), () => 3.5 + 0.5 * feed.pulse).scale(kick(KICK_SCALE)),
           0.82, () => 1.002 + 0.003 * feed.swell)
           .out(o0);
     } },
@@ -592,7 +826,7 @@
           .contrast(() => 1 + 0.1 * feed.swell)
           .posterize(6, 1)
           .out(o1);
-        edges(() => src(o1), 3).out(o0);
+        edges(() => src(o1), 3).scale(kick(KICK_SCALE)).out(o0);
     } },
 
     // 11. A flow or physics pattern breathing through its sweep, drifting on
@@ -600,16 +834,16 @@
     // smear. The smear is doing the same job it does for ribbons: these
     // patterns are dense thin line work, and a soft edge moving a pixel
     // changes far less of the frame than a hard one.
-    { name: 'pattern-flow', cam: false, mono: true, pattern: true, run() {
+    { name: 'pattern-flow', cam: false, mono: true, pattern: true, camMix: 'bend', run() {
         const p = patterns.take(['FLOW', 'PHYSICS']);
         if (!p) { patternFallback(); return; }
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
         const bright = accent(0.92, 0.06);
-        smear(sweepPair(0)
+        smear(swirl(camBend(sweepPair(0)
           .scrollX(driftX(0.02, 0.05))
-          .scrollY(driftX(0.014, 0.037, 1.3))
-          .scale(1, 1, SQUARE_Y)
-          .mult(solid(bright, bright, bright, 1)), 0.92, 1.0004)
+          .scrollY(driftX(0.014, 0.037, 1.3)))
+          .scale(kick(KICK_SCALE), 1, SQUARE_Y)
+          .mult(solid(bright, bright, bright, 1)), 0.3), 0.92, 1.0004)
           .out(o0);
     } },
 
@@ -635,16 +869,18 @@
     // oscillator's covers half that. The zoom past 1 is what keeps the fold
     // at the corners of a rotating square texture off the screen for most of
     // the turn; where it does reach outside, a grid repeating is a grid.
-    { name: 'pattern-grid', cam: false, mono: true, pattern: true, run() {
+    { name: 'pattern-grid', cam: false, mono: true, pattern: true, camMix: 'cut', run() {
         const p = patterns.take(['GRID', 'ISOMETRIC']);
         if (!p) { patternFallback(); return; }
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
         const yRamp = () => gradient(0).rotate(Math.PI / 2);
         const turn = () => 2 * Math.PI * beats() / TURN_BEATS;
-        smear(sweepPair(0)
+        // Inside the person: the same grid, smaller and turning the other way.
+        smear(camCut(sweepPair(0)
           .rotate(turn)
-          .scale(() => 1.3 + 0.06 * feed.swell, 1, SQUARE_Y)
-          .modulateScale(yRamp(), () => 0.15 + 0.35 * feed.swell, 1.0), 0.85, 1.0004)
+          .scale(() => (1.3 + 0.06 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y)
+          .modulateScale(yRamp(), () => 0.15 + 0.35 * feed.swell, 1.0),
+          () => sweepPair(0).rotate(() => -turn()).scale(0.7, 1, SQUARE_Y)), 0.85, 1.0004)
           .out(o0);
     } },
 
@@ -656,17 +892,19 @@
     //
     // kaleid is the last coordinate transform, so it folds the screen and
     // everything before it happens inside one wedge.
-    { name: 'pattern-radial', cam: false, mono: true, pattern: true, run() {
+    { name: 'pattern-radial', cam: false, mono: true, pattern: true, camMix: 'cut', run() {
         const p = patterns.take(['RADIAL']);
         if (!p) { patternFallback(); return; }
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
         const sides = 2 + Math.floor(Math.random() * 2);
         const bright = accent(0.84, 0.12);
-        smear(sweepPair(0)
-          .scale(() => 1.05 + 0.06 * feed.swell, 1, SQUARE_Y)
+        // Inside the person: the artwork unfolded, at half size.
+        smear(camCut(sweepPair(0)
+          .scale(() => (1.05 + 0.06 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y)
           .rotate(() => flow() * 0.008)
           .kaleid(sides)
-          .mult(solid(bright, bright, bright, 1)), 0.84, 1.0004)
+          .mult(solid(bright, bright, bright, 1)),
+          () => sweepPair(0).scale(0.5, 1, SQUARE_Y).rotate(() => -flow() * 0.008)), 0.84, 1.0004)
           .out(o0);
     } },
 
@@ -680,13 +918,13 @@
     // field a pixel sideways four times a second. The swell carries the shape
     // of a build and none of that ripple, which is the same argument the
     // scanline spacing in scan-field puts through a spring.
-    { name: 'pattern-noise', cam: false, mono: true, pattern: true, run() {
+    { name: 'pattern-noise', cam: false, mono: true, pattern: true, camMix: 'bend', run() {
         const p = patterns.take(['NOISE', 'ORGANIC']);
         if (!p) { patternFallback(); return; }
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
-        smear(sweepPair(0)
-          .modulate(noise(2.1, 0.008), () => 0.025 + 0.07 * feed.swell + 0.01 * feed.energy)
-          .scale(1, 1, SQUARE_Y), 0.86, 1.0004)
+        smear(swirl(camBend(sweepPair(0)
+          .modulate(noise(2.1, 0.008), () => 0.025 + 0.07 * feed.swell + 0.01 * feed.energy))
+          .scale(kick(KICK_SCALE), 1, SQUARE_Y), 0.3), 0.86, 1.0004)
           .out(o0);
     } },
 
@@ -708,17 +946,20 @@
     // it was the smoothest thing in the library and it read as a photograph.
     // A crossfade that takes 40 s is not motion to the eye, whatever the
     // numbers say, so the frame now also creeps and leans.
-    { name: 'pattern-melt', cam: false, mono: true, pattern: true, run() {
+    { name: 'pattern-melt', cam: false, mono: true, pattern: true, camMix: 'cut', run() {
         const p = patterns.take([]);
         if (!p) { patternFallback(); return; }
         const wave = () => 0.5 - 0.5 * Math.cos(flow() * 0.22);
         const base = patterns.base(), top = patterns.top();
         window.sketchUpdate = () => patterns.bindFrames(p, base, top, wave(), 0);
-        smear(sweepPair(0)
+        // Inside the person: the same dissolve at half size, leaning the
+        // other way.
+        smear(swirl(camCut(sweepPair(0)
           .scrollX(driftX(0.03, 0.041))
           .scrollY(driftX(0.02, 0.029, 2.1))
           .rotate(() => 0.05 * Math.sin(flow() * 0.017))
-          .scale(() => 1.05 + 0.04 * feed.swell, 1, SQUARE_Y), 0.92, 1.0008)
+          .scale(() => (1.05 + 0.04 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y),
+          () => sweepPair(0).rotate(() => -0.3 - 0.05 * Math.sin(flow() * 0.017)).scale(0.5, 1, SQUARE_Y)), 0.25), 0.92, 1.0008)
           .out(o0);
     } },
 
@@ -728,15 +969,15 @@
     // turns a dense one into moire. The pattern is rendered into o1 first so
     // the detector's four copies cost one texture read each rather than
     // rebuilding the two-source blend four times.
-    { name: 'pattern-edges', cam: false, mono: true, pattern: true, run() {
+    { name: 'pattern-edges', cam: false, mono: true, pattern: true, camMix: 'edges', run() {
         const p = patterns.take(['DISTORTION', 'ORGANIC']);
         if (!p) { patternFallback(); return; }
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
         sweepPair(0)
           .scrollX(driftX(0.012, 0.04))
-          .scale(() => 1.02 + 0.05 * feed.swell, 1, SQUARE_Y)
+          .scale(() => (1.02 + 0.05 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y)
           .out(o1);
-        edges(() => src(o1), () => 3 + 0.4 * feed.pulse).out(o0);
+        camOver(edges(() => src(o1), () => 3 + 0.4 * feed.pulse)).out(o0);
     } },
 
     // 17. Two patterns from different tag groups at half and half, drifting
@@ -748,7 +989,7 @@
     // thing in the library that needs four pattern sources. If the cache holds
     // just one pattern the same one goes in both slots, where the opposed
     // sweeps and rotations still give it something to interfere with.
-    { name: 'pattern-stack', cam: false, mono: true, pattern: true, run() {
+    { name: 'pattern-stack', cam: false, mono: true, pattern: true, camMix: 'edges', run() {
         const a = patterns.take(['GRID', 'ISOMETRIC', 'RADIAL']);
         if (!a) { patternFallback(); return; }
         const b = patterns.take(['FLOW', 'NOISE', 'ORGANIC', 'PHYSICS'], a) || a;
@@ -757,15 +998,18 @@
           patterns.bind(a, t, 0);
           patterns.bind(b, 5 - t, 1);
         };
+        // The two layers kick in opposite directions, so a beat pulls them
+        // apart and lets them fall back together.
         const left = sweepPair(0)
           .scrollX(driftX(0.018, 0.045))
           .rotate(() => flow() * 0.004)
-          .scale(1, 1, SQUARE_Y);
+          .scale(kick(KICK_SCALE), 1, SQUARE_Y);
         const right = sweepPair(1)
           .scrollX(driftX(-0.018, 0.045))
           .rotate(() => -flow() * 0.004)
-          .scale(() => 1.08, 1, SQUARE_Y);
-        smear(left.blend(right, 0.5), 0.88, 1.0004).out(o0);
+          .scale(() => 1.08 * kick(-KICK_SCALE)(), 1, SQUARE_Y);
+        // The two layers twist against each other, as they turn.
+        smear(camOver(swirl(left, 0.25).blend(swirl(right, -0.25), 0.5)), 0.88, 1.0004).out(o0);
     } }
 
   ];
@@ -788,10 +1032,11 @@
     // what is left of it on its side against the two edges: the logo was
     // unreadable on every frame the gate was open. Folding only the field
     // keeps the accent and keeps the type.
-    { name: 'logo-colour', cam: false, mono: false, run() {
+    { name: 'logo-colour', cam: false, mono: false, camMix: 'edges', run() {
         const [dr, dg, db] = palette.rgb('deep');
         const [pr, pg, pb] = palette.rgb('purple');
         const [mr, mg, mb] = palette.rgb('magenta');
+        const pink = palette.rgb('pink');
         const field = () => solid(dr, dg, db, 1)
           .add(noise(2.2, 0.03).color(pr, pg, pb), () => 0.28 + 0.3 * feed.energy)
           .add(osc(9, 0.03, 0).color(mr, mg, mb), 0.2);
@@ -801,11 +1046,11 @@
         // and the tile mask deals with fract(st), which otherwise stacks five
         // copies of the logo up the frame at this scale. Keying alone leaves
         // the repeats, masking alone leaves the black rectangle.
-        field()
+        camOver(field()
           .blend(field().kaleid(2), () => 0.12 + 0.5 * feed.swell)
           .modulate(noise(1.3, 0.015), () => 0.02 + 0.05 * feed.swell)
           .layer(src(s2).luma(LOGO_KEY[0], LOGO_KEY[1]).mask(oneTile())
-            .scale(() => 0.2 + 0.008 * feed.swell + 0.004 * feed.pulse, LOGO_X, 1))
+            .scale(() => (0.2 + 0.008 * feed.swell) * kick(KICK_SCALE)(), LOGO_X, 1)), pink)
           .out(o0);
     } },
 
@@ -829,15 +1074,29 @@
     // scales what is there: the palette magenta and violet came out as blue
     // and dark red on screen. At offset 0 the channels are equal, the source
     // is grey, and the tint is exactly the palette value.
-    { name: 'tunnel', cam: false, mono: false, run() {
+    { name: 'tunnel', cam: false, mono: false, camMix: 'cut', run() {
         const [r, g, b] = palette.rgb('magenta');
         const [r2, g2, b2] = palette.rgb('violet');
-        osc(14, 0.015, 0).color(r, g, b)
-          .blend(osc(22, -0.011, 0).color(r2, g2, b2), 0.5)
+        const [kr, kg, kb] = palette.rgb('pink');
+        // The kick is on the ring density, not on the zoom: the zoom is
+        // inside the feedback loop and a pop there compounds frame on frame
+        // until the tunnel turns itself inside out. An oscillator frequency
+        // is read fresh every frame and feeds nothing back.
+        //
+        // Inside the person: a finer tunnel in pink, folded five ways and
+        // turning the other way. Built from fresh oscillators rather than
+        // from o0, because anything read back from o0 here is inside the
+        // feedback loop, and an inverted or hue-shifted copy of the previous
+        // frame flickers at the frame rate.
+        // The swirl is a trickle here too: it is inside the feedback and
+        // compounds into the tunnel's own spiral.
+        camCut(swirlTrickle(osc(() => 14 * kick(KICK_SCALE)(), 0.015, 0).color(r, g, b)
+          .blend(osc(() => 22 * kick(KICK_SCALE)(), -0.011, 0).color(r2, g2, b2), 0.5)
           .modulate(src(o0), () => 0.15 + 0.04 * feed.swell)
           .scale(() => 1.002 + 0.006 * feed.energy + 0.003 * feed.pulse)
           .rotate(() => flow() * 0.02)
-          .kaleid(3)
+          .kaleid(3), 0.015),
+          () => osc(40, 0.02, 0).color(kr, kg, kb).rotate(() => -flow() * 0.03).kaleid(5))
           .out(o0);
     } },
 
@@ -851,17 +1110,17 @@
     // as the track builds and falls away again over four, and the beat adds a
     // few percent through a spring on top of that. There is no white in the
     // chain at all, and no discontinuity anywhere in it.
-    { name: 'bloom-drop', cam: false, mono: false, run() {
+    { name: 'bloom-drop', cam: false, mono: false, camMix: 'edges', run() {
         const [pr, pg, pb] = palette.rgb('plum');
         const [dr, dg, db] = palette.rgb('deep');
         const [kr, kg, kb] = palette.rgb('pink');
         const bloom = () => 0.28 + 0.6 * feed.swell
           + 0.07 * feed.spring('drop-kick', () => feed.pulse, 2.2);
-        solid(dr, dg, db, 1)
+        camOver(solid(dr, dg, db, 1)
           .add(noise(2.4, 0.02).color(pr, pg, pb), 0.35)
-          .add(osc(16, 0.04, 0).color(kr, kg, kb).kaleid(5)
+          .add(swirl(osc(16, 0.04, 0).color(kr, kg, kb).kaleid(5)
             .modulate(noise(1.1, 0.015), () => 0.04 + 0.05 * feed.swell)
-            .scale(() => 1 + 0.06 * Math.sin(flow() * 0.23)), bloom)
+            .scale(() => (1 + 0.06 * Math.sin(flow() * 0.23)) * kick(KICK_SCALE)()), 0.4), bloom), [kr, kg, kb])
           .out(o0);
     } },
 
@@ -880,6 +1139,7 @@
           .posterize(5, 1);
         face().color(mr, mg, mb)
           .add(face().invert().color(vr, vg, vb), 0.55)
+          .scale(kick(KICK_SCALE))
           .blend(src(o0), () => 0.55 + 0.1 * feed.swell)
           .out(o0);
     } },
@@ -912,7 +1172,7 @@
     // at startup, and for the twenty seconds between a stop and the idle
     // fallback. Taken literally that is a quarter turn of hue, straight out of
     // the palette, so a missing tempo falls back to the target instead.
-    { name: 'scan-field', cam: false, mono: false, run() {
+    { name: 'scan-field', cam: false, mono: false, camMix: 'edges', run() {
         const [mr, mg, mb] = palette.rgb('magenta');
         const [vr, vg, vb] = palette.rgb('violet');
         // The spacing goes through a slow spring rather than reading the
@@ -938,31 +1198,39 @@
           .scrollY(() => (flow() * drift) % 1)
           .brightness(0.45).contrast(1.4)
           .mult(solid(lit, lit, lit, 1));
-        osc(18, 0.02, 0).color(mr, mg, mb)
+        // The outline goes on after the comb, so it is not striped.
+        camOver(osc(18, 0.02, 0).color(mr, mg, mb)
           .add(noise(3, 0.02).color(vr, vg, vb), 0.4)
           .hue(() => {
             const bpm = feed.bpm > 20 ? feed.bpm : 174;
             return 0.02 * Math.sin(flow() * 0.2) + 0.25 * ((bpm - 174) / 174);
           })
           .modulate(noise(1.2, 0.015), () => 0.02 + 0.05 * feed.swell)
-          .mult(scan())
+          // The wash kicks and the comb does not: a comb moving on the
+          // beat is the twitch this sketch was rebuilt to remove.
+          .scale(kick(KICK_SCALE))
+          .mult(scan()))
           .out(o0);
     } },
 
     // 16. A plasma of oscillator and noise in the palette, folded six ways.
     // The rotation runs on the shared clock, so a busy passage spins it and a
     // sparse break lets it settle, and the fold scale opens on the swell.
-    { name: 'plasma-kaleid', cam: false, mono: false, run() {
+    { name: 'plasma-kaleid', cam: false, mono: false, camMix: 'cut', run() {
         const [mr, mg, mb] = palette.rgb('magenta');
         const [vr, vg, vb] = palette.rgb('violet');
         const [kr, kg, kb] = palette.rgb('pink');
-        osc(9, 0.03, 0).color(mr, mg, mb)
+        // A factory, because the cut needs the same plasma a second time at
+        // another fold and scale, and a built chain cannot be reused.
+        const plasma = () => osc(9, 0.03, 0).color(mr, mg, mb)
           .add(noise(3, 0.04).color(vr, vg, vb), 0.45)
           .add(osc(24, -0.03, 0).thresh(0.7, 0.1).color(kr, kg, kb),
-            () => 0.12 + 0.2 * feed.energy)
+            () => 0.12 + 0.2 * feed.energy);
+        camCut(swirl(plasma()
           .kaleid(6)
           .rotate(() => flow() * 0.11)
-          .scale(() => 1 + 0.05 * feed.swell + 0.01 * feed.pulse)
+          .scale(() => (1 + 0.05 * feed.swell) * kick(KICK_SCALE)()), 0.4),
+          () => plasma().kaleid(3).rotate(() => -flow() * 0.11).scale(0.5))
           .out(o0);
     } },
 
@@ -990,7 +1258,7 @@
     // tunnel: at any other offset the three channels are already out of phase,
     // the source is full spectrum before .color() touches it, and the palette
     // violet arrives on screen as blue.
-    { name: 'pattern-tint', cam: false, mono: false, pattern: true, run() {
+    { name: 'pattern-tint', cam: false, mono: false, pattern: true, camMix: 'cut', run() {
         const p = patterns.take([]);
         if (!p) { patternFallback(); return; }
         window.sketchUpdate = () => patterns.bind(p, patterns.sweepT());
@@ -1006,12 +1274,14 @@
         const cb = () => mb + (kb - mb) * lift();
         const field = () => solid(dr * 0.2, dg * 0.2, db * 0.2, 1)
           .add(osc(5, 0.012, 0).color(vr, vg, vb).rotate(() => flow() * 0.02), 0.1);
-        field()
-          .layer(sweepPair(0)
+        // Inside the person: the artwork small and in solid pink.
+        camCut(field()
+          .layer(swirl(sweepPair(0)
             .scrollX(driftX(0.015, 0.04))
-            .scale(() => 1.04 + 0.05 * feed.swell, 1, SQUARE_Y)
+            .scale(() => (1.04 + 0.05 * feed.swell) * kick(KICK_SCALE)(), 1, SQUARE_Y)
             .luma(0.12, 0.08)
-            .color(cr, cg, cb))
+            .color(cr, cg, cb), 0.3)),
+          () => sweepPair(0).scale(0.55, 1, SQUARE_Y).luma(0.12, 0.08).color(kr, kg, kb))
           .out(o0);
     } }
 
