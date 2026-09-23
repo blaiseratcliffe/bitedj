@@ -179,6 +179,7 @@
   let frames = 0;
   function driveFrame(dt) {
     frames += 1;
+    sampleRange();
     if (swapNext) {
       swapNext = false;
       startPending();
@@ -419,10 +420,45 @@
   })();
   let lastLog = performance.now();
   window.update = driveFrame;
+  // The range each envelope covered since the last log line, sampled on every
+  // rendered frame in driveFrame. This is what fork issue #4 was missing: the
+  // old line said the beatgrid was arriving and nothing about whether the
+  // bands were, or how far the envelopes the sketches read ever travelled.
+  // Read off the line whether a reaction exists before judging its size on
+  // the TV; a swell that spans 0.2 in ten seconds of a drop is a feed problem
+  // and not a sketch amount problem.
+  // rawBass rather than bass: the raw band says whether the sidechain heard
+  // anything, and bass is already through the auto-gain, which stretches
+  // whatever it hears to full scale. The line prints it as "bass".
+  const RANGE_KEYS = ['rawBass', 'energy', 'swell', 'pulse'];
+  const RANGE_LABELS = { rawBass: 'bass', energy: 'energy', swell: 'swell', pulse: 'pulse' };
+  const range = {};
+  function resetRange() {
+    RANGE_KEYS.forEach((k) => { range[k] = [Infinity, -Infinity]; });
+  }
+  resetRange();
+  // A declaration rather than an assignment so driveFrame, defined above
+  // and first called by hydra after this file has finished, can reach it.
+  function sampleRange() {
+    RANGE_KEYS.forEach((k) => {
+      const v = feed[k];
+      if (v < range[k][0]) range[k][0] = v;
+      if (v > range[k][1]) range[k][1] = v;
+    });
+  }
   setInterval(() => {
     const now = performance.now();
-    console.log('visuals: fps', (frames * 1000 / (now - lastLog)).toFixed(1), 'feed', feed.alive ? 'alive' : 'dead', 'bpm', feed.bpm.toFixed(1));
+    const spans = RANGE_KEYS.map((k) => {
+      const [lo, hi] = range[k];
+      const label = RANGE_LABELS[k];
+      return lo <= hi ? `${label} ${lo.toFixed(2)}..${hi.toFixed(2)}` : `${label} -`;
+    }).join(' ');
+    console.log('visuals: fps', (frames * 1000 / (now - lastLog)).toFixed(1),
+      'feed', feed.alive ? 'alive' : 'dead',
+      feed.playing ? 'playing' : 'stopped',
+      'bpm', feed.bpm.toFixed(1), 'beats', feed.beats, spans);
     frames = 0; lastLog = now;
+    resetRange();
   }, LOG_EVERY_MS);
 
   // The first switch of the page has nothing behind it: the still is a blank

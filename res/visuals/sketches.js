@@ -58,7 +58,9 @@
 // frame, because every line crosses into where it was not. That is the whole
 // difference between smooth and twitchy, and it means the amplitude of a warp
 // on such a field has to come from feed.swell and not from feed.energy: the
-// energy envelope ripples by about seven hundredths over each beat at 174,
+// energy envelope ripples over each beat, by about seven hundredths on the
+// mock feed and by 0.3 on a real drum and bass drop captured on the box
+// (feed.js replayed on a capture read energy 0.55..0.85 through a drop),
 // which is small enough to be invisible as brightness and quite large enough
 // to shove sixty lines a pixel sideways four times a second. Sparse bright
 // things, a wordmark or a scatter of dots, are an order of magnitude less
