@@ -2074,16 +2074,18 @@
                Segment widths: row 1 reuses VisualsSegmented, which already
                carries its own 60px min-width rule, so its 120f group stays
                as it was on the System page. Rows 2 to 5 use the generic
-               SettingsSegmented group, which only gets the 80px min-width
-               from style.qss, so those groups are 240f or 320f for three or
-               four segments. Rows 6 and 7 also use SettingsSegmented rather
-               than a dedicated ObjectName (fork ruling R5): row 6's two
-               camera groups are 240f each, 120px per segment, because
-               "Sketches off" does not fit an 80px segment, and row 7 is
-               160f for its pair. All of these widths are unmeasured until
-               Task 8's capture with shoot.sh; if the camera labels still
-               clip, widen the two groups rather than shortening the
-               labels. -->
+               SettingsSegmented group, which measures about 82px a segment
+               rather than the 80px in style.qss's min-width, since the 2px
+               border sits outside it; that is the same figure the Waveform
+               page's Overview and Height rows record for a Wave row cell
+               (style.qss ~858-880). So those groups are sized 246f for
+               three segments and 328f for four, the same measured basis as
+               Overview and Height. Rows 6 and 7 also use SettingsSegmented
+               rather than a dedicated ObjectName (fork ruling R5): row 7's
+               pair is 164f. Row 6's two camera groups started at 240f, 120px
+               a segment, but "Sketches off" measured at the full 120px cell
+               and touched both borders on the 2026-09-23 capture, so they
+               are now 300f each, 150px a segment (fix round 1, ruling R10). -->
           <WidgetGroup trigger="[SettingsTab],visuals">
             <ObjectName>SettingsPanel</ObjectName>
             <Layout>vertical</Layout>
@@ -2157,7 +2159,7 @@
                   <WidgetGroup>
                     <ObjectName>SettingsSegmented</ObjectName>
                     <Layout>horizontal</Layout>
-                    <Size>240f,44f</Size>
+                    <Size>246f,44f</Size>
                     <Children>
                       <Template src="skin:templates/setting_segment_button.xml">
                         <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
@@ -2196,7 +2198,7 @@
                   <WidgetGroup>
                     <ObjectName>SettingsSegmented</ObjectName>
                     <Layout>horizontal</Layout>
-                    <Size>320f,44f</Size>
+                    <Size>328f,44f</Size>
                     <Children>
                       <Template src="skin:templates/setting_segment_button.xml">
                         <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
@@ -2241,7 +2243,7 @@
                   <WidgetGroup>
                     <ObjectName>SettingsSegmented</ObjectName>
                     <Layout>horizontal</Layout>
-                    <Size>320f,44f</Size>
+                    <Size>328f,44f</Size>
                     <Children>
                       <Template src="skin:templates/setting_segment_button.xml">
                         <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
@@ -2286,7 +2288,7 @@
                   <WidgetGroup>
                     <ObjectName>SettingsSegmented</ObjectName>
                     <Layout>horizontal</Layout>
-                    <Size>320f,44f</Size>
+                    <Size>328f,44f</Size>
                     <Children>
                       <Template src="skin:templates/setting_segment_button.xml">
                         <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
@@ -2320,8 +2322,11 @@
               <!-- Row 6: Camera, two independent pairs. Both SettingsSegmented
                    per ruling R5: neither VisualsSegmented's 60px min-width nor
                    the plain 80px one leaves room for a dedicated ObjectName
-                   here, so each pair gets its own 240f group (120px a
-                   segment) rather than the 120f the brief first proposed. -->
+                   here. Each pair is now its own 300f group, 150px a
+                   segment, after "Sketches off" measured at the full 120px
+                   cell and touched both borders on the 2026-09-23 capture
+                   (fix round 1, ruling R10); the first attempt at 240f,
+                   120px a segment, is what the capture caught. -->
               <WidgetGroup>
                 <ObjectName>SettingsRow</ObjectName>
                 <Layout>horizontal</Layout>
@@ -2335,7 +2340,7 @@
                   <WidgetGroup>
                     <ObjectName>SettingsSegmented</ObjectName>
                     <Layout>horizontal</Layout>
-                    <Size>240f,44f</Size>
+                    <Size>300f,44f</Size>
                     <Children>
                       <Template src="skin:templates/setting_segment_button.xml">
                         <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
@@ -2357,7 +2362,7 @@
                   <WidgetGroup>
                     <ObjectName>SettingsSegmented</ObjectName>
                     <Layout>horizontal</Layout>
-                    <Size>240f,44f</Size>
+                    <Size>300f,44f</Size>
                     <Children>
                       <Template src="skin:templates/setting_segment_button.xml">
                         <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
@@ -2390,7 +2395,7 @@
                   <WidgetGroup>
                     <ObjectName>SettingsSegmented</ObjectName>
                     <Layout>horizontal</Layout>
-                    <Size>160f,44f</Size>
+                    <Size>164f,44f</Size>
                     <Children>
                       <Template src="skin:templates/setting_segment_button.xml">
                         <SetVariable name="ObjectName">SettingsSegmentLeft</SetVariable>
