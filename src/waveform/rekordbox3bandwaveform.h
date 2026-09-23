@@ -48,7 +48,9 @@ class Rekordbox3BandWaveform {
     /// Build the fallback approximation from Mixxx's own analysis, for tracks
     /// that have no rekordbox `.2EX` file. Detail only: there is no preview
     /// series, and no meaningful entries-per-second either, because the
-    /// waveform does not expose its visual sample rate.
+    /// waveform does not expose its visual sample rate. Null until the
+    /// analysis has completed: the analyzer publishes its Waveform before
+    /// filling it, and a copy taken while it runs is a copy of silence.
     static QSharedPointer<const Rekordbox3BandWaveform> fromMixxxWaveform(
             const ConstWaveformPointer& pWaveform);
 

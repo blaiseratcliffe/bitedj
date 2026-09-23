@@ -172,6 +172,15 @@ QSharedPointer<const Rekordbox3BandWaveform> Rekordbox3BandWaveform::fromMixxxWa
     if (dataSize <= 0) {
         return {};
     }
+    // AnalyzerWaveform::initialize() hands the track this object before it
+    // has filled a single entry, and completion climbs to dataSize only in
+    // storeResults(). The first paint after a load lands inside that window,
+    // so a copy taken now is a copy of silence, and the resolver would cache
+    // it on the track for as long as the track stays loaded. Not ready is not
+    // a fallback; it is nothing yet.
+    if (pWaveform->getCompletion() < dataSize) {
+        return {};
+    }
 
     QVector<BandSample> detail;
     detail.reserve(dataSize);
@@ -244,7 +253,8 @@ ConstRekordbox3BandWaveformPointer resolveRekordbox3BandWaveform(const TrackPoin
             Rekordbox3BandWaveform::fromMixxxWaveformKeepingPreview(
                     pTrack->getWaveform(), nativePreview);
     if (!pFallback) {
-        // Mixxx's own analysis is not ready yet; try again on a later call.
+        // Mixxx's own analysis is absent or still running; try again on a
+        // later call, and cache nothing so that call is a real retry.
         // A PWV6-only native object is still worth keeping for the overview.
         return pNative;
     }
