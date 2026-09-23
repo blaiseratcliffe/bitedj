@@ -25,6 +25,21 @@ const QString kBiteDjGroup = QStringLiteral("[BiteDJ]");
 
 } // namespace
 
+// jsonName is what res/visuals/feed.js reads; key is what SystemSettings
+// creates. next is the tap counter, not the momentary trigger, so the page
+// sees every tap as a rise rather than a level that is 0 again by the time
+// the next frame is built.
+const VisualsFeed::Setting VisualsFeed::kSettings[VisualsFeed::kSettingCount] = {
+        {"visuals_bars", "bars"},
+        {"visuals_bounce", "bounce"},
+        {"visuals_cam_mix", "camMix"},
+        {"visuals_cam_sketches", "camSketches"},
+        {"visuals_next_count", "next"},
+        {"visuals_patterns", "patterns"},
+        {"visuals_reactivity", "reactivity"},
+        {"visuals_swirl", "swirl"},
+};
+
 VisualsFeed::VisualsFeed()
         : QObject(nullptr),
           m_sampleRateControl(kAppGroup,
@@ -58,6 +73,9 @@ VisualsFeed::VisualsFeed()
     m_pHigh->assumeSettled();
 
     rebuildDecks(m_numDecksControl.valid() ? static_cast<int>(m_numDecksControl.get()) : 0);
+
+    m_settingProxies.resize(kSettingCount);
+    resolveSettings();
 
     m_pCrossfader = std::make_unique<ControlProxy>(kMasterGroup,
             QStringLiteral("crossfader"),
@@ -166,6 +184,18 @@ void VisualsFeed::rebuildDecks(int count) {
         deck.beatDistance = std::make_unique<ControlProxy>(group, QStringLiteral("beat_distance"), this);
         deck.vuMeter = std::make_unique<ControlProxy>(group, QStringLiteral("vu_meter"), this);
         m_decks.push_back(std::move(deck));
+    }
+}
+
+void VisualsFeed::resolveSettings() {
+    for (int i = 0; i < kSettingCount; ++i) {
+        auto& pProxy = m_settingProxies[i];
+        if (pProxy && pProxy->valid()) {
+            continue;
+        }
+        pProxy = std::make_unique<PollingControlProxy>(kBiteDjGroup,
+                QString::fromLatin1(kSettings[i].key),
+                ControlFlag::AllowMissingOrInvalid | ControlFlag::NoWarnIfMissing);
     }
 }
 
@@ -291,6 +321,19 @@ QByteArray VisualsFeed::buildFrame() {
         decks.append(d);
     }
     frame.insert(QStringLiteral("decks"), decks);
+
+    // Settings from the Visuals page. A control that does not exist yet is
+    // left out rather than sent as 0, so the page keeps its own default for
+    // it; the test MissingSettingIsAbsentUntilItAppears pins that.
+    resolveSettings();
+    QJsonObject settings;
+    for (int i = 0; i < kSettingCount; ++i) {
+        const auto& pProxy = m_settingProxies[i];
+        if (pProxy && pProxy->valid()) {
+            settings.insert(QString::fromLatin1(kSettings[i].jsonName), pProxy->get());
+        }
+    }
+    frame.insert(QStringLiteral("settings"), settings);
     return QJsonDocument(frame).toJson(QJsonDocument::Compact);
 }
 
