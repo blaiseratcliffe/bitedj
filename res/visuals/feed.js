@@ -57,11 +57,10 @@
 //     of a set reads quiet rather than being stretched up to full scale
 //     before the first drop has arrived.
 //
-// REACTIVITY scales all three envelopes before they are clamped, and it is
-// the one knob for how hard the picture leans into the music: 0.6 is subtle,
-// 1 is the tuned default, 1.5 is strong, where a drop pins swell at 1 for its
-// whole length. ?react=1.5 on the URL overrides it for a session, the same
-// way ?mock=1 does the feed.
+// feed.settings carries the Visuals page's knobs, copied out of every frame
+// (see SETTING_DEFAULTS). feed.reactivity() is the one this file uses: it
+// scales all three envelopes before they are clamped, 0.6 subtle, 1 medium,
+// 1.5 strong, where a drop pins swell at 1 for its whole length.
 //
 // The tempo is the deck's, taken as it comes. A version of this file treated
 // a master deck at 60 to 100 BPM as a half-time reading of a drum and bass
@@ -147,15 +146,17 @@
   // energy at 1.00 on every kick; at 2 it peaks in the high 0.8s.
   const ENV_CREST = 2;
 
-  // ?react= on the URL wins, then `reactivity` in ~/.bitedj-visuals.js on
-  // the Pi (see index.html), then 1.
-  const params = new URLSearchParams(location.search);
-  const REACTIVITY = (() => {
-    const fromUrl = parseFloat(params.get('react'));
-    if (fromUrl > 0 && fromUrl < 10) return fromUrl;
-    const fromFile = parseFloat((window.visualsSettings || {}).reactivity);
-    return fromFile > 0 && fromFile < 10 ? fromFile : 1;
-  })();
+  // The knobs from the Visuals settings page, carried in every frame's
+  // `settings` object (VisualsFeed::buildFrame) and copied over these
+  // defaults as they arrive, so an old binary that sends none leaves the
+  // page at its defaults and a new one takes effect on the next frame. The
+  // levels are the small integers a segment row shows; the mappings to
+  // amounts live here and in sketches.js, so a retune never touches C++.
+  const SETTING_DEFAULTS = {
+    reactivity: 1, bounce: 2, swirl: 2, bars: 16,
+    camMix: 1, camSketches: 1, patterns: 1, next: 0
+  };
+  const REACTIVITY_LEVELS = [0.6, 1, 1.5];
 
   const feed = {
     bass: 0, lowmid: 0, mid: 0, high: 0, peak: 0,
@@ -165,7 +166,12 @@
     rawBass: 0,
     bpm: 0, beat: false, beats: 0, playing: false, alive: false,
     energy: 0, swell: 0, pulse: 0, bounce: 0, phase: 0,
-    reactivity: REACTIVITY,
+    settings: Object.assign({}, SETTING_DEFAULTS),
+    // How hard the envelopes lean into the music, from the Reactivity row:
+    // 0.6 subtle, 1 medium, 1.5 strong.
+    reactivity() {
+      return REACTIVITY_LEVELS[this.settings.reactivity] || 1;
+    },
     _beatFns: [], _beatAlwaysFns: [], _beatFrames: 0,
     _lastFrameAt: 0, _max: [AGC_FLOOR, AGC_FLOOR, AGC_FLOOR, AGC_FLOOR],
     _prevBeat: [], _masterDeck: -1,
@@ -281,6 +287,7 @@
     lastIngestAt = now;
     feed._lastFrameAt = now;
     feed.alive = true;
+    if (frame.settings) Object.assign(feed.settings, frame.settings);
 
     // The raw bands, on the fast AGC. These are what feed.bass and a.fft
     // carry, and nothing below reads them.
@@ -321,8 +328,8 @@
 
     const fast = feed._env / (feed._ref * ENV_CREST);
     const slow = feed._bar / feed._ref;
-    feed._want.energy = clamp01(REACTIVITY * (0.5 * fast + 0.5 * slow));
-    feed._want.swell = clamp01(REACTIVITY * feed._swell / feed._ref);
+    feed._want.energy = clamp01(feed.reactivity() * (0.5 * fast + 0.5 * slow));
+    feed._want.swell = clamp01(feed.reactivity() * feed._swell / feed._ref);
 
     // Only ever set feed.beat true here, on the rising edge. Clearing it is
     // the rAF housekeeping loop's job (below), so a sketch polling
@@ -355,11 +362,11 @@
       feed.beat = true;
       feed._beatFrames = 0;
       feed.beats += 1;
-      feed._pulseWant = pulseGain(feed.beatMs()) * REACTIVITY;
+      feed._pulseWant = pulseGain(feed.beatMs()) * feed.reactivity();
       // An impulse added to whatever motion is left from the last kick,
       // rather than a reset, so a fast run of kicks builds a groove and a
       // kick that lands on a settling bounce does not snap it to rest first.
-      feed._bounceV += BOUNCE.v0 * REACTIVITY;
+      feed._bounceV += BOUNCE.v0 * feed.reactivity();
       // Each listener is guarded on its own. The director's rotation logic
       // is the last entry in _beatAlwaysFns, so an exception thrown by a
       // sketch listener earlier in the pass would otherwise stop the show
@@ -457,7 +464,7 @@
   // drives the real ingest() from a recorded capture instead of a socket.
   feed._ingest = ingest;
 
-  const mock = params.get('mock') === '1';
+  const mock = new URLSearchParams(location.search).get('mock') === '1';
   if (mock) {
     const bpm = TARGET_BPM, beatMs = 60000 / bpm;
     let t0 = performance.now();
