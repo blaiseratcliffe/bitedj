@@ -48,8 +48,19 @@
 (function () {
   const RENDER_W = 960, RENDER_H = 540;
   const FPS = 30;
-  const BEATS_PER_SWITCH = 256;     // 64 bars at 4/4
-  const MIN_SKETCH_MS = 60000;
+  // 16 bars at 4/4: 22 s at 174 BPM, 44 s at 88. It was 64 bars, 88 s at
+  // 174, and Blaise's verdict from the TV was that it needed to be much
+  // quicker. The floor below is what stops a fast tempo strobing through
+  // the library; at 174 it never binds, since 64 beats is 22 s there.
+  const BEATS_PER_SWITCH = 64;
+  const MIN_SKETCH_MS = 15000;
+  // How many sketches the picker keeps out of the next draw. With a switch
+  // every 22 s and a colour family of seven, remembering only the last one
+  // brought plasma-kaleid back seven times in an evening of twenty-two
+  // switches; eight of twenty-four means everything gets a turn before
+  // anything repeats, and the family preference still applies within what
+  // is left.
+  const HISTORY_LENGTH = 8;
   const IDLE_AFTER_MS = 20000;      // no beat for this long: idle sketch
   const MELT_MS = 2000;             // length of the crossfade
   const LOG_EVERY_MS = 10000;
@@ -224,7 +235,11 @@
     const list = eligible();
     if (!list.length) return window.idleSketch;
     const last = history[history.length - 1];
-    let candidates = list.filter(s => s !== last);
+    // Everything shown recently is out, as long as that leaves something;
+    // on a box with no camera and no patterns the pool is thirteen and the
+    // memory still leaves five. Only the last one is out unconditionally.
+    let candidates = list.filter(s => !history.includes(s));
+    if (!candidates.length) candidates = list.filter(s => s !== last);
     if (last) {
       // Step 1: prefer a sketch from the other family (colour vs monochrome).
       const otherFamily = candidates.filter(s => s.mono !== last.mono);
@@ -368,7 +383,7 @@
       .out(o2);
     render(o2);
     current = sketch; currentSince = performance.now();
-    history.push(sketch); if (history.length > 8) history.shift();
+    history.push(sketch); if (history.length > HISTORY_LENGTH) history.shift();
     console.log('visuals: sketch', sketch.name);
   }
 
