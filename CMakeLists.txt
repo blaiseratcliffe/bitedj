@@ -1604,6 +1604,7 @@ if(BUILD_TESTING)
     src/test/fileinfo_test.cpp
     src/test/foldertreemodel_test.cpp
     src/test/frametest.cpp
+    src/test/fsanalysiscache_test.cpp
     src/test/fscueoverridestore_test.cpp
     src/test/fshistorystore_test.cpp
     src/test/fshistoryworker_test.cpp

@@ -950,9 +950,10 @@ void Library::slotClearCachedWaveforms(double value) {
 
     // The analysis cache normally lives on the track's own drive
     // (FsAnalysisCache), not in the home dir — wipe it on every connected USB
-    // drive too.
+    // drive too. Local tracks keep theirs in the settings dir.
     int clearedDrives = 0;
-    bool driveErrors = false;
+    bool driveErrors =
+            !FsAnalysisCache::clearSettingsDirCache(m_pConfig->getSettingsPath());
     if (SystemSettings* pSystemSettings = SystemSettings::tryInstance()) {
         const QStringList mountPoints = pSystemSettings->usbMountPoints();
         for (const QString& mountPoint : mountPoints) {
@@ -967,7 +968,7 @@ void Library::slotClearCachedWaveforms(double value) {
     if (Notifications* pNotifications = Notifications::tryInstance()) {
         if (driveErrors) {
             pNotifications->publish(
-                    tr("Analysis cache cleared, but some USB drive caches "
+                    tr("Analysis cache cleared, but some drive caches "
                        "could not be deleted"),
                     Notifications::Severity::Warning);
         } else if (clearedDrives > 0) {
