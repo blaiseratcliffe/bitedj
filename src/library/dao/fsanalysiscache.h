@@ -21,6 +21,12 @@ class QSqlError;
 /// Entries are keyed by the track's path relative to the mount root, so the cache
 /// is reusable on any Bite DJ unit without re-analysis.
 ///
+/// The exception is the filesystem that holds the settings dir. That is the
+/// system disk, whose root a user process cannot write (`/.bitedj` would need
+/// root), so its cache lives in the settings dir instead:
+/// `<settingsPath>/analysis.sqlite`. Same schema, same keying relative to the
+/// mount root, so tracks under `~/Music` are cached like tracks on a stick.
+///
 /// Enabled via the `[Library]/AnalysisCacheOnTrackFs` config key (default true).
 /// When the track's filesystem is read-only or otherwise not writable, saving is
 /// skipped (logged), matching the "always target the track's own FS" behaviour.
@@ -72,6 +78,11 @@ class FsAnalysisCache {
     /// when a cache file exists but could not be deleted; a drive without a cache
     /// counts as success. A later cache access transparently recreates the file.
     static bool clearFilesystemCache(const QString& mountPoint);
+
+    /// Delete the cache database kept in the settings dir for the filesystem
+    /// that holds it (`<settingsPath>/analysis.sqlite`), first closing every
+    /// open connection to it. Same return contract as clearFilesystemCache().
+    static bool clearSettingsDirCache(const QString& settingsPath);
 
   private:
     // Open (lazily creating) connection + cache dir for the filesystem containing

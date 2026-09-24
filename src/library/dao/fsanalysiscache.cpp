@@ -51,6 +51,47 @@ bool isCorruptionError(const QSqlError& error) {
                     Qt::CaseInsensitive);
 }
 
+// Every analyzer thread owns an instance and meets the same unwritable root,
+// so a per-instance memo would repeat the warning once per thread. This one
+// is process-wide: true only the first time a root is reported.
+bool isFirstFailureFor(const QString& rootPath) {
+    static QMutex s_mutex;
+    static QSet<QString> s_reported;
+    QMutexLocker locker(&s_mutex);
+    if (s_reported.contains(rootPath)) {
+        return false;
+    }
+    s_reported.insert(rootPath);
+    return true;
+}
+
+// Delete the cache database in `cacheDir`, along with any journal siblings a
+// crash may have left behind: SQLite would roll a stale hot journal back into
+// the freshly created empty database and corrupt it. Returns false only when
+// a file exists but could not be deleted.
+bool deleteCacheFiles(const QDir& cacheDir) {
+    const QStringList names = {
+            kCacheDbName,
+            kCacheDbName + QStringLiteral("-journal"),
+            kCacheDbName + QStringLiteral("-wal"),
+            kCacheDbName + QStringLiteral("-shm"),
+    };
+    bool ok = true;
+    for (const QString& name : names) {
+        const QString path = cacheDir.absoluteFilePath(name);
+        if (!QFileInfo::exists(path)) {
+            continue;
+        }
+        if (QFile::remove(path)) {
+            qInfo() << "FsAnalysisCache: deleted" << path;
+        } else {
+            qWarning() << "FsAnalysisCache: cannot delete" << path;
+            ok = false;
+        }
+    }
+    return ok;
+}
+
 } // namespace
 
 QMutex FsAnalysisCache::s_registryMutex;
@@ -119,7 +160,14 @@ QSqlDatabase FsAnalysisCache::databaseForTrack(
         return QSqlDatabase::database(it->connectionName);
     }
 
-    const QDir cacheDir(rootPath + QDir::separator() + kCacheDirName);
+    // The settings dir's own filesystem keeps its cache in the settings dir,
+    // since its mount root is normally `/` and not ours to write (issue #7).
+    const QString settingsPath = m_pConfig->getSettingsPath();
+    const bool isSettingsFilesystem = !settingsPath.isEmpty() &&
+            QStorageInfo(settingsPath).rootPath() == rootPath;
+    const QDir cacheDir(isSettingsFilesystem
+                    ? settingsPath
+                    : rootPath + QDir::separator() + kCacheDirName);
     const QString dbPath = cacheDir.absoluteFilePath(kCacheDbName);
     const bool writable = !storage.isReadOnly();
 
@@ -129,7 +177,10 @@ QSqlDatabase FsAnalysisCache::databaseForTrack(
         return QSqlDatabase();
     }
     if (writable && !QDir().mkpath(cacheDir.absolutePath())) {
-        qWarning() << "FsAnalysisCache: cannot create cache dir" << cacheDir.absolutePath();
+        if (isFirstFailureFor(rootPath)) {
+            qWarning() << "FsAnalysisCache: cannot create cache dir"
+                       << cacheDir.absolutePath();
+        }
         m_handles.insert(rootPath, FsHandle{QString(), false});
         return QSqlDatabase();
     }
@@ -353,31 +404,21 @@ bool FsAnalysisCache::clearFilesystemCache(const QString& mountPoint) {
     // inode still receiving writes.
     closeFilesystemConnections(mountPoint);
 
-    const QDir cacheDir(
-            QDir::cleanPath(mountPoint) + QDir::separator() + kCacheDirName);
-    // Also drop any journal siblings a crash may have left behind: SQLite would
-    // roll a stale hot journal back into the freshly created empty database and
-    // corrupt it.
-    const QStringList names = {
-            kCacheDbName,
-            kCacheDbName + QStringLiteral("-journal"),
-            kCacheDbName + QStringLiteral("-wal"),
-            kCacheDbName + QStringLiteral("-shm"),
-    };
-    bool ok = true;
-    for (const QString& name : names) {
-        const QString path = cacheDir.absoluteFilePath(name);
-        if (!QFileInfo::exists(path)) {
-            continue;
-        }
-        if (QFile::remove(path)) {
-            qInfo() << "FsAnalysisCache: deleted" << path;
-        } else {
-            qWarning() << "FsAnalysisCache: cannot delete" << path;
-            ok = false;
-        }
+    return deleteCacheFiles(QDir(
+            QDir::cleanPath(mountPoint) + QDir::separator() + kCacheDirName));
+}
+
+// static
+bool FsAnalysisCache::clearSettingsDirCache(const QString& settingsPath) {
+    if (settingsPath.isEmpty()) {
+        return true;
     }
-    return ok;
+    // Connections are keyed by mount root, not by where the file lives.
+    const QStorageInfo storage(settingsPath);
+    if (storage.isValid()) {
+        closeFilesystemConnections(storage.rootPath());
+    }
+    return deleteCacheFiles(QDir(settingsPath));
 }
 
 // static
