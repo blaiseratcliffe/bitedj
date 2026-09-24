@@ -5,18 +5,21 @@ The Pi 5 has no hardware H.264 decoder, so Chromium decodes video on the CPU
 beside Mixxx's audio engine. Every clip is converted before use, and this
 script is the conversion:
 
-    960x540     the render size (RENDER_W x RENDER_H in director.js). A larger
-                clip is decoded at full size and then scaled down on the GPU,
-                which spends CPU on pixels nobody sees. Every clip is scaled
-                to cover 960x540 with its own proportions and the excess is
+    640x360     below the 960x540 render size on purpose; the GPU scales it
+                up. On 2026-09-23 bitepi played four decks with four
+                waveforms while a 960x540 clip was on screen, and Mixxx logged
+                4 audio underruns in about 2.5 minutes against none in about
+                4 minutes without video, so the decode cost has to come down.
+                640x360 is 44 percent of the pixels. Every clip is scaled to
+                cover 640x360 with its own proportions and the excess is
                 cropped off equally from both sides, so a 3:2 or 4:3 source
                 fills the frame undistorted instead of being stretched; for a
                 16:9 source the crop removes nothing.
-    30 fps at most
-                the page renders at a 30 fps cap (FPS in director.js), so a
-                60 fps clip would have the Pi decode twice the frames it
-                shows. A faster source is brought down to 30 with ffmpeg's
-                -fpsmax, and a slower one keeps its own rate.
+    24 fps at most
+                for the same reason: a 30 or 60 fps source is brought down to
+                24 with ffmpeg's -fpsmax, and a slower one keeps its own rate.
+                The page renders at a 30 fps cap (FPS in director.js), so 24
+                is still close to every frame it shows.
     no audio    the page is muted and never reads it.
     H.264 main  main rather than high: high's 8x8 transform is more work per
                 frame for a software decoder.
@@ -57,8 +60,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 VIDEO = os.path.join(ROOT, 'assets', 'video')
 
-WIDTH, HEIGHT = 960, 540
-FPS_MAX = 30
+WIDTH, HEIGHT = 640, 360
+FPS_MAX = 24
 KEYFRAME_S = 2
 
 
