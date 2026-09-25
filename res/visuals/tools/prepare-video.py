@@ -78,6 +78,32 @@ def slug(text):
     return s or 'clip'
 
 
+def build_command(ffmpeg, src, dst, input_args=(), extra_args=()):
+    """The ffmpeg command for one conversion, as a list.
+
+    ffmpeg is the executable, or a list that starts the command (the Pi's
+    admin service passes [python, stub_ffmpeg.py] in its tests). input_args
+    go just before -i: the service's camera stand-in puts its v4l2 options
+    there. extra_args go just before the output: the service adds -threads
+    and -progress there. With neither, this is the command main() runs.
+    pi/bin/bitedj-visuals-admin imports this function from the deployed copy
+    of this file, so the PC and the Pi convert with the same settings.
+    """
+    prefix = list(ffmpeg) if isinstance(ffmpeg, (list, tuple)) else [ffmpeg]
+    scale = ('scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1'
+             % (WIDTH, HEIGHT, WIDTH, HEIGHT))
+    return prefix + ['-hide_banner', '-y'] + list(input_args) + [
+        '-i', src,
+        '-an', '-sn', '-dn',
+        '-vf', scale,
+        '-fpsmax', str(FPS_MAX),
+        '-c:v', 'libx264', '-profile:v', 'main', '-pix_fmt', 'yuv420p',
+        '-preset', 'medium', '-crf', '23',
+        '-force_key_frames', 'expr:gte(t,n_forced*%d)' % KEYFRAME_S,
+        '-movflags', '+faststart',
+    ] + list(extra_args) + [dst]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('input', help='the clip to convert')
@@ -94,19 +120,7 @@ def main():
     os.makedirs(VIDEO, exist_ok=True)
     name = args.name or os.path.splitext(os.path.basename(args.input))[0]
     dst = os.path.join(VIDEO, slug(name) + '.mp4')
-    scale = ('scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1'
-             % (WIDTH, HEIGHT, WIDTH, HEIGHT))
-    cmd = [
-        ffmpeg, '-hide_banner', '-y', '-i', args.input,
-        '-an', '-sn', '-dn',
-        '-vf', scale,
-        '-fpsmax', str(FPS_MAX),
-        '-c:v', 'libx264', '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-        '-preset', 'medium', '-crf', '23',
-        '-force_key_frames', 'expr:gte(t,n_forced*%d)' % KEYFRAME_S,
-        '-movflags', '+faststart',
-        dst,
-    ]
+    cmd = build_command(ffmpeg, args.input, dst)
     # Escaped, because a Windows console's code page cannot print an emoji
     # and the input's name is the one part of the command that may hold one.
     line = ' '.join('"%s"' % c if ' ' in c else c for c in cmd)
