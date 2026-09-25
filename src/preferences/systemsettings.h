@@ -17,6 +17,7 @@ class ControlObject;
 class ControlPushButton;
 class PlayerManager;
 class RecordingManager;
+class VisualsSets;
 
 // Bite DJ: backs the in-skin Settings -> System sub-page, including the
 // per-drive Record button (main-output recording onto a USB stick). Owns the [System],*
@@ -294,7 +295,10 @@ class SystemSettings : public QObject {
     // persisted on change. Small integers: the levels a segment row can
     // show, mapped to amounts by res/visuals; a retune never touches this
     // file. Order and defaults: reactivity 1, bounce 2, swirl 2, bars 16,
-    // cam_mix 1, cam_sketches 1, patterns 1.
+    // cam_mix 1, cam_sketches 1, patterns 1. The admin PIN rides the same
+    // table (visuals_admin_pin, default 1234): it is a persisted number the
+    // panel shows and changes, and pi/bin/bitedj-visuals-admin reads it
+    // back out of mixxx.cfg.
     std::vector<std::unique_ptr<ControlObject>> m_visualsKnobs;
     // [BiteDJ],visuals_next is the momentary trigger the Next button latches
     // at 1 (the USB refresh handshake); onVisualsNextRequested bumps
@@ -302,6 +306,10 @@ class SystemSettings : public QObject {
     // count, so the page sees a rise per tap.
     std::unique_ptr<ControlObject> m_pCoVisualsNext;
     std::unique_ptr<ControlObject> m_pCoVisualsNextCount;
+    // The visuals library (fork issue #13): the sets file, the active set and
+    // its knobs. Built after m_visualsKnobs, whose controls it writes, and
+    // declared after them, so it is destroyed first.
+    std::unique_ptr<VisualsSets> m_pVisualsSets;
     // [Controls],HotcueActivatePlays — 1 = ungated (a hotcue press plays on
     // from the cue), 0 = gated (previews only while held, then seeks back and
     // stops). CO and config share the key; CueControl reads the config value.

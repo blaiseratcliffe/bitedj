@@ -57,6 +57,8 @@ constexpr std::pair<const char*, double> kSettingDefaults[] = {
         {"visuals_cam_sketches", 1.0},
         {"visuals_patterns", 1.0},
         {"visuals_next_count", 0.0},
+        {"visuals_set", 0.0},
+        {"visuals_set_rev", 0.0},
 };
 
 class VisualsFeedTest : public MixxxTest {
@@ -73,9 +75,9 @@ class VisualsFeedTest : public MixxxTest {
         m_pEnabled->set(1.0);
         m_pCrossfader = std::make_unique<ControlObject>(
                 ConfigKey(QStringLiteral("[Master]"), QStringLiteral("crossfader")));
-        // The eight knobs the Visuals settings page writes. Created here with
-        // the defaults SystemSettings seeds, so a frame built by the fixture
-        // carries a full settings object.
+        // The ten controls the Visuals settings page and VisualsSets write.
+        // Created here with the defaults SystemSettings seeds, so a frame
+        // built by the fixture carries a full settings object.
         for (const auto& [key, value] : kSettingDefaults) {
             auto control = std::make_unique<ControlObject>(
                     ConfigKey(QStringLiteral("[BiteDJ]"), QString::fromLatin1(key)));
@@ -211,7 +213,7 @@ TEST_F(VisualsFeedTest, FrameHasDocumentedShape) {
     EXPECT_TRUE(deck1.contains("vu"));
 }
 
-// The Visuals settings page writes eight controls; the page reads them out
+// The Visuals settings page writes ten controls; the page reads them out
 // of the frame rather than polling anything. Every frame carries the whole
 // object, keys sorted by QJsonObject, so the page can overwrite its defaults
 // with whatever arrives.
@@ -226,8 +228,10 @@ TEST_F(VisualsFeedTest, FrameCarriesSettingsWithDefaults) {
     EXPECT_EQ(0, settings.value("next").toInt());
     EXPECT_EQ(1, settings.value("patterns").toInt());
     EXPECT_EQ(1, settings.value("reactivity").toInt());
+    EXPECT_EQ(0, settings.value("set").toInt());
+    EXPECT_EQ(0, settings.value("setRev").toInt());
     EXPECT_EQ(2, settings.value("swirl").toInt());
-    EXPECT_EQ(8, settings.size());
+    EXPECT_EQ(10, settings.size());
 }
 
 TEST_F(VisualsFeedTest, SettingsFollowTheControls) {
@@ -239,6 +243,17 @@ TEST_F(VisualsFeedTest, SettingsFollowTheControls) {
     EXPECT_EQ(3, settings.value("bounce").toInt());
     EXPECT_EQ(64, settings.value("bars").toInt());
     EXPECT_EQ(5, settings.value("next").toInt());
+}
+
+// The page rereads the sets file whenever either of these moves: set when
+// the panel picks another set, setRev when the file is edited under it.
+TEST_F(VisualsFeedTest, SetAndSetRevFollowTheControls) {
+    ControlObject::set(ConfigKey(QStringLiteral("[BiteDJ]"), QStringLiteral("visuals_set")), 7.0);
+    ControlObject::set(ConfigKey(QStringLiteral("[BiteDJ]"), QStringLiteral("visuals_set_rev")), 3.0);
+    const QJsonObject settings =
+            QJsonDocument::fromJson(m_pFeed->buildFrame()).object().value("settings").toObject();
+    EXPECT_EQ(7, settings.value("set").toInt());
+    EXPECT_EQ(3, settings.value("setRev").toInt());
 }
 
 // An old binary, or a control that has not been created yet, must not send

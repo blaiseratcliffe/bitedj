@@ -25,6 +25,7 @@
 #include "mixer/sampler.h"
 #include "moc_systemsettings.cpp"
 #include "notifications/notifications.h"
+#include "preferences/visualssets.h"
 #include "recording/defs_recording.h"
 #include "recording/recordingmanager.h"
 #include "track/track.h"
@@ -254,6 +255,7 @@ SystemSettings::SystemSettings(UserSettingsPointer pConfig,
             {"visuals_cam_mix", 1.0},
             {"visuals_cam_sketches", 1.0},
             {"visuals_patterns", 1.0},
+            {"visuals_admin_pin", 1234.0},
     };
     for (const VisualsKnob& knob : knobs) {
         const ConfigKey key(kBiteDj, QString::fromLatin1(knob.key));
@@ -273,6 +275,10 @@ SystemSettings::SystemSettings(UserSettingsPointer pConfig,
             &ControlObject::valueChanged,
             this,
             &SystemSettings::onVisualsNextRequested);
+
+    // The visuals library. After the knob loop: picking a set writes those
+    // controls, and VisualsSets reads the PIN through a proxy on one of them.
+    m_pVisualsSets = std::make_unique<VisualsSets>(m_pConfig, VisualsSets::defaultSetsPath());
 
     // Hot cue gating (General settings tab). CueControl reads the config value
     // on each activation rather than holding a proxy, so writing back on every

@@ -171,7 +171,7 @@ class VisualsFeed : public QObject, public SideChainWorker {
         const char* key;      // item under [BiteDJ]
         const char* jsonName; // key in the frame's settings object
     };
-    static constexpr int kSettingCount = 8;
+    static constexpr int kSettingCount = 10;
     static const Setting kSettings[kSettingCount];
     std::vector<std::unique_ptr<PollingControlProxy>> m_settingProxies;
 };
