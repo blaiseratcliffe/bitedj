@@ -81,6 +81,9 @@
 #include "widget/wwifikeypad.h"
 #include "widget/wwifilist.h"
 #include "widget/wwifistatus.h"
+#include "widget/wpinkeypad.h"
+#include "widget/wvisualslabel.h"
+#include "widget/wvisualssetlist.h"
 #include "widget/wversionlabel.h"
 #include "widget/wnotificationstrip.h"
 #include "widget/wsofttakeoverindicator.h"
@@ -579,6 +582,12 @@ QList<QWidget*> LegacySkinParser::parseNode(const QDomElement& node) {
         result = wrapWidget(parseStandardWidget<WWifiStatus>(node));
     } else if (nodeName == "WifiKeypad") {
         result = wrapWidget(parseStandardWidget<WWifiKeypad>(node));
+    } else if (nodeName == "VisualsLabel") {
+        result = wrapWidget(parseStandardWidget<WVisualsLabel>(node));
+    } else if (nodeName == "VisualsSetList") {
+        result = wrapWidget(parseStandardWidget<WVisualsSetList>(node));
+    } else if (nodeName == "PinKeypad") {
+        result = wrapWidget(parseStandardWidget<WPinKeypad>(node));
     } else if (nodeName == "Display") {
         result = wrapWidget(parseStandardWidget<WDisplay>(node));
     } else if (nodeName == "BeatSpinBox") {
