@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>BiteDJ visuals</title>
+<link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+<header id="top">
+  <a class="brand" href="#sets">BiteDJ visuals</a>
+  <nav aria-label="Sections">
+    <a href="#sets" data-nav="sets">Sets</a>
+    <a href="#clips" data-nav="clips">Clips</a>
+    <a href="/logout">Log out</a>
+  </nav>
+</header>
+<div id="banner" role="alert" hidden></div>
+<main id="view"></main>
+<div id="toasts" aria-live="polite"></div>
+<!-- Each view file registers itself with admin.registerView(); one that is
+     missing (sequence-editor.js before Part B) is a 404 and nothing else. -->
+<script src="/admin/api.js"></script>
+<script src="/admin/app.js"></script>
+<script src="/admin/set-list.js"></script>
+<script src="/admin/random-editor.js"></script>
+<script src="/admin/clips.js"></script>
+<script src="/admin/previewer.js"></script>
+<script src="/admin/sequence-editor.js"></script>
+<script>admin.start();</script>
+</body>
+</html>
