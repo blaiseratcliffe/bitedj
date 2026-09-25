@@ -805,6 +805,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/preferences/settingsmanager.cpp
   src/preferences/systemsettings.cpp
   src/preferences/upgrade.cpp
+  src/preferences/visualssets.cpp
   src/preferences/wifisettings.cpp
   src/recording/recordingmanager.cpp
   src/skin/legacy/colorschemeparser.cpp
@@ -1679,6 +1680,7 @@ if(BUILD_TESTING)
     src/test/trackupdate_test.cpp
     src/test/uuid_test.cpp
     src/test/visualsfeed_test.cpp
+    src/test/visualssets_test.cpp
     src/test/waveformmarkset_test.cpp
     src/test/wbatterytest.cpp
     src/test/wcontrollerlist_test.cpp
