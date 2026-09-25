@@ -8,7 +8,10 @@
 // are deployed from the working tree by deploy-skin.sh and never committed.
 // A checkout with no clips has no index, this file logs that, and the video
 // sketches stay out of the rotation, as the pattern sketches do without
-// patterns.
+// patterns. Clips uploaded through the admin page live outside the deployed
+// tree, in ~/bitedj-media/video/, listed in its own index.json; the list here
+// is the two merged, a deployed clip winning a name clash, reread every 30 s
+// so an upload reaches the TV without a reload.
 //
 // One <video> element, muted, inline and looping, never added to the DOM,
 // and one source. s8 belongs to this file: a sketch reads it with src(s8)
@@ -28,7 +31,9 @@
 // set aside for the rest of the session, and another one is tried; when
 // none is left, available() goes false, the video sketches drop out of the
 // rotation, and the director is told so it can move off a sketch that was
-// drawing it.
+// drawing it. open(file) plays that clip from its start instead, and
+// pin(file), which only preview mode calls, makes every plain open() do the
+// same.
 //
 // Seeking needs the server to answer HTTP Range requests. On the Pi the page
 // is a file:// URL and seeking works. `python -m http.server`, which serves
@@ -42,6 +47,7 @@
   const TAIL_S = 10;              // no start point in the last 10 s of a clip
   const SEEK_TIMEOUT_MS = 3000;   // a seek that has not landed by now will not
   const LOAD_TIMEOUT_MS = 15000;  // metadata or a first frame this late is a failure
+  const REFRESH_MS = 30000;       // how often the uploads' index is reread
 
   const index = Array.isArray(window.videoIndex) ? window.videoIndex : null;
   if (!index) {
@@ -49,8 +55,63 @@
   } else {
     console.log('visuals: video', index.length, index.length === 1 ? 'clip' : 'clips');
   }
-  const clips = index || [];
+  const deployed = (index || []).map(c => ({ file: c.file, seconds: c.seconds, src: BASE + c.file, source: 'deployed' }));
+  // Filled by refresh() from ~/bitedj-media/video/index.json.
+  let uploaded = [];
+  let uploadsNoted = null;        // the last thing said about the uploads, to say it once
   const failed = new Set();
+  let pinnedFile = null;
+
+  // Deployed first, in index order, then uploads not shadowed by a deployed
+  // clip of the same name. The service never gives an upload a deployed
+  // clip's name, so a clash means a deployed clip arrived later; the
+  // deployed one is what the PC meant.
+  function clips() {
+    const names = new Set(deployed.map(c => c.file));
+    return deployed.concat(uploaded.filter(c => !names.has(c.file)));
+  }
+
+  const setAllows = (file) => !window.sets || sets.allows('clip', file);
+
+  function candidates() {
+    return clips().filter(c => !failed.has(c.file) && setAllows(c.file));
+  }
+
+  // Rereads the uploads' index. `done`, if given, runs once the read has
+  // finished, whatever it found; preview.js waits on it before showing a
+  // clip that may exist only as an upload.
+  function refresh(done) {
+    const finish = () => { if (typeof done === 'function') done(); };
+    const paths = window.visualsPaths;
+    if (!paths || typeof paths.readText !== 'function') { finish(); return; }
+    const dir = paths.media + 'video/';
+    paths.readText(dir + 'index.json', (err, text) => {
+      if (err) {
+        if (uploadsNoted !== 'none') console.log('visuals: no uploaded clips (' + err.message + ')');
+        uploadsNoted = 'none';
+        uploaded = [];
+        finish();
+        return;
+      }
+      let list = null;
+      try {
+        list = JSON.parse(text);
+      } catch (e) {
+        // Keep what we had: the service writes the index by rename, so a
+        // parse error is a real problem, not a half-written file.
+        console.error('visuals: uploaded clip index unreadable:', e.message);
+      }
+      if (Array.isArray(list)) {
+        uploaded = list
+          .filter(c => c && typeof c.file === 'string')
+          .map(c => ({ file: c.file, seconds: Number(c.seconds) || 0, src: dir + c.file, source: 'uploaded' }));
+        const note = String(uploaded.length);
+        if (note !== uploadsNoted) console.log('visuals: uploaded clips', uploaded.length);
+        uploadsNoted = note;
+      }
+      finish();
+    });
+  }
 
   const el = document.createElement('video');
   el.muted = true;
@@ -65,10 +126,6 @@
   // stops the first one where it is.
   let wanted = false, playing = false, gen = 0, file = null;
   let giveUpHook = null;
-
-  function candidates() {
-    return clips.filter(c => !failed.has(c.file));
-  }
 
   // s8's texture is replaced on every open and every close, and
   // HydraSource.init and .clear both allocate a new regl texture without
@@ -105,21 +162,33 @@
     });
   }
 
-  function load(my) {
-    const list = candidates();
-    if (!list.length) {
-      wanted = false;
-      console.log('visuals: video unavailable, every clip has failed this session');
-      if (giveUpHook) {
-        try { giveUpHook(); } catch (e) { console.error('visuals: video give-up hook failed', e); }
-      }
-      return;
+  // `want` names a clip to play from its start (open(file), or the pin); a
+  // clip that is not there or has failed this session is logged and a random
+  // allowed one plays instead, so the screen is never left blank for it.
+  function load(my, want) {
+    let clip = null;
+    if (want) {
+      clip = clips().find(c => c.file === want && !failed.has(c.file)) || null;
+      if (!clip) console.log('visuals: video', want, 'is not available; playing another clip');
     }
-    const clip = list[Math.floor(Math.random() * list.length)];
+    if (!clip) {
+      const list = candidates();
+      if (!list.length) {
+        wanted = false;
+        console.log('visuals: video unavailable, every clip has failed this session or none is in the set');
+        if (giveUpHook) {
+          try { giveUpHook(); } catch (e) { console.error('visuals: video give-up hook failed', e); }
+        }
+        return;
+      }
+      clip = list[Math.floor(Math.random() * list.length)];
+    }
+    const fromStart = !!want && clip.file === want;
     const stale = () => my !== gen;
-    el.src = BASE + clip.file;
+    el.src = clip.src;
     waitFor('loadedmetadata', LOAD_TIMEOUT_MS).then(() => {
       if (stale()) return null;
+      if (fromStart) return 0;
       const dur = isFinite(el.duration) && el.duration > 0 ? el.duration : clip.seconds;
       const start = Math.max(0, dur - TAIL_S) * Math.random();
       if (start < 1) return 0;
@@ -161,7 +230,7 @@
   }
 
   window.video = {
-    // A clip exists and not every clip has failed. director.js gates the
+    // A clip the set allows exists and has not failed. director.js gates the
     // video sketches on this and asks for the video for a vidMix sketch only
     // while it is true.
     available() { return candidates().length > 0; },
@@ -174,12 +243,17 @@
     isOpen() { return wanted; },
     // The clip on s8, or null. preview.js shows it.
     file() { return playing ? file : null; },
-    open() {
-      if (wanted) return;
-      if (!this.available()) return;
+    // Without a file: the pin if there is one, else a random allowed clip at
+    // a random point, and nothing at all if one is already open. With a file:
+    // that clip from 0, replacing whatever is open.
+    open(want) {
+      const target = want || pinnedFile;
+      if (!want && wanted) return;
+      if (!target && !this.available()) return;
       wanted = true;
+      playing = false;
       gen += 1;
-      load(gen);
+      load(gen, target || null);
     },
     close() {
       if (!wanted && !playing) return;
@@ -192,8 +266,17 @@
       s8.clear();
       console.log('visuals: video closed');
     },
+    pin(want) {
+      pinnedFile = want || null;
+      console.log('visuals: video pin', pinnedFile || 'off');
+    },
+    refresh: refresh,
+    clips: clips,
     // director.js registers one function, called when the last clip fails.
     onGiveUp(fn) { giveUpHook = typeof fn === 'function' ? fn : null; },
     failed() { return Array.from(failed); }
   };
+
+  refresh();
+  setInterval(refresh, REFRESH_MS);
 })();

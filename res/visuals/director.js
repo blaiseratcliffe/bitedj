@@ -270,6 +270,11 @@
         lastSettingsJson = json;
       }
     }
+    // The active visuals set. sets.update() rereads the sets file only when
+    // settings.set or settings.setRev moves, so calling it every frame costs
+    // a comparison. Not before feed.alive, for the same reason as the Next
+    // baseline above: until a frame arrives, set is the page's default 0.
+    if (feed.alive && window.sets) sets.update(s);
     if (first) return;
     if (tapped) {
       console.log('visuals: next tapped');
@@ -353,8 +358,12 @@
       }
     });
   }
+  // A Random set narrows the pool to what it ticks; Everything, an unreadable
+  // sets file and a page without sets.js allow every sketch.
+  const setAllows = (s) => !window.sets || sets.allows('sketch', s.name);
   function eligible() {
     return window.sketches.filter(s =>
+      setAllows(s) &&
       (!s.cam || (window.camReady && feed.settings.camSketches === 1)) &&
       (!s.pattern || (window.patterns && patterns.ready() && feed.settings.patterns === 1)) &&
       (!s.video || videoOk()));
@@ -497,6 +506,19 @@
     const sketch = pending;
     pending = null;
     if (!sketch) return;
+    // A set change can land between show() and here. A sketch the set in
+    // force no longer allows is dropped rather than melted in, and the show
+    // arms the next one at once: the handler's pick if it queued one, else a
+    // fresh pick. Nothing is melting yet, so show() arms rather than queues,
+    // and the still it grabs is the frame still on screen. Without this a
+    // video sketch under a set with no clip landed on a closed, blank s8.
+    if (sketch !== window.idleSketch && !setAllows(sketch)) {
+      const next = queued || pickNext();
+      queued = null;
+      console.log('visuals: sets ' + sets.active().id + ' dropped ' + sketch.name + ' before it landed');
+      show(next);
+      return;
+    }
     clearScratch();
     window.update = driveFrame;
     // Re-asserted for the same reason as window.update: a stray assignment
@@ -524,7 +546,12 @@
     render(o2);
     current = sketch; currentSince = performance.now(); currentSinceBeat = feed.beats;
     history.push(sketch); if (history.length > HISTORY_LENGTH) history.shift();
-    console.log('visuals: sketch', sketch.name);
+    // The set the switch happened under, then the sketch. Nothing else in
+    // the page logs a line starting 'visuals: set <id> ' (sets.js and the
+    // change handler below say 'visuals: sets '), so grepping for
+    // 'visuals: set 2 ' gives every switch under set 2 and nothing more.
+    const inForce = window.sets ? sets.active() : { id: 0, name: 'Everything' };
+    console.log('visuals: set ' + inForce.id + ' ' + JSON.stringify(inForce.name) + ' ' + sketch.name);
     if (switchHook) {
       try { switchHook(sketch); } catch (e) { console.error('visuals: switch hook failed', e); }
     }
@@ -631,6 +658,29 @@
     frames = 0; lastLog = now;
     resetRange();
   }, LOG_EVERY_MS);
+
+  // A new set is in force: a switch on the panel, an edit on the admin page,
+  // or the file becoming unreadable. The pools behind the sketches follow at
+  // once (video.refresh() rereads the uploads too, since an upload is what
+  // usually comes with an edit). The sketch on screen is left alone if the
+  // set still allows it, which is what the spec asks for a Random set; if
+  // not, the show melts to something the set does allow. `target` rather than
+  // `current`, so a switch still landing is judged too: the change can arrive
+  // between show() and startPending().
+  if (window.sets) {
+    sets.onChange((info) => {
+      if (window.video) video.refresh();
+      if (window.patterns && patterns.setChanged) patterns.setChanged();
+      const a = sets.active();
+      console.log('visuals: sets ' + a.id + ' ' + JSON.stringify(a.name) + ' in force (' + info.reason + ')');
+      if (idle) return;
+      const target = queued || pending || current;
+      if (target && target !== window.idleSketch && !setAllows(target)) {
+        console.log('visuals: sets ' + a.id + ' leaves out ' + target.name);
+        show(pickNext());
+      }
+    });
+  }
 
   // The first switch of the page has nothing behind it: the still is a blank
   // canvas, so the idle sketch melts up out of black over two seconds. That
