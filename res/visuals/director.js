@@ -153,6 +153,14 @@
   // rotation and nothing else; `switchHook` is told about every landed switch.
   // Outside preview mode they stay false and null for the life of the page.
   let paused = false, switchHook = null;
+  // Preview mode's camera, set only by preview.js through useCamera(). A page
+  // served over http has no camera at all (browsers only allow one on https
+  // or localhost), so the preview feeds s0 from a recorded stand-in clip or
+  // a test pattern instead, and says which. Null on the Pi for the life of
+  // the page.
+  let camImpl = null;
+  function camOpen() { if (camImpl) camImpl.open(); else s0.initCam(0); }
+  function camClose() { if (camImpl) camImpl.close(); else s0.clear(); }
 
   // Crossfade. `melt` is 1 the moment a new sketch starts and eases to 0 over
   // MELT_MS; `pending` holds a sketch whose snapshot frame has been armed but
@@ -191,6 +199,7 @@
   // to tell "no camera" from "enumerateDevices() hung".
   const PROBE_TIMEOUT_MS = 5000;
   function probeCamera() {
+    if (camImpl) return Promise.resolve();
     if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
       window.camReady = false;
       console.error('visuals: camera probe unavailable: navigator.mediaDevices is',
@@ -200,6 +209,7 @@
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('timed out after ' + PROBE_TIMEOUT_MS + ' ms')), PROBE_TIMEOUT_MS));
     return Promise.race([navigator.mediaDevices.enumerateDevices(), timeout]).then(devs => {
+      if (camImpl) return;
       const cams = devs.filter(d => d.kind === 'videoinput');
       window.camReady = cams.length > 0;
       console.log('visuals: camera', window.camReady ? 'present' : 'absent',
@@ -214,6 +224,7 @@
         show(pickNext());
       }
     }).catch(e => {
+      if (camImpl) return;
       window.camReady = false;
       console.error('visuals: camera probe failed:', e && e.message ? e.message : String(e));
     });
@@ -429,7 +440,7 @@
     const wantsCam = sketch.cam || (sketch.camMix && window.camReady && feed.settings.camMix === 1);
     if (wantsCam && !camInit) {
       try {
-        s0.initCam(0);
+        camOpen();
         camInit = true;
         console.log('visuals: camera opened for', sketch.name);
       } catch (e) {
@@ -439,7 +450,7 @@
       // s0.clear() stops the stream's tracks and leaves a 1x1 blank behind.
       // It is safe here, and only here, because no cam sketch is about to
       // draw s0; hush() would do this to s1 and s2 as well.
-      try { s0.clear(); } catch (e) { console.error('visuals: camera release failed', e); }
+      try { camClose(); } catch (e) { console.error('visuals: camera release failed', e); }
       camInit = false;
       console.log('visuals: camera released');
     }
@@ -585,7 +596,15 @@
   // onBeatAlways; onBeat is sketch-scoped and gets wiped by startPending().
   feed.onBeatAlways(() => {
     lastBeatAt = performance.now();
-    if (idle) { idle = false; show(pickNext()); return; }
+    // Leaving idle picks at random, except in preview mode while a sketch
+    // preview.js asked for is already on its way or on screen: the boot
+    // show(idleSketch) leaves idle true, and without this the first beat of
+    // the mock feed would replace ?sketch=NAME half a second after it landed.
+    if (idle) {
+      idle = false;
+      if (!paused || (current === window.idleSketch && !queued && !pending)) show(pickNext());
+      return;
+    }
     // Preview mode holds the sketch until someone moves it. Leaving idle
     // above still happens, so a paused page does not sit on the idle sketch.
     if (paused) return;
@@ -701,6 +720,13 @@
     show: show,
     pickNext: pickNext,
     onSwitch(fn) { switchHook = typeof fn === 'function' ? fn : null; },
-    pause(on) { paused = !!on; }
+    pause(on) { paused = !!on; },
+    // preview.js only: replace the webcam with `impl` ({ open(), close(),
+    // label }). camReady goes true and stays true.
+    useCamera(impl) {
+      camImpl = impl;
+      window.camReady = true;
+      console.log('visuals: camera is the preview', impl && impl.label ? impl.label : 'stand-in');
+    }
   };
 })();
