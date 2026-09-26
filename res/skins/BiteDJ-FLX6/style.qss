@@ -1505,6 +1505,7 @@ WBeatSpinBox::up-button {
  * reads as a slim indicator. Track colours follow the library's scroll bar. */
 #UsbList QScrollBar:vertical,
 #ControllerList QScrollBar:vertical,
+#VisualsSetList QScrollBar:vertical,
 #WifiList QScrollBar:vertical {
   background-color: #151515;
   border: 0;
@@ -1515,6 +1516,7 @@ WBeatSpinBox::up-button {
 
 #UsbList QScrollBar::handle:vertical,
 #ControllerList QScrollBar::handle:vertical,
+#VisualsSetList QScrollBar::handle:vertical,
 #WifiList QScrollBar::handle:vertical {
   background-color: #855ea7;
   border: 0;
@@ -1525,6 +1527,7 @@ WBeatSpinBox::up-button {
 
 #UsbList QScrollBar::handle:vertical:pressed,
 #ControllerList QScrollBar::handle:vertical:pressed,
+#VisualsSetList QScrollBar::handle:vertical:pressed,
 #WifiList QScrollBar::handle:vertical:pressed {
   background-color: #7fb2d6;
 }
@@ -1533,6 +1536,8 @@ WBeatSpinBox::up-button {
 #UsbList QScrollBar::sub-page:vertical,
 #ControllerList QScrollBar::add-page:vertical,
 #ControllerList QScrollBar::sub-page:vertical,
+#VisualsSetList QScrollBar::add-page:vertical,
+#VisualsSetList QScrollBar::sub-page:vertical,
 #WifiList QScrollBar::add-page:vertical,
 #WifiList QScrollBar::sub-page:vertical {
   background-color: transparent;
@@ -1542,6 +1547,8 @@ WBeatSpinBox::up-button {
 #UsbList QScrollBar::sub-line:vertical,
 #ControllerList QScrollBar::add-line:vertical,
 #ControllerList QScrollBar::sub-line:vertical,
+#VisualsSetList QScrollBar::add-line:vertical,
+#VisualsSetList QScrollBar::sub-line:vertical,
 #WifiList QScrollBar::add-line:vertical,
 #WifiList QScrollBar::sub-line:vertical {
   height: 0;
@@ -2114,4 +2121,109 @@ WBeatSpinBox::up-button {
  * the way the old deck.xml did, so there is no negative margin here. */
 #DeckStripOverview {
   margin: 0;
+}
+
+/* The visuals library (fork issue #13): the Set and Admin rows' text, the
+ * set picker (WVisualsSetList) and the PIN keypad (WPinKeypad). The picker
+ * copies #WifiList's row look; the keypad copies #WifiKeypad's keys. */
+#VisualsSetName #VisualsLabelText {
+  color: #e5e6ea;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+#VisualsAdminInfo #VisualsLabelText {
+  color: #a7a9ac;
+  font-family: 'DejaVu Sans', sans-serif;
+  font-size: 14px;
+}
+
+#VisualsSetList #VisualsSetScrollArea,
+#VisualsSetList #VisualsSetScrollContent {
+  background-color: transparent;
+  border: 0;
+}
+
+#VisualsSetList #VisualsSetRow {
+  background-color: #151515;
+  border: 2px solid #151515;
+  border-radius: 4px;
+  color: #e5e6ea;
+  font-size: 16px;
+  font-weight: bold;
+  min-height: 56px;
+  padding-left: 16px;
+  text-align: left;
+}
+
+#VisualsSetList #VisualsSetRow[active="true"] {
+  background-color: #2d6488;
+  border-color: #855ea7;
+}
+
+#VisualsSetList #VisualsSetRow[empty="true"] {
+  background-color: transparent;
+  border: 2px dashed #32323c;
+  color: #5a5a64;
+  text-transform: uppercase;
+}
+
+#PinKeypad #PinKeypadTitle {
+  color: #e5e6ea;
+  font-size: 15px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+#PinKeypad #PinKeypadField {
+  background-color: #151515;
+  border: 2px solid #32323c;
+  border-radius: 4px;
+  color: #e7e8e9;
+  font-family: 'DejaVu Sans', sans-serif;
+  font-size: 24px;
+  letter-spacing: 8px;
+  padding: 0 12px;
+}
+
+#PinKeypad #PinKey,
+#PinKeypad #PinKeyBackspace,
+#PinKeypad #PinKeypadCancel {
+  background-color: transparent;
+  border: 2px solid #855ea7;
+  border-radius: 4px;
+  color: #e7e8e9;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+#PinKeypad #PinKeyBackspace,
+#PinKeypad #PinKeypadCancel {
+  font-size: 14px;
+  text-transform: uppercase;
+}
+
+#PinKeypad #PinKeypadSave {
+  background-color: #855ea7;
+  border: 2px solid #855ea7;
+  border-radius: 4px;
+  color: #e7e8e9;
+  font-size: 14px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+#PinKeypad #PinKeypadSave:disabled {
+  background-color: transparent;
+  border-color: #2b3f4d;
+  color: #5c707d;
+}
+
+/* Touch never sets :pressed here (wpinkeypad.h), so "down" stands in. */
+#PinKeypad #PinKey[down="true"],
+#PinKeypad #PinKeyBackspace[down="true"],
+#PinKeypad #PinKeypadCancel[down="true"],
+#PinKeypad #PinKeypadSave[down="true"] {
+  background-color: #2d6488;
+  border-color: #2d6488;
 }

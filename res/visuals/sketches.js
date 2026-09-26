@@ -20,6 +20,9 @@
 //     out of the rotation until something has finished rasterising, exactly as
 //     `cam: true` keeps a sketch out until there is a camera, and `video: true`
 //     keeps one out while there is no clip to play.
+//     Adding, renaming or reflagging a sketch means changing the SKETCH LIST
+//     block above the IIFE too; tests/sketch-list.test.js fails until it
+//     matches.
 //   - it clears the sketch-scoped beat listeners and sets window.sketchUpdate
 //     back to null on every switch, so run() is the right and the only place
 //     to call feed.onBeat(fn) or to assign window.sketchUpdate = (dt) => {}.
@@ -92,6 +95,45 @@
 // combine's second input is generated against the coordinate as it stands
 // where the combine sits, which is what lets smear() zoom the feedback copy
 // without dragging the new line work along with it.
+
+// SKETCH LIST BEGIN
+// Plain JSON between these two markers: pi/bin/bitedj-visuals-admin reads it
+// without running any JavaScript, so no comments, no trailing commas and no
+// single quotes inside the brackets. One object per rotation sketch, in
+// window.sketches order; flags are any of "cam", "pattern", "video",
+// "camMix", "vidMix". tests/sketch-list.test.js checks it against the
+// sketch objects below, and preview.js checks it against window.sketches.
+window.sketchList = [
+  {"name": "logo-outline", "flags": ["camMix"]},
+  {"name": "logo-kaleid", "flags": ["camMix"]},
+  {"name": "logo-shear", "flags": ["camMix"]},
+  {"name": "ridge-lines", "flags": ["camMix", "vidMix"]},
+  {"name": "ribbons", "flags": ["camMix"]},
+  {"name": "contours", "flags": ["camMix"]},
+  {"name": "flow-lines", "flags": ["camMix"]},
+  {"name": "wire-terrain", "flags": ["camMix"]},
+  {"name": "cam-edges", "flags": ["cam"]},
+  {"name": "cam-contours", "flags": ["cam"]},
+  {"name": "pattern-flow", "flags": ["pattern", "camMix", "vidMix"]},
+  {"name": "pattern-grid", "flags": ["pattern", "camMix"]},
+  {"name": "pattern-radial", "flags": ["pattern", "camMix"]},
+  {"name": "pattern-noise", "flags": ["pattern", "camMix"]},
+  {"name": "pattern-melt", "flags": ["pattern", "camMix"]},
+  {"name": "pattern-edges", "flags": ["pattern", "camMix"]},
+  {"name": "pattern-stack", "flags": ["pattern", "camMix"]},
+  {"name": "video-edges", "flags": ["video", "camMix"]},
+  {"name": "logo-colour", "flags": ["camMix", "vidMix"]},
+  {"name": "tunnel", "flags": ["camMix"]},
+  {"name": "bloom-drop", "flags": ["camMix"]},
+  {"name": "cam-posterise", "flags": ["cam"]},
+  {"name": "scan-field", "flags": ["camMix", "vidMix"]},
+  {"name": "plasma-kaleid", "flags": ["camMix"]},
+  {"name": "pattern-tint", "flags": ["pattern", "camMix"]},
+  {"name": "video-grade", "flags": ["video", "camMix"]},
+  {"name": "video-kaleid", "flags": ["video", "camMix"]}
+];
+// SKETCH LIST END
+
 (function () {
   // (1024 / 256) / (960 / 540). The wordmark text nearly fills its texture,
   // so it spans the whole screen at an amount near 0.44 and crops at the

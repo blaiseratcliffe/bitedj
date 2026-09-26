@@ -2095,10 +2095,30 @@
             <SizePolicy>me,me</SizePolicy>
             <Children>
 
+              <!-- [BiteDJ],visuals_page picks the sub-page (VisualsSets,
+                   src/preferences/visualssets.h): 0 the rows below, 1 the
+                   set list, 2 the PIN keypad, 3 the library sub-page. Every
+                   button that moves between them writes its page with the
+                   IsEqual idiom the Power row documents above. -->
+              <WidgetStack currentpage="[BiteDJ],visuals_page">
+                <SizePolicy>me,me</SizePolicy>
+                <Children>
+
+                  <!-- Page 0: rows 1 to 7 below. Their own indentation is
+                       left untouched on purpose (they predate this stack);
+                       do not re-indent them to match the wrapper. -->
+                  <WidgetGroup>
+                    <Layout>vertical</Layout>
+                    <SizePolicy>me,me</SizePolicy>
+                    <Children>
+
               <!-- Row 1: the HDMI switch, moved here from System, and Next.
                    Next latches visuals_next at 1; SystemSettings counts the
                    tap and resets it, and the page melts to another sketch
-                   on every count (fork issue #5). -->
+                   on every count (fork issue #5). Library opens the Set and
+                   Admin rows on page 3 (Task A0 measured 72 px free under
+                   Patterns on 2026-09-25, root d00baa6, too little for two
+                   more rows here). -->
               <WidgetGroup>
                 <ObjectName>SettingsRow</ObjectName>
                 <Layout>horizontal</Layout>
@@ -2143,6 +2163,23 @@
                       <ConfigKey>[BiteDJ],visuals_next</ConfigKey>
                       <EmitOnDownPress>true</EmitOnDownPress>
                       <Transform><IsEqual>1</IsEqual></Transform>
+                    </Connection>
+                  </PushButton>
+                  <WidgetGroup>
+                    <Size>12f,0me</Size>
+                  </WidgetGroup>
+                  <PushButton>
+                    <ObjectName>SettingsActionButton</ObjectName>
+                    <Size>100f,44f</Size>
+                    <NumberStates>1</NumberStates>
+                    <State>
+                      <Number>0</Number>
+                      <Text>Library</Text>
+                    </State>
+                    <Connection>
+                      <ConfigKey>[BiteDJ],visuals_page</ConfigKey>
+                      <EmitOnDownPress>true</EmitOnDownPress>
+                      <Transform><IsEqual>3</IsEqual></Transform>
                     </Connection>
                   </PushButton>
                 </Children>
@@ -2421,6 +2458,182 @@
                 <ObjectName>SettingsSpacer</ObjectName>
                 <Size>0me,0me</Size>
               </WidgetGroup>
+
+                    </Children>
+                  </WidgetGroup>
+
+                  <!-- Page 1: pick the active set. VisualsSetList is
+                       WVisualsSetList, shaped like WifiList; a tap makes the
+                       set active and returns to <ReturnPage>. -->
+                  <WidgetGroup>
+                    <Layout>vertical</Layout>
+                    <SizePolicy>me,me</SizePolicy>
+                    <Children>
+                      <Label>
+                        <ObjectName>SettingsHeader</ObjectName>
+                        <Text>Visuals sets</Text>
+                        <Size>0me,32f</Size>
+                      </Label>
+                      <VisualsSetList>
+                        <ObjectName>VisualsSetList</ObjectName>
+                        <SizePolicy>me,me</SizePolicy>
+                        <ReturnPage>3</ReturnPage>
+                      </VisualsSetList>
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,68f</Size>
+                        <Children>
+                          <WidgetGroup>
+                            <Size>0me,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>100f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Back</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[BiteDJ],visuals_page</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>3</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+                    </Children>
+                  </WidgetGroup>
+
+                  <!-- Page 2: a new admin PIN. PinKeypad is WPinKeypad; it
+                       owns its title, field, keys and Cancel/Save, and
+                       writes <ReturnPage> itself on either. -->
+                  <PinKeypad>
+                    <ObjectName>PinKeypad</ObjectName>
+                    <SizePolicy>me,me</SizePolicy>
+                    <ReturnPage>3</ReturnPage>
+                  </PinKeypad>
+
+                  <!-- Page 3: the visuals library. Its own page because
+                       page 0 had less than two rows' height free (Task A0
+                       measured 72 px free under Patterns on 2026-09-25,
+                       root d00baa6). -->
+                  <WidgetGroup>
+                    <Layout>vertical</Layout>
+                    <SizePolicy>me,me</SizePolicy>
+                    <Children>
+
+                      <!-- Set: the active visuals set's name (fork issue
+                           #13). The admin page on port 7380 builds the sets;
+                           the panel only picks one. Choose opens the list on
+                           page 1. -->
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,68f</Size>
+                        <Children>
+                          <Label>
+                            <ObjectName>SettingsRowLabel</ObjectName>
+                            <Text>Set</Text>
+                            <Size>120f,0me</Size>
+                          </Label>
+                          <VisualsLabel>
+                            <ObjectName>VisualsSetName</ObjectName>
+                            <Field>set</Field>
+                            <Size>0me,0me</Size>
+                          </VisualsLabel>
+                          <WidgetGroup>
+                            <Size>12f,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>100f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Choose</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[BiteDJ],visuals_page</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>1</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+
+                      <!-- Admin: where the admin page is and its PIN, which
+                           everything there needs. Change opens the keypad on
+                           page 2. -->
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,68f</Size>
+                        <Children>
+                          <Label>
+                            <ObjectName>SettingsRowLabel</ObjectName>
+                            <Text>Admin</Text>
+                            <Size>120f,0me</Size>
+                          </Label>
+                          <VisualsLabel>
+                            <ObjectName>VisualsAdminInfo</ObjectName>
+                            <Field>admin</Field>
+                            <Size>0me,0me</Size>
+                          </VisualsLabel>
+                          <WidgetGroup>
+                            <Size>12f,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>120f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Change PIN</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[BiteDJ],visuals_page</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>2</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+
+                      <WidgetGroup>
+                        <ObjectName>SettingsRow</ObjectName>
+                        <Layout>horizontal</Layout>
+                        <Size>0me,68f</Size>
+                        <Children>
+                          <WidgetGroup>
+                            <Size>0me,0me</Size>
+                          </WidgetGroup>
+                          <PushButton>
+                            <ObjectName>SettingsActionButton</ObjectName>
+                            <Size>100f,44f</Size>
+                            <NumberStates>1</NumberStates>
+                            <State>
+                              <Number>0</Number>
+                              <Text>Back</Text>
+                            </State>
+                            <Connection>
+                              <ConfigKey>[BiteDJ],visuals_page</ConfigKey>
+                              <EmitOnDownPress>true</EmitOnDownPress>
+                              <Transform><IsEqual>0</IsEqual></Transform>
+                            </Connection>
+                          </PushButton>
+                        </Children>
+                      </WidgetGroup>
+                      <WidgetGroup>
+                        <ObjectName>SettingsSpacer</ObjectName>
+                        <Size>0me,0me</Size>
+                      </WidgetGroup>
+                    </Children>
+                  </WidgetGroup>
+
+                </Children>
+              </WidgetStack>
 
             </Children>
           </WidgetGroup>

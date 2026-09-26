@@ -152,9 +152,14 @@
   // page at its defaults and a new one takes effect on the next frame. The
   // levels are the small integers a segment row shows; the mappings to
   // amounts live here and in sketches.js, so a retune never touches C++.
+  // set is the active visuals set's id ([BiteDJ],visuals_set, 0 is
+  // Everything) and setRev counts reloads of ~/.bitedj-visuals-sets.json in
+  // the app; sets.js rereads the file when either moves. An old binary sends
+  // neither and the page plays everything.
   const SETTING_DEFAULTS = {
     reactivity: 1, bounce: 2, swirl: 2, bars: 16,
-    camMix: 1, camSketches: 1, patterns: 1, next: 0
+    camMix: 1, camSketches: 1, patterns: 1, next: 0,
+    set: 0, setRev: 0
   };
   const REACTIVITY_LEVELS = [0.6, 1, 1.5];
 

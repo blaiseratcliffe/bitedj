@@ -26,9 +26,11 @@ const QString kBiteDjGroup = QStringLiteral("[BiteDJ]");
 } // namespace
 
 // jsonName is what res/visuals/feed.js reads; key is what SystemSettings
-// creates. next is the tap counter, not the momentary trigger, so the page
-// sees every tap as a rise rather than a level that is 0 again by the time
-// the next frame is built.
+// or VisualsSets creates. next is the tap counter, not the momentary
+// trigger, so the page sees every tap as a rise rather than a level that is
+// 0 again by the time the next frame is built. set is the active visuals
+// set's id and setRev counts edits to the sets file; the page rereads the
+// file when either moves (res/visuals/sets.js).
 const VisualsFeed::Setting VisualsFeed::kSettings[VisualsFeed::kSettingCount] = {
         {"visuals_bars", "bars"},
         {"visuals_bounce", "bounce"},
@@ -37,6 +39,8 @@ const VisualsFeed::Setting VisualsFeed::kSettings[VisualsFeed::kSettingCount] = 
         {"visuals_next_count", "next"},
         {"visuals_patterns", "patterns"},
         {"visuals_reactivity", "reactivity"},
+        {"visuals_set", "set"},
+        {"visuals_set_rev", "setRev"},
         {"visuals_swirl", "swirl"},
 };
 

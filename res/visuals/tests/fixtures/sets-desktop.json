@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "nextId": 3,
+  "known": { "sketches": [], "patterns": [], "clips": [] },
+  "sets": [
+    { "id": 1, "name": "Desktop mono", "type": "random",
+      "sketches": ["contours", "ribbons", "flow-lines", "pattern-grid"],
+      "patterns": ["ripple_grid"],
+      "clips": [],
+      "knobs": { "bars": 8, "reactivity": 1, "bounce": 2, "swirl": 2, "camMix": 1 } },
+    { "id": 2, "name": "Desktop colour", "type": "random",
+      "sketches": ["tunnel", "plasma-kaleid", "bloom-drop", "video-kaleid"],
+      "patterns": [],
+      "clips": ["changing-seasons.mp4"],
+      "knobs": { "bars": 8, "reactivity": 1, "bounce": 2, "swirl": 2, "camMix": 1 } }
+  ]
+}

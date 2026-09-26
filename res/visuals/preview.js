@@ -21,7 +21,8 @@
 // sketch draws it until `auto`. A desktop is several times faster than the
 // Pi, so nothing seen here says how the Pi copes with a pattern.
 (function () {
-  if (new URLSearchParams(location.search).get('preview') !== '1') return;
+  const params = new URLSearchParams(location.search);
+  if (params.get('preview') !== '1') return;
   const director = window.director;
   if (!director) {
     console.error('visuals: preview mode needs window.director from director.js');
@@ -29,6 +30,13 @@
   }
   const pats = window.patterns || null;
   const NOTE_MS = 4000;
+  // The admin page opens previews in an iframe with embed=1: no overlay, and
+  // the item to show named in the URL. See contract 1.4 of the visuals
+  // library plan.
+  const embed = params.get('embed') === '1';
+  const wantSketch = params.get('sketch');
+  const wantPattern = params.get('pattern');
+  const wantClip = params.get('clip');
 
   director.pause(true);
   // index.html hides the pointer for the TV; a desktop needs it back.
@@ -104,6 +112,7 @@
   box.appendChild(row);
   box.appendChild(hint);
   document.body.appendChild(box);
+  if (embed) box.style.display = 'none';
 
   let note = '', noteUntil = 0;
   function flash(text) {
@@ -259,8 +268,167 @@
     act();
   }, true);
 
-  director.onSwitch(() => render());
-  setInterval(render, 500);
+  // window.sketchList is what the admin service shows in its library,
+  // without running any JavaScript; window.sketches is what actually runs.
+  // A mismatch means the list was not updated with a sketch change. Logged in
+  // every preview, and sent to the admin page when embedded, which shows it.
+  function sketchCheck() {
+    const list = Array.isArray(window.sketchList) ? window.sketchList : null;
+    if (!list) return ['sketchList is missing from sketches.js'];
+    const FLAGS = ['cam', 'pattern', 'video', 'camMix', 'vidMix'];
+    const has = (s) => FLAGS.filter(f => !!s[f]);
+    const byName = new Map(list.map(x => [x.name, x]));
+    const out = [];
+    window.sketches.forEach((s) => {
+      const l = byName.get(s.name);
+      if (!l) { out.push(s.name + ': missing from sketchList'); return; }
+      const a = FLAGS.filter(f => (l.flags || []).includes(f)).join(' ');
+      const b = has(s).join(' ');
+      if (a !== b) out.push(s.name + ': flags differ (list ' + (a || 'none') + ', sketch ' + (b || 'none') + ')');
+    });
+    list.forEach((l) => {
+      if (!window.sketches.some(s => s.name === l.name)) out.push(l.name + ': in sketchList but not a sketch');
+    });
+    return out;
+  }
+  const mismatches = sketchCheck();
+  if (mismatches.length) console.error('visuals: sketch list mismatch:', mismatches.join('; '));
+  if (embed && window.parent !== window) {
+    try {
+      window.parent.postMessage({ type: 'bitedj-sketch-check', mismatches }, location.origin);
+    } catch (e) {
+      console.error('visuals: could not report the sketch check', e);
+    }
+  }
+
+  // The camera stand-in. Over http there is no camera, so every camera
+  // sketch and every camMix treatment would preview without one. A 10 s clip
+  // recorded once from the Pi's C922 (bitedj-visuals-admin --record-standin)
+  // plays into s0 instead; without one, a moving test pattern does, labelled
+  // so nobody mistakes it for the look. One <video> element for the page,
+  // fed to s0 the way video.js feeds s8, because hydra's initVideo makes a
+  // new element per call and never stops the old one.
+  const camLabel = document.createElement('div');
+  camLabel.style.cssText = 'position:fixed;right:8px;top:8px;z-index:10;padding:2px 6px;'
+    + 'background:rgba(0,0,0,0.6);color:#ddd;font:12px/1.4 "DejaVu Sans Mono",Consolas,monospace;'
+    + 'border-radius:3px;display:none';
+  document.body.appendChild(camLabel);
+
+  const standinUrl = (window.visualsPaths ? visualsPaths.media : '../media/') + 'camera-standin.mp4';
+  const standin = document.createElement('video');
+  standin.muted = true; standin.loop = true; standin.playsInline = true;
+  let standinOk = false;
+
+  const pattern = document.createElement('canvas');
+  pattern.width = 640; pattern.height = 360;
+  const pctx = pattern.getContext('2d');
+  let patternRaf = 0;
+  function drawPattern(t) {
+    pctx.fillStyle = '#111';
+    pctx.fillRect(0, 0, 640, 360);
+    for (let i = -2; i < 12; i++) {
+      pctx.fillStyle = i % 2 ? '#444' : '#888';
+      const x = ((t / 20) % 128) + i * 64;
+      pctx.fillRect(x, 0, 32, 360);
+    }
+    pctx.fillStyle = '#fff';
+    pctx.font = 'bold 28px sans-serif';
+    pctx.textAlign = 'center';
+    pctx.fillText('NO CAMERA STAND-IN RECORDED', 320, 190);
+    patternRaf = requestAnimationFrame(drawPattern);
+  }
+
+  // `camGen` counts open()s, and close() bumps it too, so a play() that
+  // resolves after a close() (or after a second open()) landed does not
+  // reinitialise s0 out from under whatever closed or reopened it. Same
+  // pattern as video.js's `gen`/`stale()` (video.js:124-127, 187).
+  let camGen = 0;
+  director.useCamera({
+    label: 'stand-in',
+    open() {
+      const my = ++camGen;
+      if (standinOk) {
+        standin.currentTime = 0;
+        standin.play().then(() => {
+          if (my !== camGen) return;
+          try { s0.tex.destroy(); } catch (e) { /* already gone */ }
+          s0.init({ src: standin, dynamic: true });
+        }).catch(e => {
+          if (my !== camGen) return;
+          console.error('visuals: stand-in would not play', e);
+        });
+      } else {
+        if (!patternRaf) patternRaf = requestAnimationFrame(drawPattern);
+        try { s0.tex.destroy(); } catch (e) { /* already gone */ }
+        s0.init({ src: pattern, dynamic: true });
+      }
+    },
+    close() {
+      camGen += 1;
+      standin.pause();
+      if (patternRaf) { cancelAnimationFrame(patternRaf); patternRaf = 0; }
+      try { s0.tex.destroy(); } catch (e) { /* already gone */ }
+      s0.clear();
+    }
+  });
+
+  // Asked first, so a missing stand-in is known before the first camera
+  // sketch rather than discovered as a black s0. A GET of its first byte,
+  // not a HEAD: the admin service answers Range requests (206) and
+  // python -m http.server ignores the header and sends it all (200), and
+  // neither needs to know about HEAD.
+  (function probeStandin() {
+    const xhr = new XMLHttpRequest();
+    xhr.onload = () => {
+      standinOk = xhr.status === 200 || xhr.status === 206;
+      if (standinOk) standin.src = standinUrl;
+      console.log('visuals: preview camera', standinOk ? 'stand-in clip' : 'test pattern (no stand-in, status ' + xhr.status + ')');
+    };
+    xhr.onerror = () => console.log('visuals: preview camera test pattern (stand-in unreachable)');
+    try {
+      xhr.open('GET', standinUrl, true);
+      xhr.setRequestHeader('Range', 'bytes=0-0');
+      xhr.send();
+    } catch (e) { /* stays a test pattern */ }
+  })();
+
+  // The label shows only while the sketch on screen reads the camera.
+  function cameraShown() {
+    const s = director.current();
+    return !!s && (s.cam || (s.camMix && feed.settings.camMix === 1));
+  }
+  function renderCamLabel() {
+    const on = cameraShown();
+    camLabel.style.display = on ? '' : 'none';
+    if (on) camLabel.textContent = standinOk ? 'camera: stand-in clip' : 'camera: test pattern, no stand-in recorded';
+  }
+
+  director.onSwitch(() => { render(); renderCamLabel(); });
+  setInterval(() => { render(); renderCamLabel(); }, 500);
+
+  // The item the URL names. The clip pin comes first, so a video sketch
+  // shown next opens that clip; the pattern pin restarts a pattern sketch
+  // once the pattern is in the cache, as choose() does.
+  //
+  // A clip may exist only as an upload, which video.js learns of from an
+  // index it reads asynchronously. A video sketch shown before that read
+  // lands finds video.available() false, opens nothing, and stays blank with
+  // nothing to retry it; so with a clip named, the sketch is shown once a
+  // fresh read of the index has finished.
+  if (wantClip && window.video) video.pin(wantClip);
+  const named = wantSketch ? director.list().find(s => s.name === wantSketch) : null;
+  if (wantSketch && !named) flash('no sketch named ' + wantSketch);
+  const showNamed = () => { if (named) director.show(named); };
+  if (wantClip && window.video) video.refresh(showNamed);
+  else showNamed();
+  if (wantPattern && pats) {
+    pats.pin(wantPattern, (entry) => {
+      if (!entry) { flash('could not load ' + wantPattern); return; }
+      const s = director.target();
+      if (s && s.pattern) director.show(s);
+    });
+  }
+
   render();
   console.log('visuals: preview mode on, rotation paused');
 })();

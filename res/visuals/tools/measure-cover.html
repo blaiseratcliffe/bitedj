@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- Measures every pattern's default frame with the page's own code, for
+     build-pattern-index.py (Decision 34). A PC tool: it lives in tools/, and
+     nothing on the Pi loads it. The base element makes patterns.js, the index
+     and patterns.js's own relative XHRs resolve from res/visuals/. -->
+<html>
+<head>
+<meta charset="utf-8">
+<base href="../">
+<title>Pattern coverage</title>
+</head>
+<body>
+<pre id="out">measuring</pre>
+<script src="assets/patterns/index.js"></script>
+<script>
+  // A set that allows no pattern, so patterns.js's boot prewarm loads nothing
+  // while this page measures (setAllows, patterns.js:307).
+  window.sets = { allows: () => false };
+</script>
+<script src="patterns.js"></script>
+<script>
+  (function () {
+    const out = document.getElementById('out');
+    const index = window.patternIndex || [];
+    const cover = {};
+    let i = 0;
+    (function next() {
+      if (i >= index.length) {
+        out.textContent = 'COVER ' + JSON.stringify(cover);
+        return;
+      }
+      const meta = index[i++];
+      patterns.measureCover(meta, (lit) => {
+        cover[meta.slug] = lit === null ? null : Math.round(lit * 10000) / 10000;
+        next();
+      });
+    })();
+  })();
+</script>
+</body>
+</html>

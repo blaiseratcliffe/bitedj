@@ -301,8 +301,12 @@
   // narrowed again at pick time by the cost map, which moves: a pattern that
   // is eligible at boot is retired the moment it is measured over budget.
   const library = (window.patternIndex || []).filter(p => p.frame <= MAX_FRAME_BYTES);
+  // The active visuals set, if any, narrows both what the prewarm loads and
+  // what take() hands out. A Sequence allows exactly the patterns its
+  // entries name, so the prewarm there loads nothing but those.
+  const setAllows = (slug) => !window.sets || sets.allows('pattern', slug);
   function eligible() {
-    return library.filter(p => !retired(p.slug));
+    return library.filter(p => !retired(p.slug) && setAllows(p.slug));
   }
   if (!window.patternIndex) {
     console.error('visuals: no pattern index; run tools/build-pattern-index.py');
@@ -673,7 +677,7 @@
   // after the pin is released such an entry is dead weight that victim() and
   // sweepRetired() clear out first.
   function usable(e) {
-    return !e.busy && !retired(e.meta.slug) && !e.outside;
+    return !e.busy && !retired(e.meta.slug) && !e.outside && setAllows(e.meta.slug);
   }
 
   function pickFrom(pool) {
@@ -773,7 +777,8 @@
   function sweepRetired() {
     cache.slice().forEach(e => {
       if (!e.busy && !e.held && !usable(e) && e.meta.slug !== pinned) {
-        evict(e, e.outside ? 'outside the rotation, no longer pinned' : 'retired');
+        evict(e, e.outside ? 'outside the rotation, no longer pinned'
+          : retired(e.meta.slug) ? 'retired' : 'not in the visuals set');
       }
     });
   }
@@ -1302,6 +1307,26 @@
       sweepRetired();
     },
 
+    // director.js calls this when a new visuals set is in force. Entries the
+    // set leaves out go now, unless a sketch is drawing one (it goes at the
+    // next release(), through sweepRetired(), since usable() now refuses it)
+    // or it is the pin. If anything went, the prewarm refills from what the
+    // set allows in 2 s rather than at the next 20 s tick. If nothing went,
+    // nothing is started: the first set load lands a second after the page
+    // opens, and the first prewarm is held back 10 s on purpose (see the
+    // setTimeout at the bottom of this file). Returns how many went.
+    setChanged() {
+      let gone = 0;
+      cache.slice().forEach((e) => {
+        if (!e.busy && !e.held && e.meta.slug !== pinned && !setAllows(e.meta.slug)) {
+          evict(e, 'not in the visuals set');
+          gone += 1;
+        }
+      });
+      if (gone) soon();
+      return gone;
+    },
+
     // For the load test and the memory measurement.
     stats() {
       return cache.map(e => ({
@@ -1356,6 +1381,41 @@
 
     pinned() { return pinned; },
     pinLoading() { return pinJob || pinWait ? pinned : null; },
-    taken() { return taken.slice(); }
+    taken() { return taken.slice(); },
+
+    // The default frame's lit fraction, measured the way load() measures it:
+    // the same svgDoc() rewrite, the same SIZE canvas on black, the same
+    // coverage(). Only tools/measure-cover.html calls it, so that
+    // build-pattern-index.py can write the figure into the index and the
+    // admin service can leave out what COVER_MAX keeps off the screen without
+    // rasterising anything itself (Decision 34). done(fraction), or done(null)
+    // when the fetch or the decode fails.
+    measureCover(meta, done) {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', BASE + meta.frames[6], true);
+      xhr.onerror = () => done(null);
+      xhr.onload = () => {
+        const doc = svgDoc(xhr.responseText || '', meta.wire);
+        if (!doc) { done(null); return; }
+        const url = URL.createObjectURL(new Blob([doc], { type: 'image/svg+xml' }));
+        const img = new Image();
+        img.onerror = () => { URL.revokeObjectURL(url); done(null); };
+        img.onload = () => {
+          const cv = document.createElement('canvas');
+          cv.width = SIZE; cv.height = SIZE;
+          const ctx = cv.getContext('2d');
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, SIZE, SIZE);
+          ctx.drawImage(img, 0, 0, SIZE, SIZE);
+          URL.revokeObjectURL(url);
+          const lit = coverage(cv);
+          cv.width = 1; cv.height = 1;
+          done(lit);
+        };
+        img.src = url;
+      };
+      xhr.send();
+    },
+    coverMax: COVER_MAX,
   };
 })();

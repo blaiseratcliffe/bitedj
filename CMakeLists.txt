@@ -805,6 +805,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/preferences/settingsmanager.cpp
   src/preferences/systemsettings.cpp
   src/preferences/upgrade.cpp
+  src/preferences/visualssets.cpp
   src/preferences/wifisettings.cpp
   src/recording/recordingmanager.cpp
   src/skin/legacy/colorschemeparser.cpp
@@ -1035,6 +1036,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/widget/wnumberpos.cpp
   src/widget/wnumberrate.cpp
   src/widget/woverview.cpp
+  src/widget/wpinkeypad.cpp
   src/widget/wpixmapstore.cpp
   src/widget/wpushbutton.cpp
   src/widget/wraterange.cpp
@@ -1058,6 +1060,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/widget/wstarrating.cpp
   src/widget/wsamplerdrive.cpp
   src/widget/wusblist.cpp
+  src/widget/wvisualslabel.cpp
+  src/widget/wvisualssetlist.cpp
   src/widget/wwifikeypad.cpp
   src/widget/wwifilist.cpp
   src/widget/wwifistatus.cpp
@@ -1679,12 +1683,14 @@ if(BUILD_TESTING)
     src/test/trackupdate_test.cpp
     src/test/uuid_test.cpp
     src/test/visualsfeed_test.cpp
+    src/test/visualssets_test.cpp
     src/test/waveformmarkset_test.cpp
     src/test/wbatterytest.cpp
     src/test/wcontrollerlist_test.cpp
     src/test/wifisettings_test.cpp
     src/test/wpushbutton_test.cpp
     src/test/wusblist_test.cpp
+    src/test/wvisualswidgets_test.cpp
     src/test/wwidgetstack_test.cpp
     src/test/wwifikeypad_test.cpp
     src/test/wwifilist_test.cpp
