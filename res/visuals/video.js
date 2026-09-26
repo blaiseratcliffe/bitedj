@@ -185,6 +185,17 @@
     }
     const fromStart = !!want && clip.file === want;
     const stale = () => my !== gen;
+    // A clip opened over one that is playing (a sequence's video entry after
+    // another clip) changes the src of the element s8 is still reading.
+    // hydra's HydraSource.tick uploads from it every frame while s8 is
+    // dynamic, and until the new clip has a frame each upload is
+    // "texSubImage2D: no video"; Chromium reports 32 WebGL errors a page and
+    // then none, so a real one later in the night would never be logged.
+    // Freeze the texture first: it keeps the old clip's last frame, which is
+    // what the screen showed anyway, and the s8.init() below makes it dynamic
+    // again once the new clip has a frame. A clip that fails and a give-up
+    // leave it frozen, so s8 never reads an element with no src.
+    if (window.s8 && s8.src === el) s8.dynamic = false;
     el.src = clip.src;
     waitFor('loadedmetadata', LOAD_TIMEOUT_MS).then(() => {
       if (stale()) return null;

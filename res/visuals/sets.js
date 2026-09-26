@@ -15,8 +15,9 @@
 // the director's switch line and nothing else, so grepping for it counts
 // switches.
 //
-// Part A knows Random sets only. A Sequence set is logged and played as
-// Everything until the sequence walker lands (Part B).
+// A Random set narrows the pools; a Sequence is a running order that next()
+// walks, intro entries once and the rest on a loop. Mixxx never reads the
+// entries; this file does all the ordering.
 //
 // The core is createSets(opts), with no browser globals, so tests can run it
 // under Node with the read stubbed. The browser glue at the bottom makes the
@@ -41,6 +42,10 @@
 
   const strings = (v) => new Set(Array.isArray(v) ? v.filter(x => typeof x === 'string') : []);
 
+  // Two sequence entries, as loaded() shapes them, name the same thing.
+  const sameEntry = (a, b) => !!a && !!b && a.sketch === b.sketch && a.pattern === b.pattern &&
+    a.clip === b.clip && a.bars === b.bars && a.intro === b.intro;
+
   function createSets(opts) {
     const log = opts.log || (() => {});
     const listeners = [];
@@ -52,6 +57,12 @@
     // What is in force.
     let active = EVERYTHING;
     let allow = null;            // null: everything; else { sketches, patterns, clips } of Sets
+    // The active sequence's entries, or null. `pos` is the index next()
+    // starts looking from; `last` the index it returned last, or -1.
+    // `started`: next() has been called since the sequence came in or was
+    // restarted. Until then an edit is a fresh start, so an intro added
+    // before the music starts still plays.
+    let entries = null, loopStart = 0, pos = 0, last = -1, started = false;
 
     function notify(info) {
       listeners.forEach((fn) => {
@@ -60,10 +71,45 @@
     }
 
     // Puts `next` in force and tells the listeners.
-    function commit(next, nextAllow, reason) {
+    function commit(next, nextAllow, reason, nextEntries) {
       const previousId = active.id;
+      // An edit of a sequence the walk has not started is a fresh start
+      // rather than a place to keep: with no intros, position 0 would
+      // otherwise count as past them, and an intro the edit adds in front
+      // would never play.
+      const sameSequence = !!entries && !!nextEntries && next.id === previousId && reason === 'edit' && started;
+      // Whether the walk had finished the intros, judged before the edit
+      // moves loopStart.
+      const pastIntros = pos >= loopStart;
+      const lastEntry = entries && last >= 0 ? entries[last] : null;
       active = next;
       allow = nextAllow;
+      if (nextEntries) {
+        entries = nextEntries;
+        let i = 0;
+        while (i < entries.length && entries[i].intro) i += 1;
+        loopStart = i;
+        if (sameSequence) {
+          // Keep the place; past the end wraps to the loop, and a place still
+          // inside the intros stays there. A walk that was past the intros
+          // stays past them, even when the edit added some in front of it.
+          if (pos >= entries.length) pos = loopStart;
+          if (pastIntros && pos < loopStart) pos = loopStart;
+          // replay() resumes the interrupted entry only where it was: the
+          // same entry (all five fields) at the same index, and not an intro
+          // once the walk is past the intros. Anything else forgets it, and
+          // replay() is then next(), which resumes from `pos`.
+          if (last >= entries.length || !sameEntry(entries[last], lastEntry) ||
+              (entries[last].intro && pos >= loopStart)) last = -1;
+        } else {
+          pos = 0;
+          last = -1;
+          started = false;
+        }
+      } else {
+        entries = null;
+        loopStart = 0; pos = 0; last = -1; started = false;
+      }
       notify({ id: active.id, previousId, type: active.type, reason });
     }
 
@@ -88,11 +134,86 @@
         return;
       }
       if (s.type === 'sequence') {
-        log('visuals: sets ' + id + ' is a sequence; sequences are not supported by this page, playing everything');
-      } else {
-        log('visuals: sets ' + id + ' has an unknown type (' + s.type + '); playing everything');
+        const list = (Array.isArray(s.entries) ? s.entries : [])
+          .filter(e => e && typeof e.sketch === 'string')
+          .map(e => ({
+            sketch: e.sketch,
+            pattern: typeof e.pattern === 'string' ? e.pattern : null,
+            clip: typeof e.clip === 'string' ? e.clip : null,
+            bars: Number.isInteger(e.bars) && e.bars > 0 ? e.bars : null,
+            intro: e.intro === true
+          }));
+        if (!list.length) {
+          log('visuals: sets ' + id + ' is a sequence with no entries; playing everything');
+          commit(EVERYTHING, null, reason);
+          return;
+        }
+        commit({ id, name: String(s.name), type: 'sequence' }, {
+          sketches: new Set(list.map(e => e.sketch)),
+          patterns: new Set(list.filter(e => e.pattern).map(e => e.pattern)),
+          clips: new Set(list.filter(e => e.clip).map(e => e.clip))
+        }, reason, list);
+        return;
       }
+      log('visuals: sets ' + id + ' has an unknown type (' + s.type + '); playing everything');
       commit(EVERYTHING, null, reason);
+    }
+
+    const entryAt = (i) => Object.assign({}, entries[i], { index: i + 1, total: entries.length });
+
+    // `call` is one per next(), peek() or replay() call, so a canPlay that
+    // throws on every entry logs one line per call, not one per entry.
+    function playable(canPlay, i, call) {
+      try {
+        return !!canPlay(entryAt(i));
+      } catch (e) {
+        if (!call.logged) {
+          call.logged = true;
+          // 'visuals: sets ', like every line this file logs (contract 1.3).
+          log('visuals: sets ' + active.id + ' entry ' + (i + 1) + ' check failed:', e && e.message ? e.message : String(e));
+        }
+        return false;
+      }
+    }
+
+    // The index next() would return from `from`, or -1. Intros are tried in
+    // order once; the loop is tried for at most one pass.
+    function scan(canPlay, from, call) {
+      if (!entries) return -1;
+      const n = entries.length;
+      let i = from;
+      while (i < loopStart) {
+        if (playable(canPlay, i, call)) return i;
+        i += 1;
+      }
+      const loopLen = n - loopStart;
+      if (loopLen <= 0) return -1;
+      const startAt = i >= n ? loopStart : i;
+      for (let k = 0; k < loopLen; k++) {
+        const j = loopStart + ((startAt - loopStart + k) % loopLen);
+        if (playable(canPlay, j, call)) return j;
+      }
+      return -1;
+    }
+
+    // next() itself, shared with replay() so neither depends on `this`.
+    function nextEntry(canPlay, call) {
+      started = true;
+      const j = scan(canPlay, pos, call);
+      if (j < 0) {
+        // Intros that could not play are passed for good, even when nothing
+        // after them can play either.
+        if (pos < loopStart) pos = loopStart;
+        // Nothing is on screen from the sequence now, so nothing was
+        // interrupted and replay() has nothing to resume: it is next(),
+        // null while the loop cannot play. Keeping `last` gave back the last
+        // intro after every break in the music.
+        last = -1;
+        return null;
+      }
+      last = j;
+      pos = j + 1;
+      return entryAt(j);
     }
 
     return {
@@ -126,7 +247,24 @@
         return !!list && list.has(key);
       },
       isSequence() {
-        return false;
+        return !!entries;
+      },
+      restart() {
+        pos = 0;
+        last = -1;
+        started = false;
+      },
+      next(canPlay) {
+        return nextEntry(canPlay, { logged: false });
+      },
+      peek(canPlay) {
+        const j = scan(canPlay, pos, { logged: false });
+        return j < 0 ? null : entryAt(j);
+      },
+      replay(canPlay) {
+        const call = { logged: false };
+        if (last >= 0 && last < (entries ? entries.length : 0) && playable(canPlay, last, call)) return entryAt(last);
+        return nextEntry(canPlay, call);
       }
     };
   }

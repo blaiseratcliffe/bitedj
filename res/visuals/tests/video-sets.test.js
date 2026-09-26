@@ -131,3 +131,78 @@ test('open(file) of a clip that does not exist falls back to a random one, and s
   assert.ok(p.logs.some(l => l.includes('gone.mp4') && l.includes('not available')), p.logs.join('\n'));
   assert.ok(/\.mp4$/.test(element(p).src));
 });
+
+// Part B final review, finding 1. hydra's HydraSource.tick calls
+// tex.subimage(el) every frame while s8 is dynamic. From a new src until the
+// new clip has a frame, each call is 'texSubImage2D: no video', and Chromium
+// stops reporting WebGL errors after 32 per page. This makes the rig's
+// element and s8 behave that far: events fire when the test says, a new src
+// or none drops the element to HAVE_NOTHING, and s8 keeps what init() gave it.
+function live(p) {
+  const el = element(p);
+  const s8 = p.ctx.s8;
+  const on = {};
+  el.addEventListener = (ev, fn) => { (on[ev] = on[ev] || []).push(fn); };
+  el.removeEventListener = (ev, fn) => { on[ev] = (on[ev] || []).filter(f => f !== fn); };
+  let src;
+  Object.defineProperty(el, 'src', {
+    get: () => src,
+    set: (v) => { src = v; el.readyState = 0; },
+    configurable: true
+  });
+  el.removeAttribute = (k) => { if (k === 'src') { src = undefined; el.readyState = 0; } };
+  s8.init = (o) => { s8.src = o.src; s8.dynamic = !!o.dynamic; };
+  s8.clear = () => { s8.src = null; s8.dynamic = false; };
+  const settle = () => new Promise(r => setImmediate(r));
+  const fire = async (ev) => { (on[ev] || []).slice().forEach(fn => fn()); await settle(); };
+  return {
+    el, s8, fire,
+    // What HydraSource.tick would do on this frame: true when it would call
+    // subimage() on an element with no frame, the logged error.
+    noVideo: () => !!s8.src && s8.dynamic === true && s8.src.readyState < 2,
+    // The clip open() asked for decodes its first frame.
+    async decode() {
+      await fire('loadedmetadata');
+      el.readyState = 2;
+      await fire('loadeddata');
+    }
+  };
+}
+
+test('a clip opened over a playing one freezes s8 until the new clip has a frame', async () => {
+  const p = page({});
+  p.run(100);
+  const v = live(p);
+  p.ctx.video.open('changing-seasons.mp4');
+  await v.decode();
+  assert.equal(v.s8.src, v.el);
+  assert.equal(v.s8.dynamic, true, 'the first clip never reached s8');
+  p.ctx.video.open('phone-clip.mp4');           // a video entry after a playing clip
+  assert.equal(v.el.src, 'media/video/phone-clip.mp4');
+  assert.equal(v.noVideo(), false, 's8 still reads the element while its new src has no frame');
+  await v.fire('loadedmetadata');
+  assert.equal(v.noVideo(), false, 's8 reads the element before its first frame');
+  v.el.readyState = 2;
+  await v.fire('loadeddata');
+  assert.equal(v.s8.src, v.el);
+  assert.equal(v.s8.dynamic, true, 's8 did not go back to reading the new clip');
+  assert.equal(p.ctx.video.file(), 'phone-clip.mp4');
+});
+
+test('a swapped-in clip that fails, and every other one after it, leaves s8 frozen, not reading an empty element', async () => {
+  const p = page({});
+  p.run(100);
+  const v = live(p);
+  p.ctx.video.open('changing-seasons.mp4');
+  await v.decode();
+  assert.equal(v.s8.dynamic, true);
+  p.ctx.video.open('phone-clip.mp4');
+  for (let i = 0; i < 5 && v.el.src; i++) {
+    assert.equal(v.noVideo(), false, 's8 reads ' + v.el.src + ' before it has a frame');
+    await v.fire('error');                      // this clip fails; the next is tried
+    assert.equal(v.noVideo(), false, 's8 reads the element after a failed clip');
+  }
+  assert.equal(v.el.src, undefined, 'not every clip was tried');
+  assert.ok(p.logs.some(l => l.includes('video unavailable')), p.logs.join('\n'));
+  assert.notEqual(v.s8.dynamic, true);
+});

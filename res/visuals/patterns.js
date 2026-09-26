@@ -600,7 +600,7 @@
             if (solid.indexOf(meta.slug) < 0) solid.push(meta.slug);
             console.log('visuals: pattern too solid', meta.slug,
               (100 * entry.cover[6]).toFixed(0) + '% of the default frame lit'
-              + (keepSolid ? ', kept for the preview pin' : ''));
+              + (keepSolid ? (PREVIEW ? ', kept for the preview pin' : ', kept for the sequence') : ''));
             if (!keepSolid) {
               freeFrames(entry);
               done(null);
@@ -651,18 +651,26 @@
   let loading = false;
   let tagTurn = 0;
 
-  // Preview mode's pin, set only through pin() below, which only preview.js
-  // calls and only under ?preview=1. While `pinned` holds a slug, take()
-  // returns that pattern to every sketch that asks, and the cache never evicts
-  // it. Outside preview mode it is null for the life of the page, and every
-  // test against it below is then a comparison with null that never matches.
+  // The pin, set only through pin() below: by preview.js under ?preview=1,
+  // and by director.js for a sequence's pattern entries. While `pinned` holds
+  // a slug, take() returns that pattern to every sketch that asks, and the
+  // cache never evicts it. Outside preview mode and outside a sequence it
+  // stays null, and every test against it below is then a comparison with
+  // null that never matches.
   let pinned = null;
   let pinJob = null;     // a pin load in flight: {slug, entry}
   let pinWait = null;    // the timer of a pin waiting for a prewarm to finish
   // The slugs take() handed out since the last release(), which is the
-  // pattern or two the sketch on screen is drawing. Written on every switch
-  // and read by nothing but preview mode's label.
+  // pattern or two the sketch on screen is drawing. Written on every switch;
+  // read by preview mode's label and by drawing() below.
   const taken = [];
+  // Whether the sketch on screen is drawing this entry, so nothing may free
+  // it. `held` alone is not enough: it only goes up when bindFrames() runs,
+  // on the frame after the sketch's run() took the entry, and a sequence pins
+  // the next entry's pattern in between. A pin load that evicted the entry
+  // just taken, which victim() does first to one outside the rotation, left
+  // the sketch binding freed 1x1 canvases for its whole entry.
+  const drawing = (e) => e.held > 0 || taken.indexOf(e.meta.slug) >= 0;
 
   // What take() will hand out and what ready() counts: the same predicate, so
   // the director cannot be told a pattern sketch is runnable and then handed
@@ -671,8 +679,8 @@
   // resident is ever in it, and a test that cannot fire reads as protection
   // and gives none.
   //
-  // `outside` marks an entry a preview pin loaded although the rotation would
-  // not take it: over the size limit, too solid, or retired. Only pinLoad()
+  // `outside` marks an entry the pin loaded although the rotation would not
+  // take it: over the size limit, too solid, or retired. Only pinLoad()
   // sets it, so every other entry passes this test exactly as before, and
   // after the pin is released such an entry is dead weight that victim() and
   // sweepRetired() clear out first.
@@ -734,15 +742,15 @@
   }
 
   // Who would go if something had to. Least recently shown first, never one a
-  // sketch is currently drawing or the preview pin, and a resident the cost
-  // map has retired goes before any of them whatever its age: take() will not
-  // hand it out again, so it is 29 MB of nothing.
+  // sketch is currently drawing (drawing() above) or the pin, and a resident
+  // the cost map has retired goes before any of them whatever its age: take()
+  // will not hand it out again, so it is 29 MB of nothing.
   function victim() {
     const age = (e) => Math.max(e.shownAt, e.at);
     const dead = (e) => !usable(e);
     let worst = -1;
     for (let i = 0; i < cache.length; i++) {
-      if (cache[i].held || cache[i].busy || cache[i].meta.slug === pinned) continue;
+      if (drawing(cache[i]) || cache[i].busy || cache[i].meta.slug === pinned) continue;
       if (worst < 0) { worst = i; continue; }
       if (dead(cache[i]) !== dead(cache[worst])) {
         if (dead(cache[i])) worst = i;
@@ -776,7 +784,7 @@
   // taken away from a chain that is still sampling it.
   function sweepRetired() {
     cache.slice().forEach(e => {
-      if (!e.busy && !e.held && !usable(e) && e.meta.slug !== pinned) {
+      if (!e.busy && !drawing(e) && !usable(e) && e.meta.slug !== pinned) {
         evict(e, e.outside ? 'outside the rotation, no longer pinned'
           : retired(e.meta.slug) ? 'retired' : 'not in the visuals set');
       }
@@ -796,7 +804,7 @@
     if (cache.length < CACHE_MAX) return true;
     const now = performance.now();
     if (now - lastSwapAt < ROTATE_MS) return false;
-    return cache.some(e => !e.busy && !e.held && e.meta.slug !== pinned
+    return cache.some(e => !e.busy && !drawing(e) && e.meta.slug !== pinned
       && now - Math.max(e.shownAt, e.at) > ROTATE_MS);
   }
 
@@ -820,6 +828,58 @@
   const LOAD_TIMEOUT_MS = 60000;
   let generation = 0;
   let heldForPaint = false;
+
+  // The load watchdog, one for both loaders: the prewarm's, and outside
+  // preview mode a sequence's pin load. A load that never calls back must
+  // not leave `loading` set for the session, which would stop every prewarm
+  // and every later pin. After LOAD_TIMEOUT_MS it stops the orphan, frees
+  // what the load had built, and blames the slug only if the page could
+  // paint through the load's window. `live` is the load's own live();
+  // `building()` returns the entry the load is building, or null; `forWhat`
+  // goes into the log line ('' for the prewarm, 'for the sequence, ' for a
+  // pin); `after(counted)` runs last, for the caller's own clean-up.
+  function watchLoad(slug, live, building, forWhat, after) {
+    const paintedAtStart = painted;
+    return setTimeout(() => {
+      if (!live()) return;
+      generation += 1;          // stops the orphan at its next resumption
+      loading = false;
+      const entry = building();
+      if (entry) {
+        freeFrames(entry);
+        release(entry.hold);    // the Blob and the parsed SVG, which the
+                                // parked frame callback cannot reach
+      }
+      // Could the page paint while this load was running? Not "is it painting
+      // now": a load that spent fifty-five of its sixty seconds parked and
+      // resumed just before the watchdog fired would pass an instantaneous
+      // test and be blamed for what the screen did. So the question is asked
+      // over the load's whole window, by counting the frames served since it
+      // started, and the instantaneous test is kept alongside it for the case
+      // where painting stopped a moment ago and has not come back.
+      //
+      // A healthy page serves about 1500 frames in sixty seconds. STALL_FRAMES
+      // is 60, so this only fires when the page was not painting for the great
+      // majority of the timeout, which is the difference between a file that
+      // hangs and a screen that blanked.
+      //
+      // A timeout on a page that could not paint says nothing about the file,
+      // and blaming the slug for it walks the whole library into `skipped` at
+      // roughly one a minute until the prewarm has nothing pickable left.
+      // Either way it costs the slug nothing and there is no extra retry: the
+      // interval is the only timer.
+      const counted = canPaint() && painted - paintedAtStart >= STALL_FRAMES;
+      if (!counted) {
+        console.log('visuals: pattern load timed out', slug,
+          forWhat + 'while the page was not painting, not counted');
+      } else {
+        skipped.push(slug);
+        console.log('visuals: pattern load timed out', slug,
+          forWhat + 'skipped for this session');
+      }
+      after(counted);
+    }, LOAD_TIMEOUT_MS);
+  }
 
   function prewarm() {
     if (loading) return;
@@ -865,47 +925,12 @@
     if (going) evict(going);
     loading = true;
     const t0 = performance.now();
-    const paintedAtStart = painted;
     const mine = ++generation;
     const live = () => generation === mine;
     let building = null;
-    const watchdog = setTimeout(() => {
-      if (!live()) return;
-      generation += 1;          // stops the orphan at its next resumption
-      loading = false;
-      if (building) {
-        freeFrames(building);
-        release(building.hold);   // the Blob and the parsed SVG, which the
-                                  // parked frame callback cannot reach
-      }
-      // Could the page paint while this load was running? Not "is it painting
-      // now": a load that spent fifty-five of its sixty seconds parked and
-      // resumed just before the watchdog fired would pass an instantaneous
-      // test and be blamed for what the screen did. So the question is asked
-      // over the load's whole window, by counting the frames served since it
-      // started, and the instantaneous test is kept alongside it for the case
-      // where painting stopped a moment ago and has not come back.
-      //
-      // A healthy page serves about 1500 frames in sixty seconds. STALL_FRAMES
-      // is 60, so this only fires when the page was not painting for the great
-      // majority of the timeout, which is the difference between a file that
-      // hangs and a screen that blanked.
-      //
-      // A timeout on a page that could not paint says nothing about the file,
-      // and blaming the slug for it walks the whole library into `skipped` at
-      // roughly one a minute until the prewarm has nothing pickable left.
-      // Either way it costs the slug nothing and there is no extra retry: the
-      // interval is the only timer.
-      if (!canPaint() || painted - paintedAtStart < STALL_FRAMES) {
-        console.log('visuals: pattern load timed out', meta.slug,
-          'while the page was not painting, not counted');
-        return;
-      }
-      skipped.push(meta.slug);
-      console.log('visuals: pattern load timed out', meta.slug,
-        'skipped for this session');
-      soon();
-    }, LOAD_TIMEOUT_MS);
+    const watchdog = watchLoad(meta.slug, live, () => building, '', (counted) => {
+      if (counted) soon();
+    });
     building = load(meta, live, (entry) => {
       if (!live()) {
         if (entry) freeFrames(entry);
@@ -985,7 +1010,10 @@
   // version before this ratcheted a byte cap down from the first pattern that
   // overran, which stranded most of the library behind whichever heavy one
   // happened to load first.
-  function calibrate(entry) {
+  // The record half of calibrate(): write this load's cost against the slug
+  // and log a strike. Returns whether the load was over budget. The prewarm
+  // reaches it through calibrate(); a sequence's pin load calls it directly.
+  function recordCost(entry) {
     const slug = entry.meta.slug;
     const was = cost[slug];
     const over = entry.worst > WORST_FRAME_BUDGET_MS;
@@ -1004,7 +1032,7 @@
       over: strikes(slug) + (over ? 1 : 0)
     };
     writeCost();
-    if (!over) return;
+    if (!over) return false;
     if (retired(slug)) {
       console.log('visuals: pattern', slug, 'over budget',
         entry.worst.toFixed(0), 'ms, retired');
@@ -1012,8 +1040,14 @@
       console.log('visuals: pattern', slug, 'over budget',
         entry.worst.toFixed(0), 'ms, one strike');
     }
-    // Not the preview pin: a pin waiting on this very load would otherwise
-    // lose the pattern it asked for. `pinned` is null outside preview mode.
+    return true;
+  }
+
+  function calibrate(entry) {
+    if (!recordCost(entry)) return;
+    const slug = entry.meta.slug;
+    // Not the pin: a pin waiting on this very load would otherwise lose the
+    // pattern it asked for. A pin load applies the same limit itself.
     if (entry.worst > 2 * WORST_FRAME_BUDGET_MS && !entry.held && slug !== pinned) {
       evict(entry, 'over the frame budget by more than double');
       skipped.push(slug);
@@ -1022,16 +1056,22 @@
     soon();
   }
 
-  // Preview mode's pin load, and only preview.js reaches it, through pin().
+  // Preview mode is the only place the pin was used before sequences, and
+  // it keeps exactly what it had: no watchdog, no cost record. Everywhere
+  // else a pin is a sequence's pattern on the Pi and gets the prewarm's rules.
+  const PREVIEW = new URLSearchParams(location.search).get('preview') === '1';
+
+  // The pin load: preview.js's, and a sequence's through director.js.
   // The same load() as the prewarm under the same two rules: one load at a
   // time, which is what `loading` is, and three entries at most, evicting
   // before allocating. A pin that arrives while a prewarm is loading waits for
   // it rather than cutting it off; a second pin cancels the first one's load
-  // outright, since nothing is waiting for it any more. There is no watchdog,
-  // because this only runs on a desktop that somebody is looking at, where a
-  // parked load resumes when the window does. It writes no cost record either:
-  // a desktop's timings say nothing about the Pi's, and a preview must not
-  // change what this browser's own rotation does afterwards.
+  // outright, since nothing is waiting for it any more. In preview mode there
+  // is no watchdog and no cost record, because there it runs on a desktop
+  // that somebody is looking at, where a parked load resumes when the window
+  // does, and a desktop's timings say nothing about the Pi's; a preview must
+  // not change what this browser's own rotation does afterwards. Outside
+  // preview mode it has both; see the watchdog below.
   const PIN_RETRY_MS = 250;
   function pinLoad(meta, done) {
     pinWait = null;
@@ -1045,7 +1085,7 @@
     if (cache.length >= CACHE_MAX) {
       const going = victim();
       if (!going) { retry(); return; }
-      evict(going, 'for the preview pin');
+      evict(going, PREVIEW ? 'for the preview pin' : 'for the sequence');
     }
     loading = true;
     const t0 = performance.now();
@@ -1053,6 +1093,14 @@
     const live = () => generation === mine;
     const job = { slug: meta.slug, entry: null };
     pinJob = job;
+    // Outside preview mode, the prewarm's watchdog and its blame rule
+    // (watchLoad above). A timed-out pin gives nothing back to its caller.
+    job.watchdog = PREVIEW ? null : watchLoad(meta.slug, live, () => job.entry, 'for the sequence, ', () => {
+      pinJob = null;
+      if (pinned === meta.slug) pinned = null;
+      done(null);
+      soon();
+    });
     job.entry = load(meta, live, (entry) => {
       if (!live()) {
         if (entry) freeFrames(entry);
@@ -1060,8 +1108,14 @@
       }
       loading = false;
       pinJob = null;
+      if (job.watchdog) clearTimeout(job.watchdog);
       if (!entry) {
-        console.log('visuals: pattern', meta.slug, 'failed to load for the preview pin');
+        console.log('visuals: pattern', meta.slug, PREVIEW ? 'failed to load for the preview pin' : 'failed to load for the sequence');
+        // Outside preview mode a failure is marked as the prewarm marks its
+        // own, so library() says 'failed to load' and the director stops
+        // holding 8 bars for it on every lap of the sequence. A preview keeps
+        // the old behaviour: it must not change what the rotation does.
+        if (!PREVIEW && rejected.indexOf(meta.slug) < 0) rejected.push(meta.slug);
         // Nothing to pin: say so, rather than an overlay that goes on
         // reading "pinned" over whatever the sketches fall back to.
         if (pinned === meta.slug) pinned = null;
@@ -1075,9 +1129,23 @@
       }
       entry.outside = meta.frame > MAX_FRAME_BYTES || solid.indexOf(meta.slug) >= 0
         || retired(meta.slug);
+      // Outside preview mode the load is measured like a prewarm's, and one
+      // over twice the frame budget is not kept: a sequence would hold it on
+      // screen for its whole entry. It goes into `skipped`, which library()
+      // reports, and the director stops asking for it this session.
+      if (!PREVIEW && recordCost(entry) && entry.worst > 2 * WORST_FRAME_BUDGET_MS) {
+        freeFrames(entry);
+        if (skipped.indexOf(meta.slug) < 0) skipped.push(meta.slug);
+        if (pinned === meta.slug) pinned = null;
+        console.log('visuals: pattern', meta.slug,
+          'over the frame budget by more than double, dropped from the sequence');
+        done(null);
+        soon();
+        return;
+      }
       cache.push(entry);
       trim(CACHE_MAX);
-      console.log('visuals: pattern ready', meta.slug, 'for the preview pin,',
+      console.log('visuals: pattern ready', meta.slug, PREVIEW ? 'for the preview pin,' : 'for the sequence,',
         (performance.now() - t0).toFixed(0) + ' ms total,',
         'worst frame ' + entry.worst.toFixed(0) + ' ms,',
         'default ' + (100 * entry.cover[6]).toFixed(1) + '% lit,',
@@ -1092,6 +1160,7 @@
   function abortPin() {
     if (pinWait) { clearTimeout(pinWait); pinWait = null; }
     if (!pinJob) return;
+    if (pinJob.watchdog) clearTimeout(pinJob.watchdog);
     generation += 1;
     loading = false;
     if (pinJob.entry) {
@@ -1221,12 +1290,13 @@
     // tag groups the cache cannot answer for, so that choice has more than one
     // candidate in it.
     //
-    // A preview pin comes before both tiers, whatever its tags and whether or
-    // not the rotation would take it, unless it is `exclude`: pattern-stack
-    // passes its first layer there, so with a pin the pin is the first layer
-    // and the second is chosen as usual. While the pin is still loading this
-    // falls through to the tiers and the sketch draws something else until
-    // preview.js restarts it.
+    // The pin (preview's or a sequence's) comes before both tiers, whatever
+    // its tags and whether or not the rotation would take it, unless it is
+    // `exclude`: pattern-stack passes its first layer there, so with a pin the
+    // pin is the first layer and the second is chosen as usual. While the pin
+    // is still loading this falls through to the tiers and the sketch draws
+    // something else until preview.js restarts it; director.js asks for a
+    // sequence's pattern entry only once its pattern is in the cache.
     take(tags, exclude) {
       if (pinned) {
         const pin = cache.find(e => e.meta.slug === pinned && !e.busy);
@@ -1318,7 +1388,7 @@
     setChanged() {
       let gone = 0;
       cache.slice().forEach((e) => {
-        if (!e.busy && !e.held && e.meta.slug !== pinned && !setAllows(e.meta.slug)) {
+        if (!e.busy && !drawing(e) && e.meta.slug !== pinned && !setAllows(e.meta.slug)) {
           evict(e, 'not in the visuals set');
           gone += 1;
         }
@@ -1337,8 +1407,9 @@
       }));
     },
 
-    // Preview mode's side of this file, called by preview.js and by nothing
-    // else. Without ?preview=1 none of it runs and `pinned` stays null.
+    // The pin's side of this file, called by preview.js in preview mode and
+    // by director.js for a sequence. On a page doing neither, none of it runs
+    // and `pinned` stays null.
     //
     // Every pattern in the index, in index order, with the reason the
     // rotation leaves it out if it does. `too solid` is only known once the
@@ -1351,6 +1422,7 @@
           : retired(p.slug) ? 'retired'
           : solid.indexOf(p.slug) >= 0 ? 'too solid'
           : rejected.indexOf(p.slug) >= 0 ? 'failed to load'
+          : skipped.indexOf(p.slug) >= 0 ? 'skipped this session'
           : 'in rotation',
         cached: cache.some(e => e.meta.slug === p.slug)
       }));
