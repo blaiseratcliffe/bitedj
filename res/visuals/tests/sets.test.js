@@ -457,3 +457,38 @@ for (const [label, entries] of [
     assert.equal(h.sets.next(all), null);
   });
 }
+
+// Part B final review.
+
+// Finding 2: with nothing in the loop able to play, replay() used to give
+// back the last intro, so it came back after every break in the music.
+test('after next() finds nothing, replay() is null until the loop can play, and never the intro again', () => {
+  const h = loadSeq([{ sketch: 'i', intro: true }, 'a']);
+  let ok = false;
+  const canPlay = (e) => e.intro || ok;
+  assert.equal(h.sets.next(canPlay).sketch, 'i');
+  assert.equal(h.sets.next(canPlay), null);
+  assert.equal(h.sets.replay(canPlay), null);
+  assert.equal(h.sets.replay(canPlay), null);
+  ok = true;
+  assert.equal(h.sets.replay(canPlay).sketch, 'a');
+});
+
+// Triage row 2b: an intro added by an edit before anything had been asked
+// for used to be passed over, because a walk with no intros counted as past
+// them at position 0.
+test('an edit before the first next() is a fresh start: an intro it adds plays', () => {
+  const h = loadSeq(['a', 'b']);
+  h.sets.update({ set: 2, setRev: 1 });
+  h.deliver(1, file([sequence(2, [{ sketch: 'i', intro: true }, 'a', 'b'])]));
+  assert.deepEqual(names(h.sets, 4), ['i', 'a', 'b', 'a']);
+});
+
+test('an edit after a restart, before the next next(), is a fresh start too', () => {
+  const h = loadSeq(['a', 'b']);
+  assert.deepEqual(names(h.sets, 3), ['a', 'b', 'a']);
+  h.sets.restart();
+  h.sets.update({ set: 2, setRev: 1 });
+  h.deliver(1, file([sequence(2, [{ sketch: 'i', intro: true }, 'a', 'b'])]));
+  assert.deepEqual(names(h.sets, 3), ['i', 'a', 'b']);
+});

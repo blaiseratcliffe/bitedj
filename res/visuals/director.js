@@ -182,6 +182,9 @@
   // end of whatever the previous set left on screen.
   let switchWanted = false;
   let wasSequence = false;
+  // Whether the show has asked the sequence for an entry (next() or
+  // replay()) since the switch into it. keepForResume() peeks until then.
+  let walked = false;
   // Whether "has nothing that can play" has been said since the last entry
   // landed; the rotation asks again every interval and once is enough.
   let nothingNoted = false;
@@ -217,12 +220,32 @@
     return patterns.library().some(p => p.slug === slug && p.cached);
   }
 
+  // An entry as its sketch reads it: a pattern only on a pattern sketch, a
+  // clip only on a video sketch (contract 1.1). The service and the editor
+  // never save anything else, but a hand-edited file can, and sets.js keeps
+  // both fields because it cannot see flags. Left on, a stray pattern held a
+  // plain sketch for 8 bars and then skipped it, and a stray clip ran the
+  // decoder for a sketch that never reads s8. Every entry the director takes
+  // from sets.js comes through here, so everything below, the switch line
+  // included, sees only what the sketch will use.
+  function asRead(e) {
+    if (!e) return e;
+    const s = sketchNamed(e.sketch);
+    return Object.assign({}, e, {
+      pattern: s && s.pattern ? e.pattern : null,
+      clip: s && s.video ? e.clip : null
+    });
+  }
+  const peekEntry = () => asRead(sets.peek(canPlayEntry));
+  function takeEntry() { walked = true; return asRead(sets.next(canPlayEntry)); }
+  function replayEntry() { walked = true; return asRead(sets.replay(canPlayEntry)); }
+
   // Starts loading the pattern of the next entry, so it is in the cache by
   // the time that entry is due. Called after each landing, and at a switch
   // into a sequence for entry 1.
   function prefetch() {
     if (!inSequence() || !window.patterns) return;
-    const up = sets.peek(canPlayEntry);
+    const up = peekEntry();
     if (up && up.pattern && patterns.pinned() !== up.pattern) {
       patterns.pin(up.pattern, (entry) => {
         if (!entry) console.log('visuals: pattern ' + up.pattern + ' could not be loaded for the sequence');
@@ -260,10 +283,10 @@
     const any = sets.peek(() => true);
     const total = any ? any.total : 0;
     for (let tries = 0; tries <= total; tries++) {
-      const e = sets.peek(canPlayEntry);
+      const e = peekEntry();
       if (!e || !e.pattern || patternReady(e.pattern)) {
         holdSince = -1;
-        showEntry(sets.next(canPlayEntry));
+        showEntry(takeEntry());
         return;
       }
       if (!manual) {
@@ -275,7 +298,7 @@
         }
         if (feed.beats - holdSince < HOLD_BEATS) return;
       }
-      sets.next(canPlayEntry);                // consume the entry being skipped
+      takeEntry();                            // consume the entry being skipped
       skipLine(e, manual ? '' : ' after 8 bars');
       holdSince = -1;
       manual = true;                          // one hold per switch, no more
@@ -297,7 +320,7 @@
   // entry on every call until something else is returned. Never silent: an
   // entry lost here used to be lost with no line, and an intro for good.
   function resumeEntry(manual) {
-    const e = sets.replay(canPlayEntry);
+    const e = replayEntry();
     if (!e || !e.pattern || patternReady(e.pattern)) {
       resuming = false; holdSince = -1;
       showEntry(e);
@@ -325,9 +348,14 @@
   // to keep: pinned, the cache cannot rotate it out during a long idle.
   // replay() is exactly what the resume will ask, and it answers the same
   // entry until something else is returned, so asking it now changes nothing.
+  // Except before the show has asked for any entry (a switch made as the
+  // music stopped, idle landing before the next beat): then replay() is
+  // next(), which would use up entry 1 here, so an edit that added an intro
+  // counted as mid-set and Next during that idle skipped entry 1. peek()
+  // answers the same entry without taking it.
   function keepForResume() {
     if (!window.patterns) return;
-    const e = sets.replay(canPlayEntry);
+    const e = walked ? replayEntry() : peekEntry();
     if (e && e.pattern && patterns.pinned() !== e.pattern) patterns.pin(e.pattern);
   }
 
@@ -928,6 +956,8 @@
         resuming = false;
         // A new set gets its own "has nothing that can play" line.
         nothingNoted = false;
+        // And a sequence coming in starts unwalked (sets.js starts it again).
+        walked = false;
       }
       if (left) {
         if (window.patterns) patterns.unpin();

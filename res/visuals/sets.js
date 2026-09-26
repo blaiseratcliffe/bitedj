@@ -59,7 +59,10 @@
     let allow = null;            // null: everything; else { sketches, patterns, clips } of Sets
     // The active sequence's entries, or null. `pos` is the index next()
     // starts looking from; `last` the index it returned last, or -1.
-    let entries = null, loopStart = 0, pos = 0, last = -1;
+    // `started`: next() has been called since the sequence came in or was
+    // restarted. Until then an edit is a fresh start, so an intro added
+    // before the music starts still plays.
+    let entries = null, loopStart = 0, pos = 0, last = -1, started = false;
 
     function notify(info) {
       listeners.forEach((fn) => {
@@ -70,7 +73,11 @@
     // Puts `next` in force and tells the listeners.
     function commit(next, nextAllow, reason, nextEntries) {
       const previousId = active.id;
-      const sameSequence = !!entries && !!nextEntries && next.id === previousId && reason === 'edit';
+      // An edit of a sequence the walk has not started is a fresh start
+      // rather than a place to keep: with no intros, position 0 would
+      // otherwise count as past them, and an intro the edit adds in front
+      // would never play.
+      const sameSequence = !!entries && !!nextEntries && next.id === previousId && reason === 'edit' && started;
       // Whether the walk had finished the intros, judged before the edit
       // moves loopStart.
       const pastIntros = pos >= loopStart;
@@ -97,10 +104,11 @@
         } else {
           pos = 0;
           last = -1;
+          started = false;
         }
       } else {
         entries = null;
-        loopStart = 0; pos = 0; last = -1;
+        loopStart = 0; pos = 0; last = -1; started = false;
       }
       notify({ id: active.id, previousId, type: active.type, reason });
     }
@@ -190,11 +198,17 @@
 
     // next() itself, shared with replay() so neither depends on `this`.
     function nextEntry(canPlay, call) {
+      started = true;
       const j = scan(canPlay, pos, call);
       if (j < 0) {
         // Intros that could not play are passed for good, even when nothing
         // after them can play either.
         if (pos < loopStart) pos = loopStart;
+        // Nothing is on screen from the sequence now, so nothing was
+        // interrupted and replay() has nothing to resume: it is next(),
+        // null while the loop cannot play. Keeping `last` gave back the last
+        // intro after every break in the music.
+        last = -1;
         return null;
       }
       last = j;
@@ -238,6 +252,7 @@
       restart() {
         pos = 0;
         last = -1;
+        started = false;
       },
       next(canPlay) {
         return nextEntry(canPlay, { logged: false });

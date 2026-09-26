@@ -473,3 +473,86 @@ test('leaving a sequence that had nothing to play shows the new set at once', ()
   p.run(3000);
   assert.ok(['tunnel', 'contours', 'logo-kaleid'].includes(p.current().name), 'still on ' + p.current().name);
 });
+
+// Part B final review from here on.
+
+const RND = { id: 1, name: 'Random', type: 'random', sketches: ['tunnel', 'contours', 'logo-kaleid'], patterns: [], clips: [], knobs: KNOBS };
+// The admin page saving sequence 2 as `entries`.
+function editSequence(p, entries, rev) {
+  p.files['sets.json'] = setsFile([{ id: 2, name: 'Opener', type: 'sequence', entries, knobs: KNOBS }, RND]);
+  p.ctx.feed.settings.setRev = rev;
+  p.run(1000);
+}
+
+// Finding 2: a valid sequence whose loop cannot play (a camera loop, no
+// camera) used to replay its intro after every break in the music.
+test('a loop that cannot play shows the idle sketch after a break, not the intro again', () => {
+  const p = seqPage([{ sketch: 'logo-kaleid', intro: true, bars: 2 }, { sketch: 'cam-edges' }]);
+  p.run(3000);
+  for (let i = 0; i < 3; i++) {
+    p.beats(80);                                // music
+    p.run(25000);                               // a break: idle
+  }
+  p.beats(10);
+  assert.deepEqual(entries(p), ['entry 1/2 logo-kaleid']);
+  assert.equal(p.current().name, 'idle-contours');
+});
+
+// Triage row 2b: gig prep. Pick the sequence while idle, then add an intro
+// on the phone before the music starts.
+test('an intro added by an edit after a switch made while idle plays first', () => {
+  const p = seqPage([{ sketch: 'tunnel' }, { sketch: 'contours' }], { settings: { set: 1 } });
+  p.run(3000);                                  // idle from boot, set 1
+  p.ctx.feed.settings.set = 2;
+  p.run(1000);
+  editSequence(p, [{ sketch: 'logo-kaleid', intro: true }, { sketch: 'tunnel' }, { sketch: 'contours' }], 7);
+  p.beats(120);
+  assert.deepEqual(entries(p).slice(0, 4), ['entry 1/3 logo-kaleid', 'entry 2/3 tunnel', 'entry 3/3 contours', 'entry 2/3 tunnel']);
+});
+
+// The same edit when the switch was made with the music playing and the
+// music stopped before the next beat: the idle landing must not use up
+// entry 1 while it keeps its pattern.
+test('an intro added after a switch made as the music stopped plays when it comes back', () => {
+  const p = seqPage([{ sketch: 'tunnel' }, { sketch: 'contours' }], { settings: { set: 1 } });
+  p.run(3000);
+  p.beats(30);                                  // the Random set playing
+  p.ctx.feed.settings.set = 2;                  // no beat follows
+  p.run(25000);                                 // idle lands
+  assert.equal(p.current().name, 'idle-contours');
+  editSequence(p, [{ sketch: 'logo-kaleid', intro: true }, { sketch: 'tunnel' }, { sketch: 'contours' }], 7);
+  p.beats(10);
+  p.run(3000);
+  assert.equal(entries(p)[0], 'entry 1/3 logo-kaleid', entries(p).join(', '));
+});
+
+// Triage row 5 (N1), which the same change closes: Next during that idle
+// used to skip entry 1 without a line.
+test('Next during idle after a switch made as the music stopped shows entry 1', () => {
+  const p = seqPage([{ sketch: 'logo-kaleid', intro: true }, { sketch: 'tunnel' }, { sketch: 'contours' }], { settings: { set: 1 } });
+  p.run(3000);
+  p.beats(30);
+  p.ctx.feed.settings.set = 2;
+  p.run(25000);
+  assert.equal(p.current().name, 'idle-contours');
+  p.ctx.feed.settings.next += 1;
+  p.run(4000);
+  assert.equal(entries(p)[0], 'entry 1/3 logo-kaleid', entries(p).join(', '));
+});
+
+// Finding 3: a hand-edited entry can carry a pattern or clip its sketch has
+// no flag for. The sketch never reads it, so it must neither hold a plain
+// sketch for a pattern nor start the decoder for a clip.
+test('a pattern or clip on an entry whose sketch has no flag for it is ignored', () => {
+  const pats = fakePatterns(['arcs_1'], []);
+  const vid = fakeVideo(['a.mp4']);
+  const p = seqPage([{ sketch: 'tunnel', clip: 'a.mp4' }, { sketch: 'contours', pattern: 'arcs_1' }], { patterns: pats, video: vid });
+  p.run(3000);
+  p.beats(80);
+  assert.deepEqual(vid.opened, []);
+  assert.deepEqual(pats.pins, []);
+  assert.ok(!p.logs.some(l => /holding|skipped/.test(l)), p.logs.filter(l => /holding|skipped/.test(l)).join('\n'));
+  assert.deepEqual(entries(p).slice(0, 3), ['entry 1/2 tunnel', 'entry 2/2 contours', 'entry 1/2 tunnel']);
+  assert.ok(p.logs.includes('visuals: set 2 "Opener" entry 1/2 tunnel'), entryLines(p).join('\n'));
+  assert.ok(p.logs.includes('visuals: set 2 "Opener" entry 2/2 contours'), entryLines(p).join('\n'));
+});
