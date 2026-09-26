@@ -308,4 +308,38 @@ function patternFixture(slugs, hang = []) {
   return { index, xhr };
 }
 
-module.exports = { loadPage, setsFile, plainSketches, patternFixture };
+// A stand-in for patterns.js with a controllable cache, for the director's
+// sequence tests. `cached` lists the slugs already loaded; pin() of anything
+// else loads until finishLoads(). Every pin is recorded in `pins`, and also
+// in `calls` when given, so a test can order it against the melt's still.
+function fakePatterns(slugs, cached = [], calls = null) {
+  const lib = slugs.map(slug => ({ slug, title: slug, status: 'in rotation', cached: cached.includes(slug) }));
+  let pinned = null, loading = null;
+  const waiting = [];
+  const pins = [];
+  return {
+    pins,
+    library: () => lib.map(p => Object.assign({}, p)),
+    pinned: () => pinned,
+    pinLoading: () => loading,
+    pin(slug, cb) {
+      pins.push(slug);
+      if (calls) calls.push('pin(' + slug + ')');
+      pinned = slug;
+      const p = lib.find(x => x.slug === slug);
+      if (!p) { pinned = null; if (cb) cb(null); return; }
+      if (p.cached) { loading = null; if (cb) cb({ slug }); return; }
+      loading = slug;
+      waiting.push(() => { p.cached = true; if (loading === slug) loading = null; if (cb) cb({ slug }); });
+    },
+    unpin() { pinned = null; loading = null; },
+    finishLoads() { waiting.splice(0).forEach(f => f()); },
+    setStatus(slug, status) { lib.find(x => x.slug === slug).status = status; },
+    ready: () => lib.some(p => p.cached),
+    take: () => null,
+    release() {},
+    setChanged() { return 0; }
+  };
+}
+
+module.exports = { loadPage, setsFile, plainSketches, patternFixture, fakePatterns };

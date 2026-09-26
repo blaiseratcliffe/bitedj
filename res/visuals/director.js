@@ -162,6 +162,178 @@
   function camOpen() { if (camImpl) camImpl.open(); else s0.initCam(0); }
   function camClose() { if (camImpl) camImpl.close(); else s0.clear(); }
 
+  // Sequences (visuals library Part B). A Sequence set is a running order
+  // that sets.js walks; the director asks it for the next entry wherever a
+  // Random set would call pickNext(), and remembers the entry on screen for
+  // its length and its log line. `entryPending` and `entryQueued` travel with
+  // `pending` and `queued` through show(), so an entry held behind a melt is
+  // still an entry when it lands.
+  let entryNow = null, entryPending = null, entryQueued = null;
+  // The entry whose clip show() already opened, so startPending() does not
+  // open it a second time.
+  let clipOpenedFor = null;
+  // feed.beats when a due switch began waiting for a pattern, or -1.
+  let holdSince = -1;
+  const HOLD_BEATS = 32;        // 8 bars
+  // Whether the hold under holdSince is a resume's, waiting on the first beat
+  // out of idle for the replayed entry's pattern (resumeEntry()).
+  let resuming = false;
+  // A switch into a sequence wants to happen on the next beat, not at the
+  // end of whatever the previous set left on screen.
+  let switchWanted = false;
+  let wasSequence = false;
+  // Whether "has nothing that can play" has been said since the last entry
+  // landed; the rotation asks again every interval and once is enough.
+  let nothingNoted = false;
+
+  const inSequence = () => !!window.sets && sets.isSequence();
+  const sketchNamed = (name) => window.sketches.find(s => s.name === name) || null;
+
+  // Whether an entry can play now. The pattern test takes the rotation's own
+  // exclusions (over size, retired, failed to load, skipped this session)
+  // but not "too solid", which is a verdict on the look: an entry that names
+  // the pattern has made its own.
+  const PLAYABLE_PATTERN = ['in rotation', 'too solid'];
+  function canPlayEntry(e) {
+    const s = sketchNamed(e.sketch);
+    if (!s) return false;
+    if (s.cam && !(window.camReady && feed.settings.camSketches === 1)) return false;
+    if (s.pattern) {
+      if (!window.patterns || feed.settings.patterns !== 1 || !e.pattern) return false;
+      const p = patterns.library().find(x => x.slug === e.pattern);
+      if (!p || PLAYABLE_PATTERN.indexOf(p.status) < 0) return false;
+    }
+    if (s.video) {
+      if (!window.video || !e.clip) return false;
+      if (!video.clips().some(c => c.file === e.clip)) return false;
+      if (video.failed().indexOf(e.clip) >= 0) return false;
+    }
+    return true;
+  }
+
+  function patternReady(slug) {
+    if (!window.patterns) return false;
+    if (patterns.pinLoading() === slug) return false;
+    return patterns.library().some(p => p.slug === slug && p.cached);
+  }
+
+  // Starts loading the pattern of the next entry, so it is in the cache by
+  // the time that entry is due. Called after each landing, and at a switch
+  // into a sequence for entry 1.
+  function prefetch() {
+    if (!inSequence() || !window.patterns) return;
+    const up = sets.peek(canPlayEntry);
+    if (up && up.pattern && patterns.pinned() !== up.pattern) {
+      patterns.pin(up.pattern, (entry) => {
+        if (!entry) console.log('visuals: pattern ' + up.pattern + ' could not be loaded for the sequence');
+      });
+    }
+  }
+
+  function skipLine(e, why) {
+    console.log('visuals: sets ' + sets.active().id + ' entry ' + e.index + '/' + e.total + ' '
+      + e.sketch + ' skipped, pattern ' + e.pattern + ' not loaded' + why);
+  }
+
+  function showEntry(e) {
+    if (!e) {
+      // Once is enough: the rotation keeps asking every switch interval, and
+      // melting the idle sketch into itself each time would be a visible pulse.
+      if (!nothingNoted) console.log('visuals: sets ' + sets.active().id + ' has nothing that can play');
+      nothingNoted = true;
+      if ((queued || pending || current) !== window.idleSketch) show(window.idleSketch);
+      return;
+    }
+    // The pattern is pinned in startPending(), at the landing; see there.
+    show(sketchNamed(e.sketch), e);
+  }
+
+  // The show's next move. Outside a sequence, the random pick. In one, the
+  // next entry: a due rotation (manual false) holds for a pattern that is
+  // not in the cache yet, for up to HOLD_BEATS; anything else (Next, a lost
+  // camera or clip, a setting that took the sketch away) skips it now.
+  function advance(manual) {
+    if (!inSequence()) { show(pickNext()); return; }
+    // A resume still waiting for its pattern answers first: the entry it is
+    // waiting for is the one this move is about.
+    if (resuming) { resumeEntry(manual); return; }
+    const any = sets.peek(() => true);
+    const total = any ? any.total : 0;
+    for (let tries = 0; tries <= total; tries++) {
+      const e = sets.peek(canPlayEntry);
+      if (!e || !e.pattern || patternReady(e.pattern)) {
+        holdSince = -1;
+        showEntry(sets.next(canPlayEntry));
+        return;
+      }
+      if (!manual) {
+        if (holdSince < 0) {
+          holdSince = feed.beats;
+          if (patterns.pinned() !== e.pattern) patterns.pin(e.pattern);
+          console.log('visuals: holding for pattern', e.pattern);
+          return;
+        }
+        if (feed.beats - holdSince < HOLD_BEATS) return;
+      }
+      sets.next(canPlayEntry);                // consume the entry being skipped
+      skipLine(e, manual ? '' : ' after 8 bars');
+      holdSince = -1;
+      manual = true;                          // one hold per switch, no more
+    }
+    // Every entry in a full pass was an unloaded pattern: keep what is on
+    // screen and try again on the next beat.
+    console.log('visuals: sets ' + sets.active().id + ' has no entry ready; holding');
+  }
+
+  // Leaving idle in a sequence: the entry that idle interrupted, again, or
+  // entry 1 after a switch made while idle. Its pattern can still be loading:
+  // a sequence picked before the music starts pins entry 1's pattern at the
+  // switch, and the first beat can come before the load lands. So a resume
+  // gets the hold a due rotation gets. The idle sketch stays up, every beat
+  // asks again (the rotation calls advance() while holdSince is set, and
+  // advance() comes back here while `resuming`), and after HOLD_BEATS the
+  // entry is skipped with the skip line; a manual move skips it at once, also
+  // with the line. Asking again is safe because replay() answers the same
+  // entry on every call until something else is returned. Never silent: an
+  // entry lost here used to be lost with no line, and an intro for good.
+  function resumeEntry(manual) {
+    const e = sets.replay(canPlayEntry);
+    if (!e || !e.pattern || patternReady(e.pattern)) {
+      resuming = false; holdSince = -1;
+      showEntry(e);
+      return;
+    }
+    if (!manual) {
+      // holdSince < 0 also when a landing reset it, which is the idle sketch
+      // melting in again after another 20 s without a beat: the hold starts over.
+      if (!resuming || holdSince < 0) {
+        resuming = true;
+        holdSince = feed.beats;
+        if (patterns.pinned() !== e.pattern) patterns.pin(e.pattern);
+        console.log('visuals: holding for pattern', e.pattern);
+        return;
+      }
+      if (feed.beats - holdSince < HOLD_BEATS) return;
+    }
+    resuming = false; holdSince = -1;
+    skipLine(e, manual ? '' : ' after 8 bars');
+    advance(true);
+  }
+
+  // The idle sketch has landed in a sequence. The first beat back replays
+  // the interrupted entry, so its pattern, not the next entry's, is the one
+  // to keep: pinned, the cache cannot rotate it out during a long idle.
+  // replay() is exactly what the resume will ask, and it answers the same
+  // entry until something else is returned, so asking it now changes nothing.
+  function keepForResume() {
+    if (!window.patterns) return;
+    const e = sets.replay(canPlayEntry);
+    if (e && e.pattern && patterns.pinned() !== e.pattern) patterns.pin(e.pattern);
+  }
+
+  const beatsForCurrent = () =>
+    (entryNow && inSequence() ? 4 * (entryNow.bars || feed.settings.bars || 16) : beatsPerSwitch());
+
   // Crossfade. `melt` is 1 the moment a new sketch starts and eases to 0 over
   // MELT_MS; `pending` holds a sketch whose snapshot frame has been armed but
   // not yet captured, and `queued` a request that arrived while all that was
@@ -221,7 +393,7 @@
         // camReady is false, a camMix sketch picked next runs plain, and
         // show() releases s0 on the way out.
         console.log('visuals: camera lost during', current.name);
-        show(pickNext());
+        advance(true);
       }
     }).catch(e => {
       if (camImpl) return;
@@ -294,10 +466,10 @@
       // interval below drops back to the idle sketch after IDLE_AFTER_MS
       // as usual, rather than the idle sketch just sitting there stale.
       idle = false; lastBeatAt = performance.now();
-      if (busy()) { nextPending = Math.min(nextPending + 1, 3); } else { show(pickNext()); }
+      if (busy()) { nextPending = Math.min(nextPending + 1, 3); } else { advance(true); }
       return;
     }
-    if (affected && !idle) { console.log('visuals: settings changed under', current.name); show(pickNext()); }
+    if (affected && !idle) { console.log('visuals: settings changed under', current.name); advance(true); }
   }
 
   // window.update, not hydra.synth.update: same makeGlobal mirroring as
@@ -365,7 +537,7 @@
       const s = queued || pending || current;
       if (s && (s.video || s.vidMix)) {
         console.log('visuals: video lost during', s.name);
-        show(pickNext());
+        advance(true);
       }
     });
   }
@@ -415,7 +587,7 @@
   // mix lands, about two and a tenth seconds later.
   function busy() { return melting || grabbing || swapNext; }
 
-  function show(sketch) {
+  function show(sketch, entry = null) {
     if (!sketch) { console.log('visuals: no sketch to show'); return; }
     // Nothing may start a crossfade on top of one that is already running.
     // The freeze, the swap and the mix are one sequence, and restarting it
@@ -424,7 +596,7 @@
     // two paths that come in from outside it, the feed returning from idle
     // and a camera disappearing, are exactly the ones that never retry. So
     // the request is held rather than dropped and endMelt() runs it.
-    if (busy()) { queued = sketch; return; }
+    if (busy()) { queued = sketch; entryQueued = entry; return; }
     // Camera lifecycle, decided here because this is the only place that sees
     // the switch itself. Done before the switch lands so the stream has the
     // crossfade to come up in. Both tests are the camInit flag against the
@@ -457,12 +629,22 @@
     // The video's half of the same decision. Opened here so the clip has the
     // crossfade to come up in; closed in startPending(), once the still has
     // been taken, for the reason in the header.
-    if (wantsVideo(sketch) && !video.isOpen()) video.open();
+    // A sequence's video entry names its clip and plays it from the start.
+    // With nothing open it opens here, so the clip has the melt to come up
+    // in; with a clip already on screen it opens in startPending(), once the
+    // still has been taken (see the header), because changing s8 now would
+    // put a blank or the new clip's first frame into the still.
+    if (entry && entry.clip && window.video) {
+      if (!video.isOpen()) { video.open(entry.clip); clipOpenedFor = entry; }
+    } else if (wantsVideo(sketch) && !video.isOpen()) {
+      video.open();
+    }
     // Arm the snapshot. The next rendered frame is copied into s3 by
     // grabStill() below and the switch happens on the frame after that.
     // Asking for a switch mid-melt snapshots the mix itself, so the picture
     // the new sketch melts out of is the one the eye was already on.
     pending = sketch;
+    entryPending = entry;
     grabbing = true;
   }
 
@@ -516,6 +698,7 @@
   function startPending() {
     const sketch = pending;
     pending = null;
+    const entry = entryPending; entryPending = null;
     if (!sketch) return;
     // A set change can land between show() and here. A sketch the set in
     // force no longer allows is dropped rather than melted in, and the show
@@ -524,10 +707,16 @@
     // and the still it grabs is the frame still on screen. Without this a
     // video sketch under a set with no clip landed on a closed, blank s8.
     if (sketch !== window.idleSketch && !setAllows(sketch)) {
-      const next = queued || pickNext();
-      queued = null;
+      // A queued request keeps its entry; with nothing queued, the show's next
+      // move, which in a sequence is the next entry rather than a random pick.
+      const next = queued, nextEntry = entryQueued;
+      queued = null; entryQueued = null;
       console.log('visuals: sets ' + sets.active().id + ' dropped ' + sketch.name + ' before it landed');
-      show(next);
+      // advance(false), not true: nothing has landed, so this is the due
+      // switch, and a switch into a sequence whose entry 1 pattern is still
+      // loading holds for it with the old sketch on screen, as the rotation
+      // would, rather than skipping entry 1 on the spot.
+      if (next) show(next, nextEntry); else advance(false);
       return;
     }
     clearScratch();
@@ -541,10 +730,25 @@
     // Drop the outgoing sketch's claim on its patterns, so the cache can
     // rotate. The textures it uploaded stay bound until something rebinds
     // them; this only releases the canvases behind them.
+    // A sequence entry's pattern is pinned here, at the landing, and not when
+    // the entry was asked for: a request held behind a melt must not move the
+    // pin under a pattern entry that is armed and about to run. take() in the
+    // sketch's run() below hands this pattern out. Pinned before release(),
+    // so the sweep in release() cannot evict it. Only while a sequence is in
+    // force: the change handler strips the entry from a switch still landing
+    // when the set changes, and this test is the second line, because a pin
+    // left behind under a Random set would hand that pattern to every
+    // pattern sketch for the rest of the session.
+    if (entry && entry.pattern && window.patterns && inSequence()) patterns.pin(entry.pattern);
     if (window.patterns) patterns.release();
     // The still of the outgoing frame is in s3 by now, so nothing on screen
     // reads s8 any more if the incoming sketch does not.
     if (window.video && !wantsVideo(sketch) && video.isOpen()) video.close();
+    // A named clip that show() left for now, because another was on screen.
+    if (entry && entry.clip && window.video && clipOpenedFor !== entry) {
+      video.open(entry.clip);
+      clipOpenedFor = entry;
+    }
     try {
       sketch.run();
     } catch (e) {
@@ -561,8 +765,25 @@
     // the page logs a line starting 'visuals: set <id> ' (sets.js and the
     // change handler below say 'visuals: sets '), so grepping for
     // 'visuals: set 2 ' gives every switch under set 2 and nothing more.
+    entryNow = entry;
     const inForce = window.sets ? sets.active() : { id: 0, name: 'Everything' };
-    console.log('visuals: set ' + inForce.id + ' ' + JSON.stringify(inForce.name) + ' ' + sketch.name);
+    if (entry) {
+      console.log('visuals: set ' + inForce.id + ' ' + JSON.stringify(inForce.name) + ' entry '
+        + entry.index + '/' + entry.total + ' ' + entry.sketch
+        + (entry.pattern ? ' ' + entry.pattern : '') + (entry.clip ? ' ' + entry.clip : ''));
+    } else {
+      console.log('visuals: set ' + inForce.id + ' ' + JSON.stringify(inForce.name) + ' ' + sketch.name);
+    }
+    // Only an entry answers a switch into a sequence. A sketch requested
+    // before the switch that lands after it must not cancel it, or entry 1
+    // waits a whole Switch every interval rather than the next beat.
+    if (entry) { switchWanted = false; nothingNoted = false; }
+    holdSince = -1;
+    // Next entry's pattern, loading while this one plays. The pattern this
+    // entry's run() just took is not `held` until its first bind on the next
+    // frame; patterns.js's drawing() protects it from this pin until then.
+    // The idle sketch keeps the interrupted entry's pattern instead.
+    if (sketch === window.idleSketch && inSequence()) keepForResume(); else prefetch();
     if (switchHook) {
       try { switchHook(sketch); } catch (e) { console.error('visuals: switch hook failed', e); }
     }
@@ -580,15 +801,15 @@
     // back on.
     solid(0, 0, 0, 0).out(o2);
     if (queued) {
-      const next = queued;
-      queued = null;
-      show(next);
+      const next = queued, nextEntry = entryQueued;
+      queued = null; entryQueued = null;
+      show(next, nextEntry);
     } else if (nextPending > 0) {
       // Drain one counted tap per melt end. pickNext() runs now, not at tap
       // time, so a settings change that landed during the wait is already
       // reflected in what the drained melt shows.
       nextPending -= 1;
-      show(pickNext());
+      advance(true);
     }
   }
 
@@ -602,7 +823,9 @@
     // the mock feed would replace ?sketch=NAME half a second after it landed.
     if (idle) {
       idle = false;
-      if (!paused || (current === window.idleSketch && !queued && !pending)) show(pickNext());
+      if (!paused || (current === window.idleSketch && !queued && !pending)) {
+        if (inSequence()) resumeEntry(false); else show(pickNext());
+      }
       return;
     }
     // Preview mode holds the sketch until someone moves it. Leaving idle
@@ -615,9 +838,8 @@
     // that lands while busy() is true is not lost here; the switch happens
     // on the next beat instead.
     if (busy()) return;
-    if (feed.beats - currentSinceBeat >= beatsPerSwitch() && performance.now() - currentSince > MIN_SKETCH_MS) {
-      show(pickNext());
-    }
+    const due = feed.beats - currentSinceBeat >= beatsForCurrent() && performance.now() - currentSince > MIN_SKETCH_MS;
+    if (switchWanted || due || holdSince >= 0) advance(false);
   });
 
   // Falling into idle, and nothing else: the idle sketch stays up until a
@@ -692,8 +914,49 @@
       if (window.patterns && patterns.setChanged) patterns.setChanged();
       const a = sets.active();
       console.log('visuals: sets ' + a.id + ' ' + JSON.stringify(a.name) + ' in force (' + info.reason + ')');
+      const seq = inSequence();
+      const left = wasSequence && !seq;
+      // A switch, or the file going unreadable under a sequence, forgets the
+      // entry of a switch still landing or queued. The sketch still lands,
+      // but as a plain sketch: an entry of the old set landing under the new
+      // one would pin its pattern where no sequence will ever unpin it, log
+      // itself as one of the new set's entries, and answer a new sequence's
+      // switch, so the new entry 1 would wait a whole entry. The drop before
+      // landing and the Random rule below judge the plain sketch as usual.
+      if (info.reason === 'switch' || left) {
+        entryPending = null; entryQueued = null;
+        resuming = false;
+        // A new set gets its own "has nothing that can play" line.
+        nothingNoted = false;
+      }
+      if (left) {
+        if (window.patterns) patterns.unpin();
+        entryNow = null; holdSince = -1; switchWanted = false;
+      }
+      wasSequence = seq;
+      if (seq) {
+        if (info.reason === 'switch') {
+          sets.restart();
+          holdSince = -1;
+          // Entry 1's pattern starts loading now rather than at the first
+          // beat, which is most of the wait for it.
+          prefetch();
+          // While idle, the first beat out of idle shows entry 1 (replay
+          // before any next() is next()); otherwise the next beat does.
+          if (!idle) switchWanted = true;
+        }
+        return;
+      }
       if (idle) return;
       const target = queued || pending || current;
+      // The sequence left behind the idle sketch with the music playing
+      // (nothing in it could play, or a resume was holding for a pattern).
+      // The Random rule below never moves the idle sketch, which would stay
+      // up until the next due switch, so the new set starts now.
+      if (left && target === window.idleSketch) {
+        show(pickNext());
+        return;
+      }
       if (target && target !== window.idleSketch && !setAllows(target)) {
         console.log('visuals: sets ' + a.id + ' leaves out ' + target.name);
         show(pickNext());
