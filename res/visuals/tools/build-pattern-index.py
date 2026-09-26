@@ -36,22 +36,56 @@ from the files rather than assumed:
           it out on size and backpack-grid and masked_letter_grid because it
           keeps them out on coverage, so five of them are on screen with a
           flattened sweep end.
+  cover   the default frame's lit fraction, 0 to 1 rounded to four decimals,
+          or null when Chrome could not measure it. The service cannot
+          rasterise SVG, so this script measures it instead, in headless
+          Chrome, with the page's own code (patterns.measureCover(), which
+          calls the same svgDoc() rewrite, the same SIZE canvas on black and
+          the same coverage() the page's own loader uses). The admin service
+          leaves out of its library any pattern whose cover is over COVER_MAX
+          (Decision 34, plan task A21): patterns.js already leaves such a
+          pattern out of the rotation, and without this the service still
+          listed it, let a Random set tick it, and counted it toward the
+          set's minimum, so a set could pass validation on a pattern the TV
+          never draws. This step needs Chrome or Edge on the PC: pass
+          --chrome PATH, set $CHROME, or install one of Google Chrome or
+          Microsoft Edge at their usual Windows locations.
 """
 
+import argparse
 import json
 import os
+import pathlib
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PATTERNS = os.path.join(ROOT, 'assets', 'patterns')
 SRC = os.path.join(PATTERNS, 'index.json')
 DST = os.path.join(PATTERNS, 'index.js')
+MEASURE_PAGE = os.path.join(HERE, 'measure-cover.html')
 
 # Every real pattern export carries this class on its root <svg>. The
 # placeholder icon does not, which is the only reliable way to tell them apart:
 # the icon is also valid SVG and also has a viewBox.
 MARK = 'svg-preview'
+
+# The same ceiling patterns.js gates the rotation on (COVER_MAX,
+# bitedj/res/visuals/patterns.js:501); only used here to print a summary.
+COVER_MAX = 0.30
+
+# Chrome/Edge candidates on a Windows dev PC, tried after --chrome and $CHROME.
+CHROME_PATHS = (
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+)
+CHROME_NAMES = ('google-chrome', 'chromium', 'chromium-browser')
+
+OUT_RE = re.compile(r'<pre id="out">(.*?)</pre>', re.S)
 
 
 def read_head(path, n=4096):
@@ -59,7 +93,59 @@ def read_head(path, n=4096):
         return f.read(n)
 
 
+def find_chrome(explicit):
+    """--chrome, else $CHROME, else the first of the usual install paths or
+    PATH names that exists. None when nothing was found."""
+    if explicit:
+        return explicit
+    if os.environ.get('CHROME'):
+        return os.environ['CHROME']
+    for path in CHROME_PATHS:
+        if os.path.exists(path):
+            return path
+    for name in CHROME_NAMES:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def measure_covers(chrome):
+    """{slug: cover or None}, read from the "COVER {...}" tools/measure-cover.html
+    writes into its <pre id="out"> once every pattern in the index it loaded
+    has been measured (Decision 34). A fresh --user-data-dir every run, so
+    this never attaches to a Chrome the person has open."""
+    url = pathlib.Path(MEASURE_PAGE).as_uri()
+    user_data_dir = tempfile.mkdtemp(prefix='bitedj-measure-cover-')
+    try:
+        r = subprocess.run([
+            chrome, '--headless=new', '--disable-gpu',
+            '--allow-file-access-from-files',
+            '--user-data-dir=' + user_data_dir,
+            '--virtual-time-budget=120000',
+            '--dump-dom', url,
+        ], capture_output=True, text=True, timeout=300)
+    finally:
+        shutil.rmtree(user_data_dir, ignore_errors=True)
+    m = OUT_RE.search(r.stdout)
+    text = m.group(1).strip() if m else ''
+    if text == 'measuring' or not text:
+        sys.exit('Chrome dumped tools/measure-cover.html before it finished measuring; '
+                  'try again or raise --virtual-time-budget')
+    if not text.startswith('COVER '):
+        sys.exit('tools/measure-cover.html wrote something unexpected: %s' % text[:200])
+    try:
+        return json.loads(text[len('COVER '):])
+    except ValueError as e:
+        sys.exit('tools/measure-cover.html wrote invalid JSON: %s' % e)
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chrome', help='path to a Chrome or Edge binary; '
+                        'else $CHROME, else the usual install paths')
+    opts = parser.parse_args()
+
     if not os.path.exists(SRC):
         sys.exit('no %s; the pattern assets are not in place' % SRC)
     with open(SRC, encoding='utf-8') as f:
@@ -128,6 +214,27 @@ def main():
     heavy = sorted(out, key=lambda p: -p['frame'])[:6]
     print('  biggest single frames: %s'
           % ', '.join('%s %.2f MB' % (p['slug'], p['frame'] / 1e6) for p in heavy))
+
+    chrome = find_chrome(opts.chrome)
+    if not chrome:
+        sys.exit('no Chrome or Edge found; pass --chrome PATH or set $CHROME '
+                  '(index.js was written without "cover")')
+    covers = measure_covers(chrome)
+    for entry in out:
+        entry['cover'] = covers.get(entry['slug'])
+
+    body = json.dumps(out, separators=(',', ':'))
+    with open(DST, 'w', encoding='utf-8', newline='\n') as f:
+        f.write('// Generated by tools/build-pattern-index.py. Do not edit.\n')
+        f.write('window.patternIndex = %s;\n' % body)
+
+    over = sorted((p for p in out if isinstance(p['cover'], (int, float)) and p['cover'] > COVER_MAX),
+                  key=lambda p: -p['cover'])
+    nulls = [p['slug'] for p in out if p['cover'] is None]
+    print('  %d over %.2f lit: %s' % (len(over), COVER_MAX,
+          ', '.join('%s %.1f' % (p['slug'], 100 * p['cover']) for p in over) or 'none'))
+    if nulls:
+        print('  could not measure: %s' % ', '.join(nulls))
 
 
 if __name__ == '__main__':

@@ -1381,6 +1381,41 @@
 
     pinned() { return pinned; },
     pinLoading() { return pinJob || pinWait ? pinned : null; },
-    taken() { return taken.slice(); }
+    taken() { return taken.slice(); },
+
+    // The default frame's lit fraction, measured the way load() measures it:
+    // the same svgDoc() rewrite, the same SIZE canvas on black, the same
+    // coverage(). Only tools/measure-cover.html calls it, so that
+    // build-pattern-index.py can write the figure into the index and the
+    // admin service can leave out what COVER_MAX keeps off the screen without
+    // rasterising anything itself (Decision 34). done(fraction), or done(null)
+    // when the fetch or the decode fails.
+    measureCover(meta, done) {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', BASE + meta.frames[6], true);
+      xhr.onerror = () => done(null);
+      xhr.onload = () => {
+        const doc = svgDoc(xhr.responseText || '', meta.wire);
+        if (!doc) { done(null); return; }
+        const url = URL.createObjectURL(new Blob([doc], { type: 'image/svg+xml' }));
+        const img = new Image();
+        img.onerror = () => { URL.revokeObjectURL(url); done(null); };
+        img.onload = () => {
+          const cv = document.createElement('canvas');
+          cv.width = SIZE; cv.height = SIZE;
+          const ctx = cv.getContext('2d');
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, SIZE, SIZE);
+          ctx.drawImage(img, 0, 0, SIZE, SIZE);
+          URL.revokeObjectURL(url);
+          const lit = coverage(cv);
+          cv.width = 1; cv.height = 1;
+          done(lit);
+        };
+        img.src = url;
+      };
+      xhr.send();
+    },
+    coverMax: COVER_MAX,
   };
 })();
