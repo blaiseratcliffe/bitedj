@@ -8,7 +8,11 @@
 
 #include "test/mixxxtest.h"
 
+using mixxx::rekordbox::beginHealthCheck;
+using mixxx::rekordbox::cancelHealthChecksUnderPath;
 using mixxx::rekordbox::checkTrackFiles;
+using mixxx::rekordbox::endHealthCheck;
+using mixxx::rekordbox::HealthCheckToken;
 using mixxx::rekordbox::TrackHealth;
 using mixxx::rekordbox::TrackProblem;
 
@@ -102,14 +106,36 @@ TEST_F(RekordboxTrackHealthTest, ZeroedExtIsAnalysisDamaged) {
     EXPECT_EQ(m_extPath, health.badPath);
 }
 
-TEST_F(RekordboxTrackHealthTest, Truncated2ExIsAnalysisDamaged) {
+TEST_F(RekordboxTrackHealthTest, Truncated2ExIsWaveformDamaged) {
+    // The .2EX holds only the three band waveform; cues and grid are fine.
     writeAudio();
     writeAllGoodAnlz();
     writeFile(m_2exPath, QByteArrayLiteral("PM"));
 
     const TrackHealth health = checkTrackFiles(m_audioPath, m_datPath);
-    EXPECT_EQ(TrackProblem::AnalysisDamaged, health.problem);
+    EXPECT_EQ(TrackProblem::WaveformDamaged, health.problem);
     EXPECT_EQ(m_2exPath, health.badPath);
+}
+
+TEST_F(RekordboxTrackHealthTest, DamagedExtWinsOverDamaged2Ex) {
+    writeAudio();
+    writeAllGoodAnlz();
+    writeFile(m_extPath, QByteArrayLiteral("PM"));
+    writeFile(m_2exPath, QByteArrayLiteral("PM"));
+
+    const TrackHealth health = checkTrackFiles(m_audioPath, m_datPath);
+    EXPECT_EQ(TrackProblem::AnalysisDamaged, health.problem);
+    EXPECT_EQ(m_extPath, health.badPath);
+}
+
+TEST_F(RekordboxTrackHealthTest, NoAnalysisPathIsNotDamage) {
+    // A PDB with an empty analyze_path leaves the device's directory in the
+    // row. It exists and cannot be read as a file, and is still not damage.
+    writeAudio();
+
+    const TrackHealth health = checkTrackFiles(m_audioPath, m_tempDir.path());
+    EXPECT_EQ(TrackProblem::None, health.problem);
+    EXPECT_TRUE(health.badPath.isEmpty());
 }
 
 TEST_F(RekordboxTrackHealthTest, MissingAudioWinsOverDamagedAnalysis) {
@@ -121,4 +147,57 @@ TEST_F(RekordboxTrackHealthTest, MissingAudioWinsOverDamagedAnalysis) {
     const TrackHealth health = checkTrackFiles(m_audioPath, m_datPath);
     EXPECT_EQ(TrackProblem::AudioMissing, health.problem);
     EXPECT_EQ(m_audioPath, health.badPath);
+}
+
+// The registry an eject uses to stop a check before it unmounts. It is
+// process-wide, so every test here ends the checks it begins.
+
+TEST(RekordboxHealthCheckRegistryTest, CancelStopsCheckOnThatPath) {
+    const HealthCheckToken token = beginHealthCheck(QStringLiteral("/media/blaise/Lexar"));
+    EXPECT_FALSE(token->load());
+
+    // SystemSettings may name the mount point with a trailing slash.
+    cancelHealthChecksUnderPath(QStringLiteral("/media/blaise/Lexar/"));
+    EXPECT_TRUE(token->load());
+
+    endHealthCheck(token);
+}
+
+TEST(RekordboxHealthCheckRegistryTest, CancelStopsCheckUnderThatPath) {
+    const HealthCheckToken token =
+            beginHealthCheck(QStringLiteral("/media/blaise/Lexar/export"));
+
+    cancelHealthChecksUnderPath(QStringLiteral("/media/blaise/Lexar"));
+    EXPECT_TRUE(token->load());
+
+    endHealthCheck(token);
+}
+
+TEST(RekordboxHealthCheckRegistryTest, CancelLeavesSiblingWithCommonPrefix) {
+    const HealthCheckToken lexar = beginHealthCheck(QStringLiteral("/media/blaise/Lexar"));
+    const HealthCheckToken lexar2 = beginHealthCheck(QStringLiteral("/media/blaise/Lexar2"));
+
+    cancelHealthChecksUnderPath(QStringLiteral("/media/blaise/Lexar"));
+    EXPECT_TRUE(lexar->load());
+    EXPECT_FALSE(lexar2->load());
+
+    endHealthCheck(lexar);
+    endHealthCheck(lexar2);
+}
+
+TEST(RekordboxHealthCheckRegistryTest, CancelAfterEndLeavesTokenAlone) {
+    const HealthCheckToken token = beginHealthCheck(QStringLiteral("/media/blaise/Lexar"));
+    endHealthCheck(token);
+
+    cancelHealthChecksUnderPath(QStringLiteral("/media/blaise/Lexar"));
+    EXPECT_FALSE(token->load());
+}
+
+TEST(RekordboxHealthCheckRegistryTest, EmptyMountPointCancelsNothing) {
+    const HealthCheckToken token = beginHealthCheck(QStringLiteral("/media/blaise/Lexar"));
+
+    cancelHealthChecksUnderPath(QString());
+    EXPECT_FALSE(token->load());
+
+    endHealthCheck(token);
 }

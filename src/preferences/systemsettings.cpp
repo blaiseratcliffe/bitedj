@@ -18,6 +18,7 @@
 #include "encoder/encodermp3settings.h"
 #include "library/dao/fsanalysiscache.h"
 #include "library/dao/fshistoryworker.h"
+#include "library/rekordbox/rekordboxtrackhealth.h"
 #include "mixer/basetrackplayer.h"
 #include "mixer/playermanager.h"
 #include "mixer/samplerdrive.h"
@@ -709,6 +710,11 @@ bool SystemSettings::ejectMountPoint(const QString& mountPoint,
     // filesystem busy and makes umount fail EBUSY. Cancelling lets the worker
     // release the descriptor before the retry loop below attempts the unmount.
     TrackAnalysisScheduler::cancelAnalysisUnderPath(mountPoint);
+
+    // The same for a rekordbox health check reading this stick's files after
+    // its parse. It holds each file for one 4 byte read, so once it stops the
+    // retry loop below covers the last one closing.
+    mixxx::rekordbox::cancelHealthChecksUnderPath(mountPoint);
 
     // Let any history append that is still queued for this drive reach it
     // before the filesystem goes away: the write is deliberately off the GUI

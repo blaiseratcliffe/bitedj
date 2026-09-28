@@ -266,6 +266,12 @@ TEST_F(PlayedTracksTest, RekordboxProblemColoursTheRow) {
     EXPECT_EQ(QColor(WTrackTableView::kDefaultTrackMissingColor),
             missing.value<QColor>());
 
+    // 3 is a damaged .2EX: the track plays with the app's own waveform, so it
+    // is logged but not marked.
+    setProblem(QStringLiteral("3"));
+    EXPECT_FALSE(model.data(titleIndex, Qt::ForegroundRole)
+                         .canConvert<QColor>());
+
     setProblem(QStringLiteral("0"));
     EXPECT_FALSE(model.data(titleIndex, Qt::ForegroundRole)
                          .canConvert<QColor>());

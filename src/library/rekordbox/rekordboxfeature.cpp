@@ -1013,6 +1013,8 @@ const char* healthProblemName(mixxx::rekordbox::TrackProblem problem) {
         return "audio missing";
     case mixxx::rekordbox::TrackProblem::AnalysisDamaged:
         return "analysis damaged";
+    case mixxx::rekordbox::TrackProblem::WaveformDamaged:
+        return "waveform damaged";
     }
     return "unknown";
 }
@@ -1022,10 +1024,12 @@ const char* healthProblemName(mixxx::rekordbox::TrackProblem problem) {
 // each track's files; see checkTrackFiles() for what counts as a problem.
 // Read-only on the database, and holds no TreeItem, so a device ejected
 // mid-check leaves it nothing to trip over: its file checks fail fast and
-// onHealthChecked() drops the result.
+// onHealthChecked() drops the result. `cancel` is looked at before every
+// track, so an eject (or shutdown) stops it within one track's files.
 RekordboxFeature::HealthReport checkDeviceHealth(
         mixxx::DbConnectionPoolPtr dbConnectionPool,
-        const QString& label) {
+        const QString& label,
+        const mixxx::rekordbox::HealthCheckToken& cancel) {
     QElapsedTimer timer;
     timer.start();
 
@@ -1075,6 +1079,13 @@ RekordboxFeature::HealthReport checkDeviceHealth(
     report.trackCount = static_cast<int>(rows.size());
 
     for (TrackRow& row : rows) {
+        if (cancel->load()) {
+            // An eject is waiting to unmount, or the app is closing, so stop
+            // opening files on the stick. onHealthChecked() drops this
+            // partial report.
+            report.cancelled = true;
+            break;
+        }
         const mixxx::rekordbox::TrackHealth health =
                 mixxx::rekordbox::checkTrackFiles(row.track.location, row.anlzDatPath);
         if (health.problem == mixxx::rekordbox::TrackProblem::None) {
@@ -1849,7 +1860,16 @@ RekordboxFeature::~RekordboxFeature() {
     m_tracksFuture.waitForFinished();
     m_bgDevicesFuture.waitForFinished();
     m_bgTracksFuture.waitForFinished();
+    // A check of a cold stick can take many seconds, and its result is about
+    // to be thrown away with the tables, so stop it rather than wait it out.
+    if (m_healthCancel) {
+        m_healthCancel->store(true);
+    }
     m_healthFuture.waitForFinished();
+    if (m_healthCancel) {
+        mixxx::rekordbox::endHealthCheck(m_healthCancel);
+        m_healthCancel.reset();
+    }
 
     // Drop temporary Rekordbox database tables on shutdown
     QSqlDatabase database = m_pTrackCollection->database();
@@ -2547,20 +2567,46 @@ void RekordboxFeature::pumpHealthQueue() {
     if (m_bgParseInFlight || m_tracksFutureWatcher.isRunning()) {
         return;
     }
-    const QString label = m_healthQueue.takeFirst();
-    m_healthFuture = QtConcurrent::run(checkDeviceHealth,
-            static_cast<Library*>(parent())->dbConnectionPool(),
-            label);
-    m_healthFutureWatcher.setFuture(m_healthFuture);
-    m_healthInFlight = true;
-    m_healthLabel = label;
-    m_healthAbandoned = false;
+    while (!m_healthQueue.isEmpty()) {
+        const QString label = m_healthQueue.takeFirst();
+        // The check is registered under the device's mount directory, because
+        // that is what an eject names when it asks for the stick to be let go.
+        const TreeItem* pDevice = findDeviceByLabel(label);
+        if (!pDevice) {
+            if (const StagedDevice* pStagedDevice = findStagedDevice(label)) {
+                pDevice = pStagedDevice->pItem.get();
+            }
+        }
+        const QList<QVariant> data = pDevice ? pDevice->getData().toList() : QList<QVariant>();
+        const QString devicePath = data.isEmpty() ? QString() : data[0].toString();
+        if (devicePath.isEmpty()) {
+            // A check that an eject could not stop would hold the stick busy,
+            // so none is better than that.
+            qWarning() << "Rekordbox health:" << label << "has no device path, check skipped";
+            continue;
+        }
+        m_healthCancel = mixxx::rekordbox::beginHealthCheck(devicePath);
+        m_healthFuture = QtConcurrent::run(checkDeviceHealth,
+                static_cast<Library*>(parent())->dbConnectionPool(),
+                label,
+                m_healthCancel);
+        m_healthFutureWatcher.setFuture(m_healthFuture);
+        m_healthInFlight = true;
+        m_healthLabel = label;
+        m_healthAbandoned = false;
+        return;
+    }
 }
 
 void RekordboxFeature::abandonHealthCheck(const QString& label) {
     m_healthQueue.removeAll(label);
     if (m_healthInFlight && m_healthLabel == label) {
         m_healthAbandoned = true;
+        // Its result is going to be dropped, so there is no point in it
+        // reading the rest of a stick that is going away.
+        if (m_healthCancel) {
+            m_healthCancel->store(true);
+        }
     }
 }
 
@@ -2570,6 +2616,10 @@ void RekordboxFeature::onHealthChecked() {
     m_healthInFlight = false;
     m_healthLabel.clear();
     m_healthAbandoned = false;
+    if (m_healthCancel) {
+        mixxx::rekordbox::endHealthCheck(m_healthCancel);
+        m_healthCancel.reset();
+    }
 
     HealthReport report;
     bool haveReport = true;
@@ -2584,6 +2634,11 @@ void RekordboxFeature::onHealthChecked() {
         // The device went away mid-check. Its rows are gone, and if it came
         // back its re-parse has queued a fresh check of its own.
         qWarning() << "Rekordbox health:" << label << "removed mid-check, result dropped";
+    } else if (haveReport && report.cancelled) {
+        // Stopped by an eject before the unmount. The tracks it never reached
+        // would be marked fine and the ones it did may already be unreadable,
+        // so none of it is trusted.
+        qWarning() << "Rekordbox health:" << label << "cancelled, result dropped";
     } else if (haveReport) {
         applyHealthReport(report);
     }
@@ -2599,9 +2654,14 @@ void RekordboxFeature::applyHealthReport(const HealthReport& report) {
         QSqlDatabase database = m_pTrackCollection->database();
         ScopedTransaction transaction(database);
         QSqlQuery update(database);
-        // `device` as well as `id`: ids are AUTOINCREMENT, so a device that
-        // was removed and parsed again in the meantime has new ones, and a
-        // stale report marks nothing rather than someone else's track.
+        // The ids alone do not make a stale report harmless. A full teardown
+        // in mergeFoundDevicesIntoSidebar() drops and recreates the table,
+        // which restarts SQLite's id sequence, so a device parsed again can
+        // get ids another report already holds. What keeps a stale report
+        // out is that every path that removes or tears down a device calls
+        // abandonHealthCheck() first, and an eject cancels the check before
+        // it unmounts; either way onHealthChecked() drops the result.
+        // `device` as well as `id` is only belt and braces on top of that.
         update.prepare(QStringLiteral("UPDATE ") + kRekordboxLibraryTable +
                 QStringLiteral(" SET problem=:problem WHERE id=:id AND device=:device"));
         for (const BadTrack& track : report.badTracks) {
@@ -2634,33 +2694,42 @@ void RekordboxFeature::applyHealthReport(const HealthReport& report) {
     // Rows already on screen take their colour now.
     refreshScannedTracks(trackIds);
 
-    if (problemCount == 0) {
+    // The notice is only for tracks that will not load properly. A damaged
+    // .2EX costs nothing but the rekordbox waveform, which the app replaces
+    // with its own, so it is logged above and left out here; it is not
+    // coloured in the list either.
+    int noticeCount = 0;
+    QStringList titles;
+    for (const BadTrack& track : report.badTracks) {
+        if (track.problem != mixxx::rekordbox::TrackProblem::AudioMissing &&
+                track.problem != mixxx::rekordbox::TrackProblem::AnalysisDamaged) {
+            continue;
+        }
+        ++noticeCount;
+        if (titles.size() < kHealthNoticeMaxTitles) {
+            titles.append(track.title.isEmpty()
+                            ? QFileInfo(track.location).fileName()
+                            : track.title);
+        }
+    }
+    if (noticeCount == 0) {
         return;
     }
     Notifications* pNotifications = Notifications::tryInstance();
     if (!pNotifications) {
         return;
     }
-    QStringList titles;
-    for (const BadTrack& track : report.badTracks) {
-        if (titles.size() == kHealthNoticeMaxTitles) {
-            break;
-        }
-        titles.append(track.title.isEmpty()
-                        ? QFileInfo(track.location).fileName()
-                        : track.title);
-    }
     QString names = titles.join(QStringLiteral(", "));
-    if (problemCount > kHealthNoticeMaxTitles) {
-        names += tr(" +%1 more").arg(problemCount - kHealthNoticeMaxTitles);
+    if (noticeCount > kHealthNoticeMaxTitles) {
+        names += tr(" +%1 more").arg(noticeCount - kHealthNoticeMaxTitles);
     }
     // Sticky, because this is read before a set, when a 5 second notice is
     // easy to miss. A tap on the strip clears it.
-    const QString message = problemCount == 1
+    const QString message = noticeCount == 1
             ? tr("%1: 1 track may not load properly (marked in list): %2")
                       .arg(report.label, names)
             : tr("%1: %2 tracks may not load properly (marked in list): %3")
-                      .arg(report.label, QString::number(problemCount), names);
+                      .arg(report.label, QString::number(noticeCount), names);
     pNotifications->publishSticky(message, Notifications::Severity::Warning);
 }
 

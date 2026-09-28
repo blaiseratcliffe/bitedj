@@ -24,8 +24,8 @@ namespace rekordbox {
 ///
 /// Returns false when nothing was imported: the file does not exist, or it
 /// could not be parsed (a damaged file is logged and skipped, never thrown
-/// out of here). getTrack() uses that to take cues from the `.DAT` when the
-/// `.EXT` is damaged.
+/// out of here). readAnalyzeFiles() uses that to take cues from the `.DAT`
+/// when the `.EXT` is damaged.
 ///
 /// Declared here rather than kept file-local so that it can be tested
 /// directly; the definition lives in rekordboxfeature.cpp.

@@ -110,6 +110,10 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
         qint64 elapsedMs = 0;
         // Only the tracks with a problem.
         QList<BadTrack> badTracks;
+        // Stopped part way, by an eject or by shutdown. What it found is
+        // partial, and on a stick being pulled everything past that point
+        // would read as missing, so the report is never applied.
+        bool cancelled = false;
     };
 
   public slots:
@@ -228,8 +232,13 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
     // Label of the device the running check is reading.
     QString m_healthLabel;
     // Set when that device is removed mid-check. The worker holds nothing
-    // an eject can free, so it is left to finish and its result is dropped.
+    // an eject can free, so it is left to finish (an eject also stops it
+    // early, see m_healthCancel) and its result is dropped.
     bool m_healthAbandoned = false;
+    // The running check's stop flag, registered under the device's path so
+    // an eject can stop it before unmounting (see
+    // mixxx::rekordbox::cancelHealthChecksUnderPath). Null when none runs.
+    mixxx::rekordbox::HealthCheckToken m_healthCancel;
 
     QSharedPointer<BaseTrackCache> m_trackSource;
 };
