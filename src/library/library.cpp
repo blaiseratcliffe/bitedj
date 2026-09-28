@@ -481,6 +481,12 @@ void Library::bindLibraryWidget(
             &WTrackTableView::loadTrack,
             this,
             &Library::slotLoadTrack);
+    // Bite DJ: connected after slotLoadTrack, so it runs once the load has
+    // been offered to the decks, and returns to Play if one took it.
+    connect(pTrackTableView,
+            &WTrackTableView::loadTrack,
+            m_pLibraryControl,
+            &LibraryControl::slotTrackTableLoadRequested);
     connect(pTrackTableView,
             &WTrackTableView::loadTrackToPlayer,
             this,

@@ -44,8 +44,9 @@ bool bitedj_isLibraryPageActive() {
 }
 
 // Bite DJ: after a track loads onto a deck from Browse, go back to Play, as a
-// CDJ does. Page 0 of the BiteDJ-FLX6 tab stack is Play. Ported from upstream
-// d10e817 (Kyohei17). No-op on a skin without the [Tab] stack.
+// CDJ does. Page 0 of the BiteDJ tab stacks is Play. Ported from upstream
+// d10e817 (Kyohei17). ControllerSettings creates [Tab],current whatever the
+// skin, so on a skin without a stack this write simply has no listener.
 void bitedj_showPlayPage() {
     ControlObject* pCurrent = ControlObject::getControl(
             ConfigKey(QStringLiteral("[Tab]"), QStringLiteral("current")),
@@ -644,6 +645,22 @@ void LibraryControl::slotLoadSelectedTrackToGroup(const QString& group, bool pla
 
     if (loadRequested && PlayerManager::isDeckGroup(group)) {
         bitedj_showPlayPage();
+    }
+}
+
+void LibraryControl::slotTrackTableLoadRequested() {
+    // PlayerManager::slotLoadTrackIntoNextAvailableDeck takes the first deck
+    // whose play is 0 and drops the load when every deck is playing. A load
+    // never starts a deck, so a stopped deck now means one took the track.
+    const int numDecks = static_cast<int>(m_numDecks.get());
+    for (int i = 0; i < numDecks; ++i) {
+        ControlObject* pPlay = ControlObject::getControl(
+                ConfigKey(PlayerManager::groupForDeck(i), QStringLiteral("play")),
+                ControlFlag::NoWarnIfMissing);
+        if (pPlay && !pPlay->toBool()) {
+            bitedj_showPlayPage();
+            return;
+        }
     }
 }
 
