@@ -7,6 +7,8 @@
 #include <rekordbox_pdb.h>
 
 #include <QDir>
+#include <QElapsedTimer>
+#include <QFileInfo>
 #include <QMap>
 #include <QMessageBox>
 #include <QSet>
@@ -26,6 +28,7 @@
 #include "library/queryutil.h"
 #include "library/rekordbox/rekordbox3bandimport.h"
 #include "library/rekordbox/rekordboxconstants.h"
+#include "library/rekordbox/rekordboxtrackhealth.h"
 #include "library/starrating.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
@@ -136,7 +139,12 @@ bool createLibraryTable(QSqlDatabase& database, const QString& tableName) {
             "    source_rating INTEGER,"
             "    analyze_path TEXT UNIQUE,"
             "    device TEXT,"
-            "    color INTEGER"
+            "    color INTEGER,"
+            // Bite DJ: filled in by the health check that runs after the
+            // parse (a mixxx::rekordbox::TrackProblem), and read by the track
+            // table to colour a row that will not load properly. The INSERT
+            // leaves it out, so every track starts at 0 until checked.
+            "    problem INTEGER DEFAULT 0"
             ");");
 
     if (!query.exec()) {
@@ -993,6 +1001,94 @@ void setHotCue(TrackPointer track,
     }
 }
 
+// How many track titles the health notice names before "+N more". The strip
+// is one line and elided on the right, so more would never be seen anyway.
+constexpr int kHealthNoticeMaxTitles = 3;
+
+const char* healthProblemName(mixxx::rekordbox::TrackProblem problem) {
+    switch (problem) {
+    case mixxx::rekordbox::TrackProblem::None:
+        return "none";
+    case mixxx::rekordbox::TrackProblem::AudioMissing:
+        return "audio missing";
+    case mixxx::rekordbox::TrackProblem::AnalysisDamaged:
+        return "analysis damaged";
+    }
+    return "unknown";
+}
+
+// Bite DJ: the worker half of the track health check, run on a pool thread
+// once a device's parse has finished. Reads the device's rows, then looks at
+// each track's files; see checkTrackFiles() for what counts as a problem.
+// Read-only on the database, and holds no TreeItem, so a device ejected
+// mid-check leaves it nothing to trip over: its file checks fail fast and
+// onHealthChecked() drops the result.
+RekordboxFeature::HealthReport checkDeviceHealth(
+        mixxx::DbConnectionPoolPtr dbConnectionPool,
+        const QString& label) {
+    QElapsedTimer timer;
+    timer.start();
+
+    RekordboxFeature::HealthReport report;
+    report.label = label;
+
+    //Give thread a low priority
+    QThread* thisThread = QThread::currentThread();
+    thisThread->setPriority(QThread::LowPriority);
+
+    // The rows are copied out and the connection closed before any file is
+    // touched. The file checks take seconds on a cold USB stick, and an open
+    // read would hold the library database's lock for all of that, blocking
+    // the writers that parseDeviceDB() is careful not to block.
+    struct TrackRow {
+        RekordboxFeature::BadTrack track;
+        QString anlzDatPath;
+    };
+    QList<TrackRow> rows;
+    {
+        const mixxx::DbConnectionPooler dbConnectionPooler(dbConnectionPool);
+        QSqlDatabase database = mixxx::DbConnectionPooled(dbConnectionPool);
+        VERIFY_OR_DEBUG_ASSERT(database.isOpen()) {
+            qWarning() << "Rekordbox health: failed to open database"
+                       << database.lastError();
+            return report;
+        }
+
+        QSqlQuery query(database);
+        query.prepare(QStringLiteral("SELECT id, artist, title, location, analyze_path FROM ") +
+                kRekordboxLibraryTable + QStringLiteral(" WHERE device=:device"));
+        query.bindValue(QStringLiteral(":device"), label);
+        if (!query.exec()) {
+            LOG_FAILED_QUERY(query);
+            return report;
+        }
+        while (query.next()) {
+            TrackRow row;
+            row.track.id = query.value(0).toInt();
+            row.track.artist = query.value(1).toString();
+            row.track.title = query.value(2).toString();
+            row.track.location = query.value(3).toString();
+            row.anlzDatPath = query.value(4).toString();
+            rows.append(row);
+        }
+    }
+    report.trackCount = static_cast<int>(rows.size());
+
+    for (TrackRow& row : rows) {
+        const mixxx::rekordbox::TrackHealth health =
+                mixxx::rekordbox::checkTrackFiles(row.track.location, row.anlzDatPath);
+        if (health.problem == mixxx::rekordbox::TrackProblem::None) {
+            continue;
+        }
+        row.track.problem = health.problem;
+        row.track.badPath = health.badPath;
+        report.badTracks.append(row.track);
+    }
+
+    report.elapsedMs = timer.elapsed();
+    return report;
+}
+
 } // anonymous namespace
 
 namespace mixxx {
@@ -1543,6 +1639,7 @@ bool RekordboxPlaylistModel::isColumnHiddenByDefault(int column) {
 
 bool RekordboxPlaylistModel::isColumnInternal(int column) {
     return column == fieldIndex(ColumnCache::COLUMN_REKORDBOX_ANALYZE_PATH) ||
+            column == fieldIndex(ColumnCache::COLUMN_REKORDBOX_PROBLEM) ||
             BaseExternalPlaylistModel::isColumnInternal(column);
 }
 
@@ -1628,7 +1725,8 @@ RekordboxFeature::RekordboxFeature(
             LIBRARYTABLE_BPM,
             LIBRARYTABLE_KEY,
             LIBRARYTABLE_COLOR,
-            REKORDBOX_ANALYZE_PATH};
+            REKORDBOX_ANALYZE_PATH,
+            REKORDBOX_PROBLEM};
 
     const QStringList searchColumns = {
             LIBRARYTABLE_ARTIST,
@@ -1708,6 +1806,10 @@ RekordboxFeature::RekordboxFeature(
             &QFutureWatcher<QString>::finished,
             this,
             &RekordboxFeature::onBackgroundTracksFound);
+    connect(&m_healthFutureWatcher,
+            &QFutureWatcher<HealthReport>::finished,
+            this,
+            &RekordboxFeature::onHealthChecked);
     m_bgPollTimer.setInterval(5000);
     m_bgPollTimer.setSingleShot(false);
     connect(&m_bgPollTimer,
@@ -1723,13 +1825,15 @@ RekordboxFeature::RekordboxFeature(
 
 RekordboxFeature::~RekordboxFeature() {
     // Stop the timer first so no new background work is queued, then drain
-    // all four futures before dropping the tables — a still-running
-    // parseDeviceDB() would otherwise write into tables about to be dropped.
+    // all five futures before dropping the tables: a still-running
+    // parseDeviceDB() would otherwise write into tables about to be dropped,
+    // and a health check would be reading from them.
     m_bgPollTimer.stop();
     m_devicesFuture.waitForFinished();
     m_tracksFuture.waitForFinished();
     m_bgDevicesFuture.waitForFinished();
     m_bgTracksFuture.waitForFinished();
+    m_healthFuture.waitForFinished();
 
     // Drop temporary Rekordbox database tables on shutdown
     QSqlDatabase database = m_pTrackCollection->database();
@@ -2020,6 +2124,7 @@ void RekordboxFeature::mergeFoundDevicesIntoSidebar(
             // otherwise a later rediscovery re-parses into a non-empty table
             // and collides on every row's UNIQUE constraint.
             for (int deviceIndex = 0; deviceIndex < root->childRows(); deviceIndex++) {
+                abandonHealthCheck(root->child(deviceIndex)->getLabel());
                 clearDeviceTables(database, root->child(deviceIndex));
             }
             m_pSidebarModel->removeRows(0, root->childRows());
@@ -2046,6 +2151,7 @@ void RekordboxFeature::mergeFoundDevicesIntoSidebar(
 
         if (removeChild) {
             // Device has since been unmounted, cleanup DB
+            abandonHealthCheck(child->getLabel());
             clearDeviceTables(database, child);
 
             m_pSidebarModel->removeRows(deviceIndex, 1);
@@ -2138,6 +2244,9 @@ std::unique_ptr<TreeItem> RekordboxFeature::takeStagedDevice(const QString& labe
 }
 
 void RekordboxFeature::dropStagedDevice(const QString& label) {
+    // A volume waiting for its sibling has been parsed, and so may already be
+    // queued for, or in, a health check.
+    abandonHealthCheck(label);
     if (m_bgParseInFlight && m_bgParseLabel == label) {
         // A worker thread is writing into this item right now, so it has to
         // outlive the parse. onBackgroundTracksFound() discards it instead of
@@ -2235,6 +2344,7 @@ void RekordboxFeature::ejectDevice(const QString& mountPoint) {
         // once we remove a row; clear it as mergeFoundDevicesIntoSidebar() does.
         clearLastRightClickedIndex();
 
+        abandonHealthCheck(child->getLabel());
         QSqlDatabase database = m_pTrackCollection->database();
         clearDeviceTables(database, child);
         m_pSidebarModel->removeRows(deviceIndex, 1);
@@ -2261,6 +2371,7 @@ void RekordboxFeature::onTracksFound() {
     } catch (const std::exception& e) {
         qWarning() << "Failed to load Rekordbox database:" << e.what();
         pumpBackgroundParseQueue();
+        pumpHealthQueue();
         return;
     }
 
@@ -2270,9 +2381,29 @@ void RekordboxFeature::onTracksFound() {
     m_pRekordboxPlaylistModel->setBackingLocation(devicePathOfPlaylist(devicePlaylist));
     emit showTrackModel(m_pRekordboxPlaylistModel);
 
+    // The parse returns the device's path, not its label, and the label is
+    // what the rows are keyed on. The device tapped to start this parse is a
+    // sidebar row, so look it up there.
+    TreeItem* root = m_pSidebarModel->getRootItem();
+    if (root && !devicePlaylist.isEmpty()) {
+        const QString devicePath = QDir::cleanPath(devicePlaylist);
+        for (int deviceIndex = 0; deviceIndex < root->childRows(); ++deviceIndex) {
+            const TreeItem* child = root->child(deviceIndex);
+            if (!child) {
+                continue;
+            }
+            const QList<QVariant> data = child->getData().toList();
+            if (!data.isEmpty() && QDir::cleanPath(data[0].toString()) == devicePath) {
+                queueHealthCheck(child->getLabel());
+                break;
+            }
+        }
+    }
+
     // A background queue that yielded to this foreground parse may have
     // stalled — kick it forward now that the foreground slot is free.
     pumpBackgroundParseQueue();
+    pumpHealthQueue();
 }
 
 void RekordboxFeature::onBackgroundPollTick() {
@@ -2322,6 +2453,9 @@ void RekordboxFeature::onBackgroundTracksFound() {
         }
     } else if (StagedDevice* pStagedDevice = findStagedDevice(label)) {
         pStagedDevice->parsed = true;
+        // Its rows are written, so its files can be checked. Queued rather
+        // than started: pumpHealthQueue() waits for any other parse first.
+        queueHealthCheck(label);
     }
 
     // The device enters the sidebar only now, with its playlists attached —
@@ -2330,6 +2464,7 @@ void RekordboxFeature::onBackgroundTracksFound() {
     m_pSidebarModel->triggerRepaint();
 
     pumpBackgroundParseQueue();
+    pumpHealthQueue();
 }
 
 void RekordboxFeature::pumpBackgroundParseQueue() {
@@ -2376,6 +2511,141 @@ void RekordboxFeature::pumpBackgroundParseQueue() {
         // the rows just written off.
         promoteCompletedDrives();
     }
+}
+
+void RekordboxFeature::queueHealthCheck(const QString& label) {
+    if (!m_healthQueue.contains(label)) {
+        m_healthQueue.append(label);
+    }
+}
+
+void RekordboxFeature::pumpHealthQueue() {
+    if (m_healthInFlight || m_healthQueue.isEmpty()) {
+        return;
+    }
+    // The check reads every track's files, and on a cold stick that is
+    // seconds of USB traffic. A parse still to come (another volume, another
+    // stick) is what puts a device in the sidebar, so it goes first: the
+    // check must never make the library appear later than it did without it.
+    // Whichever parse is running calls back in here when it finishes.
+    if (m_bgParseInFlight || m_tracksFutureWatcher.isRunning()) {
+        return;
+    }
+    const QString label = m_healthQueue.takeFirst();
+    m_healthFuture = QtConcurrent::run(checkDeviceHealth,
+            static_cast<Library*>(parent())->dbConnectionPool(),
+            label);
+    m_healthFutureWatcher.setFuture(m_healthFuture);
+    m_healthInFlight = true;
+    m_healthLabel = label;
+    m_healthAbandoned = false;
+}
+
+void RekordboxFeature::abandonHealthCheck(const QString& label) {
+    m_healthQueue.removeAll(label);
+    if (m_healthInFlight && m_healthLabel == label) {
+        m_healthAbandoned = true;
+    }
+}
+
+void RekordboxFeature::onHealthChecked() {
+    const QString label = m_healthLabel;
+    const bool abandoned = m_healthAbandoned;
+    m_healthInFlight = false;
+    m_healthLabel.clear();
+    m_healthAbandoned = false;
+
+    HealthReport report;
+    bool haveReport = true;
+    try {
+        report = m_healthFuture.result();
+    } catch (const std::exception& e) {
+        qWarning() << "Rekordbox health:" << label << "check failed:" << e.what();
+        haveReport = false;
+    }
+
+    if (abandoned) {
+        // The device went away mid-check. Its rows are gone, and if it came
+        // back its re-parse has queued a fresh check of its own.
+        qWarning() << "Rekordbox health:" << label << "removed mid-check, result dropped";
+    } else if (haveReport) {
+        applyHealthReport(report);
+    }
+
+    pumpHealthQueue();
+}
+
+void RekordboxFeature::applyHealthReport(const HealthReport& report) {
+    const int problemCount = static_cast<int>(report.badTracks.size());
+
+    QSet<TrackId> trackIds;
+    if (problemCount > 0) {
+        QSqlDatabase database = m_pTrackCollection->database();
+        ScopedTransaction transaction(database);
+        QSqlQuery update(database);
+        // `device` as well as `id`: ids are AUTOINCREMENT, so a device that
+        // was removed and parsed again in the meantime has new ones, and a
+        // stale report marks nothing rather than someone else's track.
+        update.prepare(QStringLiteral("UPDATE ") + kRekordboxLibraryTable +
+                QStringLiteral(" SET problem=:problem WHERE id=:id AND device=:device"));
+        for (const BadTrack& track : report.badTracks) {
+            // qWarning because the appliance only records warnings and
+            // above (see rekordbox3bandimport.cpp); this is the line to grep
+            // for when a stick is suspect.
+            qWarning() << "Rekordbox health:" << report.label
+                       << healthProblemName(track.problem) << track.artist
+                       << track.title << track.badPath;
+            update.bindValue(QStringLiteral(":problem"), static_cast<int>(track.problem));
+            update.bindValue(QStringLiteral(":id"), track.id);
+            update.bindValue(QStringLiteral(":device"), report.label);
+            if (!update.exec()) {
+                LOG_FAILED_QUERY(update);
+                continue;
+            }
+            if (update.numRowsAffected() > 0) {
+                trackIds.insert(TrackId(QVariant(track.id)));
+            }
+        }
+        transaction.commit();
+    }
+
+    // Always logged, problems or not. Its timestamp next to the parse's is
+    // how to see on the box that the check did not hold the library back.
+    qWarning().noquote() << "Rekordbox health:" << report.label
+                         << report.trackCount << "tracks," << problemCount
+                         << "problems," << report.elapsedMs << "ms";
+
+    // Rows already on screen take their colour now.
+    refreshScannedTracks(trackIds);
+
+    if (problemCount == 0) {
+        return;
+    }
+    Notifications* pNotifications = Notifications::tryInstance();
+    if (!pNotifications) {
+        return;
+    }
+    QStringList titles;
+    for (const BadTrack& track : report.badTracks) {
+        if (titles.size() == kHealthNoticeMaxTitles) {
+            break;
+        }
+        titles.append(track.title.isEmpty()
+                        ? QFileInfo(track.location).fileName()
+                        : track.title);
+    }
+    QString names = titles.join(QStringLiteral(", "));
+    if (problemCount > kHealthNoticeMaxTitles) {
+        names += tr(" +%1 more").arg(problemCount - kHealthNoticeMaxTitles);
+    }
+    // Sticky, because this is read before a set, when a 5 second notice is
+    // easy to miss. A tap on the strip clears it.
+    const QString message = problemCount == 1
+            ? tr("%1: 1 track may not load properly (marked in list): %2")
+                      .arg(report.label, names)
+            : tr("%1: %2 tracks may not load properly (marked in list): %3")
+                      .arg(report.label, QString::number(problemCount), names);
+    pNotifications->publishSticky(message, Notifications::Severity::Warning);
 }
 
 TreeItem* RekordboxFeature::findDeviceByLabel(const QString& label) const {

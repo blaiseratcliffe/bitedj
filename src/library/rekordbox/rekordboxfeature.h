@@ -35,6 +35,7 @@
 #include "library/baseexternallibraryfeature.h"
 #include "library/baseexternalplaylistmodel.h"
 #include "library/baseexternaltrackmodel.h"
+#include "library/rekordbox/rekordboxtrackhealth.h"
 #include "library/treeitemmodel.h"
 #include "track/trackid.h"
 #include "util/parented_ptr.h"
@@ -91,6 +92,26 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
         return false;
     }
 
+    // Bite DJ: what the health check found on one device. It runs on a worker
+    // thread after the device's parse, so it holds plain values only (no
+    // TreeItem pointers an eject could free). Public only so the worker
+    // function in the .cpp can build one.
+    struct BadTrack {
+        int id = -1;
+        mixxx::rekordbox::TrackProblem problem = mixxx::rekordbox::TrackProblem::None;
+        QString artist;
+        QString title;
+        QString location;
+        QString badPath;
+    };
+    struct HealthReport {
+        QString label;
+        int trackCount = 0;
+        qint64 elapsedMs = 0;
+        // Only the tracks with a problem.
+        QList<BadTrack> badTracks;
+    };
+
   public slots:
     void activate() override;
     void activateChild(const QModelIndex& index) override;
@@ -115,6 +136,7 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
     void onBackgroundPollTick();
     void onBackgroundRekordboxDevicesFound();
     void onBackgroundTracksFound();
+    void onHealthChecked();
 
   private:
     QString formatRootViewHtml() const;
@@ -129,6 +151,17 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
             bool allowTableTruncate);
     void pumpBackgroundParseQueue();
     TreeItem* findDeviceByLabel(const QString& label) const;
+
+    // Bite DJ: the track health check, a second background pass per device.
+    // Queues `label` for a check, unless it is already waiting.
+    void queueHealthCheck(const QString& label);
+    // Starts the next queued check, if nothing else is using the drive.
+    void pumpHealthQueue();
+    // The device is going away: forget its queued check, and discard the
+    // result of one already running.
+    void abandonHealthCheck(const QString& label);
+    // Marks the bad rows, logs them and tells the DJ.
+    void applyHealthReport(const HealthReport& report);
 
     // A device found on disk but deliberately withheld from the sidebar, see
     // m_stagedDevices.
@@ -182,6 +215,21 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
     // after a (re)mount. Require several consecutive empty scans before tearing
     // down a device, so it isn't needlessly re-parsed when it reappears.
     int m_bgConsecutiveEmptyScans = 0;
+
+    // Bite DJ: the track health check. After a device's parse, every track's
+    // audio file and ANLZ headers are looked at on a worker thread, so a
+    // stick with a damaged file is flagged before the set rather than when
+    // the track is loaded (2026-09-27: a zeroed .EXT aborted the app). One
+    // check at a time; labels wait in m_healthQueue.
+    QFutureWatcher<HealthReport> m_healthFutureWatcher;
+    QFuture<HealthReport> m_healthFuture;
+    QStringList m_healthQueue;
+    bool m_healthInFlight = false;
+    // Label of the device the running check is reading.
+    QString m_healthLabel;
+    // Set when that device is removed mid-check. The worker holds nothing
+    // an eject can free, so it is left to finish and its result is dropped.
+    bool m_healthAbandoned = false;
 
     QSharedPointer<BaseTrackCache> m_trackSource;
 };

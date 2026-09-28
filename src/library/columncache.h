@@ -64,6 +64,7 @@ class ColumnCache : public QObject {
         COLUMN_PLAYLISTTRACKSTABLE_DATETIMEADDED,
 
         COLUMN_REKORDBOX_ANALYZE_PATH,
+        COLUMN_REKORDBOX_PROBLEM,
 
         // NUM_COLUMNS should always be the last item.
         NUM_COLUMNS
