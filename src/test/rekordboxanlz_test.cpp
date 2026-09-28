@@ -171,6 +171,24 @@ class RekordboxAnlzTest : public MixxxTest {
         mixxx::rekordbox::readAnalyze(pTrack, kSampleRate, 0, false, path);
     }
 
+    /// Writes `data` as `name` in the temporary directory and returns its path.
+    QString writeAnlzFile(const QString& name, const QByteArray& data) {
+        const QString path = m_tempDir.filePath(name);
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        EXPECT_EQ(data.size(), file.write(data));
+        file.close();
+        return path;
+    }
+
+    /// The shape of the .EXT that aborted the app on 2026-09-27: one byte,
+    /// then zeros.
+    static QByteArray zeroedAnlz() {
+        QByteArray zeroed(4096, '\0');
+        zeroed[0] = '\x02';
+        return zeroed;
+    }
+
     static CuePointer findHotcue(const TrackPointer& pTrack, int hotcueIndex) {
         const QList<CuePointer> cues = pTrack->getCuePoints();
         for (const CuePointer& pCue : cues) {
@@ -523,9 +541,74 @@ TEST_F(RekordboxAnlzTest, DamagedFileIsSkipped) {
         ASSERT_EQ(data.size(), file.write(data));
         file.close();
 
-        EXPECT_NO_THROW(mixxx::rekordbox::readAnalyze(pTrack, kSampleRate, 0, false, path));
+        bool read = true;
+        EXPECT_NO_THROW(read = mixxx::rekordbox::readAnalyze(
+                                pTrack, kSampleRate, 0, false, path));
+        EXPECT_FALSE(read);
         EXPECT_EQ(1, hotcueIndices(pTrack).size());
     }
+}
+
+// The return value is what readAnalyzeFiles() falls back on, so it has to say
+// whether anything was read: true for a good file, false for a missing one.
+TEST_F(RekordboxAnlzTest, ReadAnalyzeReportsWhetherItRead) {
+    const TrackPointer pTrack = createTrack();
+    AnlzBuilder builder;
+    builder.addCueTag(kCueListTypeHotCue, {{1, kCueEntryTypeCue, 1000, 0, {}}});
+    const QString path = writeAnlzFile(QStringLiteral("GOOD.DAT"), builder.build());
+
+    EXPECT_TRUE(mixxx::rekordbox::readAnalyze(pTrack, kSampleRate, 0, false, path));
+    EXPECT_FALSE(mixxx::rekordbox::readAnalyze(pTrack,
+            kSampleRate,
+            0,
+            false,
+            m_tempDir.filePath(QStringLiteral("MISSING.DAT"))));
+}
+
+// With a good .EXT beside it, cues come from the .EXT and the .DAT's cue list
+// is not used.
+TEST_F(RekordboxAnlzTest, ExtCuesWinOverDatCues) {
+    const TrackPointer pTrack = createTrack();
+    AnlzBuilder datBuilder;
+    datBuilder.addCueTag(kCueListTypeHotCue, {{1, kCueEntryTypeCue, 1000, 0, {}}});
+    AnlzBuilder extBuilder;
+    extBuilder.addCueExtendedTag(kCueListTypeHotCue, {{2, kCueEntryTypeCue, 2000, 0, {}}});
+    const QString datPath = writeAnlzFile(QStringLiteral("ANLZ0000.DAT"), datBuilder.build());
+    writeAnlzFile(QStringLiteral("ANLZ0000.EXT"), extBuilder.build());
+
+    mixxx::rekordbox::readAnalyzeFiles(pTrack, kSampleRate, 0, datPath);
+
+    EXPECT_EQ(QList<int>({mixxx::kHotCueBankStart + 1}), hotcueIndices(pTrack));
+    EXPECT_EQ(framesForMs(2000),
+            findHotcue(pTrack, mixxx::kHotCueBankStart + 1)->getPosition());
+}
+
+// A damaged .EXT must not leave the track with no cues: they come from the
+// .DAT's legacy cue list instead. Renegade on the Lexar stick loaded with none
+// before this.
+TEST_F(RekordboxAnlzTest, DamagedExtFallsBackToDatCues) {
+    const TrackPointer pTrack = createTrack();
+    AnlzBuilder datBuilder;
+    datBuilder.addCueTag(kCueListTypeHotCue,
+            {
+                    {1, kCueEntryTypeCue, 1000, 0, {}},
+                    {3, kCueEntryTypeCue, 3000, 0, {}},
+            });
+    datBuilder.addCueTag(kCueListTypeMemory, {{0, kCueEntryTypeCue, 500, 0, {}}});
+    const QString datPath = writeAnlzFile(QStringLiteral("ANLZ0000.DAT"), datBuilder.build());
+    writeAnlzFile(QStringLiteral("ANLZ0000.EXT"), zeroedAnlz());
+
+    mixxx::rekordbox::readAnalyzeFiles(pTrack, kSampleRate, 0, datPath);
+
+    const CuePointer pFirst = findHotcue(pTrack, mixxx::kHotCueBankStart);
+    const CuePointer pThird = findHotcue(pTrack, mixxx::kHotCueBankStart + 2);
+    ASSERT_TRUE(pFirst);
+    ASSERT_TRUE(pThird);
+    EXPECT_EQ(framesForMs(1000), pFirst->getPosition());
+    EXPECT_EQ(framesForMs(3000), pThird->getPosition());
+    const CuePointer pMemory = findHotcue(pTrack, mixxx::kMemoryCueBankStart);
+    ASSERT_TRUE(pMemory);
+    EXPECT_EQ(framesForMs(500), pMemory->getPosition());
 }
 
 } // namespace

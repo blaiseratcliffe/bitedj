@@ -22,13 +22,27 @@ namespace rekordbox {
 /// updated in place, because this runs on every load of a track that a deck
 /// may already be playing.
 ///
+/// Returns false when nothing was imported: the file does not exist, or it
+/// could not be parsed (a damaged file is logged and skipped, never thrown
+/// out of here). getTrack() uses that to take cues from the `.DAT` when the
+/// `.EXT` is damaged.
+///
 /// Declared here rather than kept file-local so that it can be tested
 /// directly; the definition lives in rekordboxfeature.cpp.
-void readAnalyze(TrackPointer track,
+bool readAnalyze(TrackPointer track,
         audio::SampleRate sampleRate,
         int timingOffset,
         bool ignoreCues,
         const QString& anlzPath);
+
+/// Imports a track's beats and cues from its ANLZ files, given the `.DAT`
+/// path from the device database. Beats always come from the `.DAT`. Cues
+/// come from the `.EXT` next to it when there is one, and from the `.DAT`
+/// when there is not, or when the `.EXT` cannot be read.
+void readAnalyzeFiles(TrackPointer track,
+        audio::SampleRate sampleRate,
+        int timingOffset,
+        const QString& anlzDatPath);
 
 } // namespace rekordbox
 } // namespace mixxx

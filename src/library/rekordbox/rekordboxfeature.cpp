@@ -1094,13 +1094,13 @@ RekordboxFeature::HealthReport checkDeviceHealth(
 namespace mixxx {
 namespace rekordbox {
 
-void readAnalyze(TrackPointer track,
+bool readAnalyze(TrackPointer track,
         mixxx::audio::SampleRate sampleRate,
         int timingOffset,
         bool ignoreCues,
         const QString& anlzPath) {
     if (!QFile(anlzPath).exists()) {
-        return;
+        return false;
     }
 
     qDebug() << "Rekordbox ANLZ path:" << anlzPath << " for: " << track->getTitle();
@@ -1118,7 +1118,7 @@ void readAnalyze(TrackPointer track,
         pAnlz = std::make_unique<rekordbox_anlz_t>(pStream.get());
     } catch (const std::exception& e) {
         qWarning() << "Rekordbox ANLZ: cannot read" << anlzPath << ":" << e.what();
-        return;
+        return false;
     }
     rekordbox_anlz_t& anlz = *pAnlz;
 
@@ -1401,6 +1401,30 @@ void readAnalyze(TrackPointer track,
             track->removeCue(pCue);
         }
     }
+    return true;
+}
+
+void readAnalyzeFiles(TrackPointer track,
+        mixxx::audio::SampleRate sampleRate,
+        int timingOffset,
+        const QString& anlzDatPath) {
+    const QString anlzExtPath = anlzDatPath.left(anlzDatPath.length() - 3) + "EXT";
+
+    if (!QFile(anlzExtPath).exists()) {
+        readAnalyze(track, sampleRate, timingOffset, false, anlzDatPath);
+        return;
+    }
+
+    // Beatgrids appear to be only correct in legacy ANLZ file
+    readAnalyze(track, sampleRate, timingOffset, true, anlzDatPath);
+    // Cues are preferred from the .EXT, but a damaged one must not leave the
+    // track with none: the .DAT still holds the legacy cue list (hot cues A-C
+    // and the memory cues), so fall back to that. 2026-09-27: a zeroed .EXT on
+    // the Lexar stick loaded its track with no cues at all.
+    if (!readAnalyze(track, sampleRate, timingOffset, false, anlzExtPath)) {
+        qWarning() << "Rekordbox ANLZ: cues from the .DAT instead" << anlzDatPath;
+        readAnalyze(track, sampleRate, timingOffset, false, anlzDatPath);
+    }
 }
 
 } // namespace rekordbox
@@ -1585,15 +1609,7 @@ TrackPointer RekordboxPlaylistModel::getTrack(const QModelIndex& index) const {
     QString anlzPath =
             getFieldVariant(index, ColumnCache::COLUMN_REKORDBOX_ANALYZE_PATH)
                     .toString();
-    QString anlzPathExt = anlzPath.left(anlzPath.length() - 3) + "EXT";
-
-    if (QFile(anlzPathExt).exists()) {
-        // Beatgrids appear to be only correct in legacy ANLZ file
-        mixxx::rekordbox::readAnalyze(track, sampleRate, timingOffset, true, anlzPath);
-        mixxx::rekordbox::readAnalyze(track, sampleRate, timingOffset, false, anlzPathExt);
-    } else {
-        mixxx::rekordbox::readAnalyze(track, sampleRate, timingOffset, false, anlzPath);
-    }
+    mixxx::rekordbox::readAnalyzeFiles(track, sampleRate, timingOffset, anlzPath);
 
     // The CDJ-3000's three band analysis lives in a third sibling. Read it
     // lazily here rather than caching it in the database: getTrack() runs on
