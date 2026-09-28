@@ -19,10 +19,11 @@ namespace {
 
 mixxx::Logger kLogger("CachingReaderWorker");
 
-// Bite DJ: how long a deck may keep failing to read before the track is
-// ejected. Long enough for a USB drive to re-enumerate and remount (the whole
-// point of retrying at all), short enough that a DJ staring at a silent moving
-// waveform gets a definite answer instead of an indefinite one.
+// Bite DJ: how long a deck may keep failing to read -- wholly or partially --
+// before the track is ejected. Long enough for a USB drive to re-enumerate and
+// remount (the whole point of retrying at all), short enough that a DJ staring
+// at a silent moving waveform gets a definite answer instead of an indefinite
+// one.
 constexpr int kUnreadableGraceMillis = 5000;
 // Minimum spacing between re-open attempts. Re-opening means a full decoder
 // open, so it must not run once per chunk request while a drive is genuinely
@@ -67,11 +68,17 @@ ReaderStatusUpdate CachingReaderWorker::processReadRequest(
             m_pAudioSource,
             mixxx::SampleBuffer::WritableSlice(m_tempReadBuffer));
 
-    // Bite DJ: nothing at all came back for a range the source says it has.
-    // That is a dead file handle, not the end of the track, so re-open the
-    // file and read the chunk again rather than handing the engine silence.
-    // See reopenAudioSource().
-    if (bufferedFrameIndexRange.empty() && !m_gaveUpOnTrack) {
+    // Bite DJ: less came back than the source says it holds -- nothing at all,
+    // or a partial chunk. Either way that is a dead file handle until proven
+    // otherwise, not the end of the track, so re-open the file and read the
+    // chunk again rather than handing the engine silence. See
+    // reopenAudioSource(), and the long note in AudioSource::readSampleFrames()
+    // for why a *partial* read counts here too: a drive that fails mid-transfer
+    // returns exactly that, and treating it as the end of the audio is what
+    // used to silence a deck for the rest of a track.
+    if (bufferedFrameIndexRange != chunkFrameIndexRange && !m_gaveUpOnTrack) {
+        const mixxx::IndexRange firstAttemptFrameIndexRange =
+                bufferedFrameIndexRange;
         if (!m_readFailureTimer.isValid()) {
             m_readFailureTimer.start();
         }
@@ -82,15 +89,40 @@ ReaderStatusUpdate CachingReaderWorker::processReadRequest(
                         m_pAudioSource,
                         mixxx::SampleBuffer::WritableSlice(m_tempReadBuffer));
             }
+            if (!bufferedFrameIndexRange.empty() &&
+                    bufferedFrameIndexRange != chunkFrameIndexRange &&
+                    bufferedFrameIndexRange == firstAttemptFrameIndexRange) {
+                // A fresh decoder on a fresh file handle stopped at exactly the
+                // same frame. That survived the file being opened anew, so it
+                // is evidence about the content and not about the storage:
+                // the decodable audio really does end here. Commit it, so a
+                // genuinely truncated file settles instead of re-reading its
+                // tail once per chunk for the rest of its declared length --
+                // and so the grace window below does not eject the deck over a
+                // file that is merely short.
+                if (m_pAudioSource->shrinkReadableFrameIndexRange(
+                            bufferedFrameIndexRange)) {
+                    chunkFrameIndexRange = intersect(chunkFrameIndexRange,
+                            m_pAudioSource->frameIndexRange());
+                }
+            }
         }
-        if (bufferedFrameIndexRange.empty() &&
-                m_readFailureTimer.elapsed() > kUnreadableGraceMillis) {
+        if (bufferedFrameIndexRange == chunkFrameIndexRange) {
+            // Reads are working again, or the shrink above just made this read
+            // a complete one.
+            m_readFailureTimer.invalidate();
+        } else if (m_readFailureTimer.elapsed() > kUnreadableGraceMillis) {
             // Out of patience. Flag it; run() ejects once this request has
             // been answered, so the engine always gets its chunk back.
+            //
+            // Partial reads reach here as well as empty ones. A deck fed a
+            // fraction of every chunk is not playing the track either, and
+            // before this the partial case reset the timer on every failure,
+            // so the backstop could never fire for it.
             m_gaveUpOnTrack = true;
         }
-    } else if (!bufferedFrameIndexRange.empty()) {
-        // Reads are working again (or never stopped).
+    } else if (bufferedFrameIndexRange == chunkFrameIndexRange) {
+        // Reads are working (or never stopped).
         m_readFailureTimer.invalidate();
     }
 

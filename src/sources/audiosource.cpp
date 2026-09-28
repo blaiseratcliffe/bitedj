@@ -1,5 +1,6 @@
 #include "sources/audiosource.h"
 
+#include "util/assert.h"
 #include "util/logger.h"
 
 namespace mixxx {
@@ -294,76 +295,89 @@ ReadableSampleFrames AudioSource::readSampleFrames(
         DEBUG_ASSERT(readable.frameIndexRange().empty() ||
                 readable.frameIndexRange().isSubrangeOf(writable.frameIndexRange()));
         if (readable.frameIndexRange() != writable.frameIndexRange()) {
+            // Bite DJ: do NOT conclude that the audio data ends here, for a
+            // short read or an empty one.
+            //
+            // Upstream shrank the readable range back to this position,
+            // writing off the whole remainder of the track -- permanently.
+            // The narrowed range is propagated to every source in the proxy
+            // chain by adjustFrameIndexRange(), and CachingReader only ever
+            // intersects the range it carries with the one each read
+            // reports, so nothing can widen it again for the life of the
+            // track load. A deck that hit this played silence to the end of
+            // the track with no way back short of reloading it.
+            //
+            // Shrinking is a claim about the file's content, and a single
+            // failed read is no evidence about content: it is equally well
+            // explained by the storage having gone away, which on this device
+            // is routine rather than exceptional. The music lives on
+            // hot-pluggable USB drives behind a dwc_otg controller that is
+            // known to drop and re-enumerate them mid-session (see
+            // usbcore.old_scheme_first in the sharkware KERNEL_OPTIONS and why
+            // it is there). One such blink used to cost the rest of the track.
+            //
+            // An earlier revision kept shrinking on *partial* reads, on the
+            // theory that reading some frames and then stopping is positive
+            // evidence about where the decodable data ends. It is not: a drive
+            // that fails mid-transfer returns exactly that, and a partial read
+            // is what the reported unit hit -- 1010 frames of a requested 8192,
+            // four minutes into a track, after which the deck was silent for
+            // the rest of it while the other deck played on.
+            //
+            // So decide nothing here. Report the shortfall and hand back what
+            // was read; the caller owns the retry and knows whether the
+            // storage is still there. CachingReaderWorker re-opens the file and
+            // reads the same range again, and only calls
+            // shrinkReadableFrameIndexRange() below once a fresh decoder on a
+            // fresh file handle stops at exactly the same frame -- which is
+            // evidence about content, because it survived the file being
+            // opened anew.
             kLogger.warning()
                     << "Failed to read sample frames:"
                     << "expected =" << writable.frameIndexRange()
                     << ", actual =" << readable.frameIndexRange();
-            if (readable.frameIndexRange().empty()) {
-                // Bite DJ: do NOT conclude that the audio data ends here.
-                //
-                // Upstream shrank the readable range back to this position,
-                // writing off the whole remainder of the track -- permanently.
-                // The narrowed range is propagated to every source in the proxy
-                // chain by adjustFrameIndexRange(), and CachingReader only ever
-                // intersects the range it carries with the one each read
-                // reports, so nothing can widen it again for the life of the
-                // track load. A deck that hit this played silence to the end of
-                // the track with no way back short of reloading it.
-                //
-                // Shrinking is a claim about the file's content, and a read
-                // that returned *nothing* is no evidence about content: it is
-                // equally well explained by the storage having gone away, which
-                // on this device is routine rather than exceptional. The music
-                // lives on hot-pluggable USB drives behind a dwc_otg controller
-                // that is known to drop and re-enumerate them mid-session (see
-                // usbcore.old_scheme_first in the sharkware KERNEL_OPTIONS and
-                // why it is there). One such blink used to cost the rest of the
-                // track.
-                //
-                // A partial read is different and still shrinks below: reading
-                // some frames and then stopping is positive evidence about
-                // where the decodable data ends.
-                //
-                // The cost is that a genuinely malformed file whose real end
-                // happens to land on a chunk boundary -- so that the first
-                // failing read comes back empty rather than short -- now warns
-                // once per chunk for the rest of its declared length instead of
-                // shrinking once and going quiet. That is the right way round:
-                // a rare bad file is noisy in the log, rather than every USB
-                // hiccup silently killing a live set.
-                return readable;
-            }
-            auto shrinkedFrameIndexRange = m_frameIndexRange;
-            // Adjust lower bound of readable audio data
-            if (writable.frameIndexRange().start() <
-                    readable.frameIndexRange().start()) {
-                shrinkedFrameIndexRange.shrinkFront(
-                        readable.frameIndexRange().start() -
-                        shrinkedFrameIndexRange.start());
-            }
-            // Adjust upper bound of readable audio data
-            if (writable.frameIndexRange().end() >
-                    readable.frameIndexRange().end()) {
-                shrinkedFrameIndexRange.shrinkBack(
-                        shrinkedFrameIndexRange.end() -
-                        readable.frameIndexRange().end());
-            }
-            DEBUG_ASSERT(shrinkedFrameIndexRange.isSubrangeOf(m_frameIndexRange) &&
-                    shrinkedFrameIndexRange.length() < m_frameIndexRange.length());
-            kLogger.info()
-                    << "Shrinking readable frame index range:"
-                    << "before =" << m_frameIndexRange
-                    << ", after =" << shrinkedFrameIndexRange;
-            // Propagate the adjustments to all participants in the
-            // inheritance hierarchy.
-            // NOTE(2019-08-31, uklotzde): This is an ugly hack to overcome
-            // the previous assumption that the frame index range is immutable
-            // for the whole lifetime of an AudioSource. As we know now it is
-            // not and for a future re-design we need to account for this fact!!
-            adjustFrameIndexRange(shrinkedFrameIndexRange);
         }
         return readable;
     }
+}
+
+bool AudioSource::shrinkReadableFrameIndexRange(
+        IndexRange readableFrameIndexRange) {
+    VERIFY_OR_DEBUG_ASSERT(!readableFrameIndexRange.empty()) {
+        // An empty range would write off the whole track. Refuse it: an empty
+        // read is never evidence about content (see readSampleFrames() above).
+        return false;
+    }
+    auto shrinkedFrameIndexRange = m_frameIndexRange;
+    // Adjust lower bound of readable audio data
+    if (readableFrameIndexRange.start() > shrinkedFrameIndexRange.start()) {
+        shrinkedFrameIndexRange.shrinkFront(
+                readableFrameIndexRange.start() -
+                shrinkedFrameIndexRange.start());
+    }
+    // Adjust upper bound of readable audio data
+    if (readableFrameIndexRange.end() < shrinkedFrameIndexRange.end()) {
+        shrinkedFrameIndexRange.shrinkBack(
+                shrinkedFrameIndexRange.end() -
+                readableFrameIndexRange.end());
+    }
+    if (shrinkedFrameIndexRange == m_frameIndexRange) {
+        return false;
+    }
+    DEBUG_ASSERT(shrinkedFrameIndexRange.isSubrangeOf(m_frameIndexRange) &&
+            shrinkedFrameIndexRange.length() < m_frameIndexRange.length());
+    kLogger.info()
+            << "Shrinking readable frame index range:"
+            << "before =" << m_frameIndexRange
+            << ", after =" << shrinkedFrameIndexRange;
+    // Propagate the adjustments to all participants in the
+    // inheritance hierarchy.
+    // NOTE(2019-08-31, uklotzde): This is an ugly hack to overcome
+    // the previous assumption that the frame index range is immutable
+    // for the whole lifetime of an AudioSource. As we know now it is
+    // not and for a future re-design we need to account for this fact!!
+    adjustFrameIndexRange(shrinkedFrameIndexRange);
+    return true;
 }
 
 void AudioSource::adjustFrameIndexRange(

@@ -1620,6 +1620,7 @@ if(BUILD_TESTING)
     src/test/highcontrast_test.cpp
     src/test/hotcuecontrol_test.cpp
     src/test/imageutils_test.cpp
+    src/test/audiosourceshortread_test.cpp
     src/test/indexrange_test.cpp
     src/test/itunesxmlimportertest.cpp
     src/test/keycontrol_test.cpp

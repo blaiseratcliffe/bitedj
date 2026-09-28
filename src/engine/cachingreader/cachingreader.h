@@ -187,5 +187,12 @@ class CachingReader : public QObject {
     // The readable frame index range as reported by the worker.
     mixxx::IndexRange m_readableFrameIndexRange;
 
+    // Bite DJ: the deck this reader belongs to, e.g. "[Channel1]". Every deck
+    // has its own CachingReader and they all log through one "CachingReader"
+    // logger, so without this a read failure in the log names no deck -- which
+    // is exactly the question being asked when one deck goes quiet and the
+    // others keep playing.
+    const QString m_group;
+
     CachingReaderWorker m_worker;
 };

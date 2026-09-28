@@ -264,6 +264,21 @@ class AudioSource : public UrlResource, public virtual /*implements*/ IAudioSour
         return m_frameIndexRange.length();
     }
 
+    /// Bite DJ: narrow the readable frame index range to the range that was
+    /// actually decodable, after a short read has been *confirmed* to be about
+    /// the file's content rather than about the storage it lives on.
+    ///
+    /// This is the only way the range shrinks. readSampleFrames() deliberately
+    /// does not do it itself: shrinking is irreversible for the life of the
+    /// track load, and a failed read on this device is far more often a USB
+    /// drive blinking than a truncated file. The confirmation -- re-opening the
+    /// file and reading the same range again onto a fresh decoder -- is
+    /// CachingReaderWorker's job, and it calls this once that reproduces.
+    ///
+    /// Returns true if the range actually narrowed. An empty range is refused.
+    bool shrinkReadableFrameIndexRange(
+            IndexRange readableFrameIndexRange);
+
     // The index of the first frame.
     SINT frameIndexMin() const {
         DEBUG_ASSERT(m_frameIndexRange.start() <= m_frameIndexRange.end());
