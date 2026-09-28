@@ -1289,6 +1289,78 @@ PioneerDDJFLX6.shiftPressed = function(channel, _control, value, _status, _group
     PioneerDDJFLX6.shiftButtonDown[channel] = value === 0x7F;
 };
 
+//
+// CDJ-style browsing (BiteDJ)
+//
+// [Tab],current is the BiteDJ-FLX6 page stack: 0 is Play, 1 is Browse.
+// [Library],focused_widget: 2 is the sidebar, 3 is the track list.
+//
+
+PioneerDDJFLX6.tabPlay = 0;
+PioneerDDJFLX6.tabBrowse = 1;
+PioneerDDJFLX6.focusSidebar = 2;
+PioneerDDJFLX6.focusTracks = 3;
+
+// VIEW flips between Play and Browse, like the CDJ's BROWSE button. From any
+// other page it opens Browse.
+PioneerDDJFLX6.viewPressed = function(_channel, _control, value) {
+    if (value === 0) {
+        return;
+    }
+    const onBrowse = engine.getValue("[Tab]", "current") === PioneerDDJFLX6.tabBrowse;
+    engine.setValue("[Tab]", "current",
+        onBrowse ? PioneerDDJFLX6.tabPlay : PioneerDDJFLX6.tabBrowse);
+};
+
+// BACK steps up one level: track list to sidebar, then sidebar item to its
+// parent (Left collapses an open node or jumps to the parent). Off Browse it
+// opens Browse. Left is only sent when the sidebar has focus, because the key
+// goes to whichever widget is focused and would move a text cursor elsewhere.
+PioneerDDJFLX6.backPressed = function(_channel, _control, value) {
+    if (value === 0) {
+        return;
+    }
+    if (engine.getValue("[Tab]", "current") !== PioneerDDJFLX6.tabBrowse) {
+        engine.setValue("[Tab]", "current", PioneerDDJFLX6.tabBrowse);
+        return;
+    }
+    if (engine.getValue("[Library]", "focused_widget") === PioneerDDJFLX6.focusSidebar) {
+        script.triggerControl("[Library]", "MoveLeft");
+        return;
+    }
+    engine.setValue("[Library]", "focused_widget", PioneerDDJFLX6.focusSidebar);
+};
+
+// The browse encoder speeds up when spun fast in the track list: x4 for ticks
+// under 100 ms apart, x10 under 50 ms, same direction only. The sidebar stays
+// one row per tick. The table wraps at both ends, so a fast spin near the
+// bottom can land at the top.
+PioneerDDJFLX6.lastBrowseTime = 0;
+PioneerDDJFLX6.lastBrowseDirection = 0;
+PioneerDDJFLX6.browseRotate = function(_channel, _control, value) {
+    const delta = value < 64 ? value : value - 128;
+    if (delta === 0) {
+        return;
+    }
+    const now = Date.now();
+    const gap = now - PioneerDDJFLX6.lastBrowseTime;
+    const direction = delta > 0 ? 1 : -1;
+    const sameDirection = direction === PioneerDDJFLX6.lastBrowseDirection;
+    let multiplier = 1;
+    if (engine.getValue("[Library]", "focused_widget") === PioneerDDJFLX6.focusTracks &&
+            sameDirection) {
+        if (gap < 50) {
+            multiplier = 10;
+        } else if (gap < 100) {
+            multiplier = 4;
+        }
+    }
+    PioneerDDJFLX6.lastBrowseTime = now;
+    PioneerDDJFLX6.lastBrowseDirection = direction;
+    engine.setValue("[Library]", "MoveVertical",
+        Math.max(-100, Math.min(100, delta * multiplier)));
+};
+
 
 //
 // Tempo sliders

@@ -56,6 +56,9 @@ class LibraryControl : public QObject {
     // Deprecated navigation slots
     void slotLoadSelectedTrackToGroup(const QString& group, bool play);
     void slotUpdateTrackMenuControl(bool visible);
+    // Bite DJ: the track table asked for a load into the first stopped deck
+    // (double-tap, Enter, LoadSelectedIntoFirstStopped).
+    void slotTrackTableLoadRequested();
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

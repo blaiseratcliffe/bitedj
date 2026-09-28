@@ -42,6 +42,19 @@ bool bitedj_isLibraryPageActive() {
     return (pLibrary && pLibrary->get() > 0.0) ||
             (pOverview && pOverview->get() > 0.0);
 }
+
+// Bite DJ: after a track loads onto a deck from Browse, go back to Play, as a
+// CDJ does. Page 0 of the BiteDJ tab stacks is Play. Ported from upstream
+// d10e817 (Kyohei17). ControllerSettings creates [Tab],current whatever the
+// skin, so on a skin without a stack this write simply has no listener.
+void bitedj_showPlayPage() {
+    ControlObject* pCurrent = ControlObject::getControl(
+            ConfigKey(QStringLiteral("[Tab]"), QStringLiteral("current")),
+            ControlFlag::NoWarnIfMissing);
+    if (pCurrent) {
+        pCurrent->set(0.0);
+    }
+}
 } // namespace
 
 LoadToGroupController::LoadToGroupController(LibraryControl* pParent, const QString& group)
@@ -612,8 +625,42 @@ void LibraryControl::slotLoadSelectedTrackToGroup(const QString& group, bool pla
     }
 
     WTrackTableView* pTrackTableView = m_pLibraryWidget->getCurrentTrackTableView();
-    if (pTrackTableView) {
-        pTrackTableView->loadSelectedTrackToGroup(group, play);
+    if (!pTrackTableView) {
+        return;
+    }
+
+    // Bite DJ: loadSelectedTrackToGroup() returns void, so watch for
+    // loadTrackToPlayer, which is emitted synchronously and only once the
+    // table's load guards have passed. A refused load leaves Browse open.
+    // Samplers and preview decks load from Browse too and must not leave it.
+    bool loadRequested = false;
+    const auto loadConnection = connect(
+            pTrackTableView,
+            &WTrackTableView::loadTrackToPlayer,
+            this,
+            [&loadRequested] { loadRequested = true; },
+            Qt::DirectConnection);
+    pTrackTableView->loadSelectedTrackToGroup(group, play);
+    disconnect(loadConnection);
+
+    if (loadRequested && PlayerManager::isDeckGroup(group)) {
+        bitedj_showPlayPage();
+    }
+}
+
+void LibraryControl::slotTrackTableLoadRequested() {
+    // PlayerManager::slotLoadTrackIntoNextAvailableDeck takes the first deck
+    // whose play is 0 and drops the load when every deck is playing. A load
+    // never starts a deck, so a stopped deck now means one took the track.
+    const int numDecks = static_cast<int>(m_numDecks.get());
+    for (int i = 0; i < numDecks; ++i) {
+        ControlObject* pPlay = ControlObject::getControl(
+                ConfigKey(PlayerManager::groupForDeck(i), QStringLiteral("play")),
+                ControlFlag::NoWarnIfMissing);
+        if (pPlay && !pPlay->toBool()) {
+            bitedj_showPlayPage();
+            return;
+        }
     }
 }
 
