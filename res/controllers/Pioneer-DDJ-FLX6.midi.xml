@@ -3753,12 +3753,12 @@
             </control>
             <control>
                 <group>[Library]</group>
-                <key>MoveVertical</key>
-                <description>BROWSE - rotate - Scroll tracklist/tree view</description>
+                <key>PioneerDDJFLX6.browseRotate</key>
+                <description>BROWSE - rotate - Scroll tracklist/tree view, faster when spun fast in the track list</description>
                 <status>0xB6</status>
                 <midino>0x40</midino>
                 <options>
-                    <selectknob/>
+                    <script-binding/>
                 </options>
             </control>
             <control>
@@ -3769,6 +3769,26 @@
                 <midino>0x41</midino>
                 <options>
                     <normal/>
+                </options>
+            </control>
+            <control>
+                <group>[Library]</group>
+                <key>PioneerDDJFLX6.backPressed</key>
+                <description>BACK - press - Step up a level in Browse, or open Browse</description>
+                <status>0x96</status>
+                <midino>0x65</midino>
+                <options>
+                    <script-binding/>
+                </options>
+            </control>
+            <control>
+                <group>[Tab]</group>
+                <key>PioneerDDJFLX6.viewPressed</key>
+                <description>VIEW - press - Toggle between Play and Browse</description>
+                <status>0x96</status>
+                <midino>0x7A</midino>
+                <options>
+                    <script-binding/>
                 </options>
             </control>
             <control>
