@@ -15,6 +15,7 @@
 #include <QStringList>
 #include <QTextCodec>
 #include <QtDebug>
+#include <memory>
 #include <vector>
 
 #include "engine/engine.h"
@@ -1008,10 +1009,22 @@ void readAnalyze(TrackPointer track,
 
     qDebug() << "Rekordbox ANLZ path:" << anlzPath << " for: " << track->getTitle();
 
+    // A damaged file on the stick must not take the app down. kaitai throws on
+    // a bad magic or a short read, the kstream constructor throws if the file
+    // cannot be opened, and nothing up the getTrack() path catches either: an
+    // ANLZ0000.EXT zeroed by an unclean unmount aborted the app mid-browse.
+    // The whole file is parsed here, so nothing below reads the stream again.
     std::ifstream ifs(anlzPath.toStdString(), std::ifstream::binary);
-    kaitai::kstream ks(&ifs);
-
-    rekordbox_anlz_t anlz = rekordbox_anlz_t(&ks);
+    std::unique_ptr<kaitai::kstream> pStream;
+    std::unique_ptr<rekordbox_anlz_t> pAnlz;
+    try {
+        pStream = std::make_unique<kaitai::kstream>(&ifs);
+        pAnlz = std::make_unique<rekordbox_anlz_t>(pStream.get());
+    } catch (const std::exception& e) {
+        qWarning() << "Rekordbox ANLZ: cannot read" << anlzPath << ":" << e.what();
+        return;
+    }
+    rekordbox_anlz_t& anlz = *pAnlz;
 
     const double sampleRateKhz = sampleRate / 1000.0;
 

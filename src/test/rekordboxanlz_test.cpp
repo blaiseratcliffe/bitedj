@@ -500,4 +500,32 @@ TEST_F(RekordboxAnlzTest, LoopDemotedToCueChangesType) {
     EXPECT_FALSE(pCue->getEndPosition().isValid());
 }
 
+// A damaged file on the stick must be skipped, not thrown out of readAnalyze:
+// nothing on the getTrack() path catches it, so a throw aborts the app. The
+// first case is the ANLZ0000.EXT that did that on the box, zeroed after its
+// first byte by an unclean unmount; the second is a file cut off mid-header.
+TEST_F(RekordboxAnlzTest, DamagedFileIsSkipped) {
+    const TrackPointer pTrack = createTrack();
+
+    AnlzBuilder builder;
+    builder.addCueTag(kCueListTypeHotCue, {{1, kCueEntryTypeCue, 1000, 0, {}}});
+    importCues(pTrack, builder);
+    ASSERT_EQ(1, hotcueIndices(pTrack).size());
+
+    QByteArray zeroed(169863, '\0');
+    zeroed[0] = '\x02';
+    const QByteArray truncated("PMAI\0\0", 6);
+    for (const QByteArray& data : {zeroed, truncated}) {
+        const QString path = m_tempDir.filePath(
+                QStringLiteral("ANLZ%1.EXT").arg(m_fileCounter++));
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(data.size(), file.write(data));
+        file.close();
+
+        EXPECT_NO_THROW(mixxx::rekordbox::readAnalyze(pTrack, kSampleRate, 0, false, path));
+        EXPECT_EQ(1, hotcueIndices(pTrack).size());
+    }
+}
+
 } // namespace
