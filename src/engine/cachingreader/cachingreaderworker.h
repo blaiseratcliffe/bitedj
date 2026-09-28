@@ -147,11 +147,12 @@ class CachingReaderWorker : public EngineWorker {
     void loadTrack(const TrackPointer& pTrack);
 
     /// Bite DJ: re-open the file backing the currently loaded track after a
-    /// read came back empty, keeping the deck's position.
+    /// read came back short, keeping the deck's position.
     ///
-    /// A read that returns *nothing* for a range the source says is readable
-    /// means the file handle died under us, not that the track ended (see the
-    /// long note in AudioSource::readSampleFrames). On this device that is
+    /// A read that returns less than the source says is readable -- nothing at
+    /// all, or a partial chunk -- means the file handle died under us, not that
+    /// the track ended (see the long note in
+    /// AudioSource::readSampleFrames). On this device that is
     /// routine: the Pi hangs every USB port off one hub, so a controller
     /// power-cycling can re-enumerate the music drive along with the audio
     /// interface, and every decoder FD pointing into it goes stale. Nothing
@@ -184,8 +185,9 @@ class CachingReaderWorker : public EngineWorker {
     TrackPointer m_pTrack;
 
     // Bite DJ: read-failure recovery state, all touched only by the reader
-    // thread. m_readFailureTimer runs from the first empty read of a burst and
-    // bounds how long a deck is allowed to sit silent while we retry;
+    // thread. m_readFailureTimer runs from the first short read of a burst
+    // (empty or partial) and bounds how long a deck is allowed to sit silent
+    // while we retry -- it is cleared only by a read that comes back complete;
     // m_lastReopenAttempt rate-limits the re-open so a drive that is really
     // gone is not re-opened once per chunk request; m_gaveUpOnTrack stops the
     // retries once declareTrackUnreadable() has asked for the eject, which

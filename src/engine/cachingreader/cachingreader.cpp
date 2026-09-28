@@ -58,6 +58,7 @@ CachingReader::CachingReader(const QString& group,
           m_mruCachingReaderChunk(nullptr),
           m_lruCachingReaderChunk(nullptr),
           m_sampleBuffer(CachingReaderChunk::kSamples * kNumberOfCachedChunksInMemory),
+          m_group(group),
           m_worker(group, &m_chunkReadRequestFIFO, &m_readerStatusUpdateFIFO) {
     m_allocatedCachingReaderChunks.reserve(kNumberOfCachedChunksInMemory);
     // Divide up the allocated raw memory buffer into total_chunks
@@ -420,7 +421,9 @@ CachingReader::ReadResult CachingReader::read(SINT startSample, SINT numSamples,
                 if (remainingFrameIndexRange.empty()) {
                     // No more readable data available. Exit the loop and
                     // fill the remaining buffer with silence.
-                    kLogger.warning() << "Failed to read more sample data";
+                    kLogger.warning()
+                            << m_group
+                            << "Failed to read more sample data";
                     break;
                 }
                 lastChunkIndex =
@@ -428,7 +431,9 @@ CachingReader::ReadResult CachingReader::read(SINT startSample, SINT numSamples,
                 if (lastChunkIndex < chunkIndex) {
                     // No more readable data available. Exit the loop and
                     // fill the remaining buffer with silence.
-                    kLogger.warning() << "Abort reading of sample data";
+                    kLogger.warning()
+                            << m_group
+                            << "Abort reading of sample data";
                     break;
                 }
 
@@ -584,6 +589,7 @@ void CachingReader::hintAndMaybeWake(const HintVector& hintList) {
                 }
                 if (m_chunkReadRequestFIFO.write(&request, 1) != 1) {
                     kLogger.warning()
+                            << m_group
                             << "Failed to submit read request for chunk"
                             << chunkIndex;
                     // Revoke the chunk from the worker and free it
