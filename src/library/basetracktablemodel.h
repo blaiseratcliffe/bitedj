@@ -289,6 +289,9 @@ class BaseTrackTableModel : public QAbstractTableModel, public TrackModel {
     double m_backgroundColorOpacity;
     QColor m_trackPlayedColor;
     QColor m_trackMissingColor;
+    // Bite DJ fork: a rekordbox track the health check found damaged analysis
+    // files for. Only the rekordbox track cache has the column this keys on.
+    QColor m_trackDamagedColor;
 
     // Bite DJ fork: harmonic highlighting of the Key column against the sync
     // reference deck. m_compatibleKeys is the six-key set from

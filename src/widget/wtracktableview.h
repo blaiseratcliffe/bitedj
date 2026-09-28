@@ -111,6 +111,19 @@ class WTrackTableView : public WLibraryTableView {
     QColor getKeyCompatibleColor() const {
         return m_keyCompatibleColor;
     }
+    // Bite DJ fork: text colour for a rekordbox track whose analysis files are
+    // damaged. It loads, but without the cues or grid those files held, so it
+    // is marked apart from a missing track (trackMissingColor), which does not
+    // load at all. Skin-settable like the colours above:
+    //   WTrackTableView { qproperty-trackDamagedColor: #xxx; }
+    static constexpr const char* kDefaultTrackDamagedColor = "#f0a030";
+    Q_PROPERTY(QColor trackDamagedColor
+                    MEMBER m_trackDamagedColor
+                            NOTIFY trackDamagedColorChanged
+                                    DESIGNABLE true);
+    QColor getTrackDamagedColor() const {
+        return m_trackDamagedColor;
+    }
 
   signals:
     void trackMenuVisible(bool visible);
@@ -118,6 +131,7 @@ class WTrackTableView : public WLibraryTableView {
     void trackPlayedColorChanged(QColor col);
     void trackMissingColorChanged(QColor col);
     void keyCompatibleColorChanged(QColor col);
+    void trackDamagedColorChanged(QColor col);
 
   public slots:
     void loadTrackModel(QAbstractItemModel* model, bool restoreState = false);
@@ -186,6 +200,7 @@ class WTrackTableView : public WLibraryTableView {
     QColor m_trackPlayedColor;
     QColor m_trackMissingColor;
     QColor m_keyCompatibleColor;
+    QColor m_trackDamagedColor;
     bool m_sorting;
 
     // Control the delay to load a cover art.

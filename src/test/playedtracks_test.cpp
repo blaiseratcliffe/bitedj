@@ -58,7 +58,7 @@ class PlayedTracksTest : public LibraryTest {
                 " genre TEXT, tracknumber TEXT, location TEXT UNIQUE,"
                 " comment TEXT, duration INTEGER, bitrate TEXT, bpm FLOAT,"
                 " key TEXT, rating INTEGER, analyze_path TEXT UNIQUE,"
-                " device TEXT, color INTEGER)"));
+                " device TEXT, color INTEGER, problem INTEGER DEFAULT 0)"));
         ASSERT_TRUE(q.exec(
                 "CREATE TABLE IF NOT EXISTS rekordbox_playlists ("
                 " id INTEGER PRIMARY KEY, name TEXT UNIQUE)"));
@@ -100,7 +100,8 @@ class PlayedTracksTest : public LibraryTest {
                 LIBRARYTABLE_BPM,
                 LIBRARYTABLE_KEY,
                 LIBRARYTABLE_COLOR,
-                REKORDBOX_ANALYZE_PATH};
+                REKORDBOX_ANALYZE_PATH,
+                REKORDBOX_PROBLEM};
         auto trackSource = QSharedPointer<BaseTrackCache>::create(
                 internalCollection(),
                 QStringLiteral("rekordbox_library"),
@@ -209,6 +210,73 @@ TEST_F(PlayedTracksTest, ExternalModelRowIsTintedWhilePlayed) {
     EXPECT_GE(repaintSpy.count(), 1);
 
     playedTracks.clear();
+    EXPECT_FALSE(model.data(titleIndex, Qt::ForegroundRole)
+                         .canConvert<QColor>());
+}
+
+// The rekordbox health check writes its verdict into the `problem` column and
+// refreshes the row through the track cache, as RekordboxFeature does; the
+// row then takes the matching colour.
+TEST_F(PlayedTracksTest, RekordboxProblemColoursTheRow) {
+    createRekordboxTables();
+
+    auto trackSource = createRekordboxTrackSource();
+    RekordboxPlaylistModel model(nullptr, trackCollectionManager(), trackSource);
+    model.setPlaylist(QStringLiteral("/media/USB1-->Playlist A"));
+    model.select();
+    ASSERT_EQ(1, model.rowCount());
+
+    const int titleCol =
+            model.fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_TITLE);
+    ASSERT_GE(titleCol, 0);
+    const QModelIndex titleIndex = model.index(0, titleCol);
+    // The column is there, and internal, so it is never shown as a column.
+    const int problemCol =
+            model.fieldIndex(ColumnCache::COLUMN_REKORDBOX_PROBLEM);
+    ASSERT_GE(problemCol, 0);
+    EXPECT_TRUE(model.isColumnInternal(problemCol));
+
+    const auto setProblem = [&](const QString& value) {
+        QSqlQuery q(internalCollection()->database());
+        ASSERT_TRUE(q.exec(
+                "UPDATE rekordbox_library SET problem=" + value + " WHERE id=1"));
+        trackSource->slotTracksAddedOrChanged(QSet<TrackId>{TrackId(QVariant(1))});
+    };
+
+    // A fresh row is 0: no problem, the skin's own text colour.
+    EXPECT_FALSE(model.data(titleIndex, Qt::ForegroundRole)
+                         .canConvert<QColor>());
+
+    setProblem(QStringLiteral("2"));
+    const QVariant damaged = model.data(titleIndex, Qt::ForegroundRole);
+    ASSERT_TRUE(damaged.canConvert<QColor>());
+    EXPECT_EQ(QColor(WTrackTableView::kDefaultTrackDamagedColor),
+            damaged.value<QColor>());
+
+    // Checked before the played tint: a damaged track that has been played
+    // still says it is damaged.
+    PlayedTracks::instance().markPlayed(kTrackLocation);
+    EXPECT_EQ(QColor(WTrackTableView::kDefaultTrackDamagedColor),
+            model.data(titleIndex, Qt::ForegroundRole).value<QColor>());
+    PlayedTracks::instance().clear();
+
+    setProblem(QStringLiteral("1"));
+    const QVariant missing = model.data(titleIndex, Qt::ForegroundRole);
+    ASSERT_TRUE(missing.canConvert<QColor>());
+    EXPECT_EQ(QColor(WTrackTableView::kDefaultTrackMissingColor),
+            missing.value<QColor>());
+
+    // 3 is a damaged .2EX: the track plays with the app's own waveform, so it
+    // is logged but not marked.
+    setProblem(QStringLiteral("3"));
+    EXPECT_FALSE(model.data(titleIndex, Qt::ForegroundRole)
+                         .canConvert<QColor>());
+
+    setProblem(QStringLiteral("0"));
+    EXPECT_FALSE(model.data(titleIndex, Qt::ForegroundRole)
+                         .canConvert<QColor>());
+
+    setProblem(QStringLiteral("NULL"));
     EXPECT_FALSE(model.data(titleIndex, Qt::ForegroundRole)
                          .canConvert<QColor>());
 }

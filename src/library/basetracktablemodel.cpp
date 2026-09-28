@@ -7,6 +7,7 @@
 #include "library/dao/trackschema.h"
 #include "library/library_prefs.h"
 #include "library/playedtracks.h"
+#include "library/rekordbox/rekordboxtrackhealth.h"
 #include "library/starrating.h"
 #include "library/tabledelegates/bpmdelegate.h"
 #include "library/tabledelegates/checkboxdelegate.h"
@@ -103,6 +104,7 @@ BaseTrackTableModel::BaseTrackTableModel(
           m_backgroundColorOpacity(WLibrary::kDefaultTrackTableBackgroundColorOpacity),
           m_trackPlayedColor(QColor(WTrackTableView::kDefaultTrackPlayedColor)),
           m_trackMissingColor(QColor(WTrackTableView::kDefaultTrackMissingColor)),
+          m_trackDamagedColor(QColor(WTrackTableView::kDefaultTrackDamagedColor)),
           m_keyCompatibleColor(QColor(WTrackTableView::kDefaultKeyCompatibleColor)) {
     connect(&pTrackCollectionManager->internalCollection()->getTrackDAO(),
             &TrackDAO::tracksRemoved,
@@ -411,6 +413,14 @@ QAbstractItemDelegate* BaseTrackTableModel::delegateForColumn(
             [this](QColor col) {
                 m_keyCompatibleColor = col;
             });
+    // Bite DJ: and the rekordbox damaged-analysis colour.
+    m_trackDamagedColor = pTableView->getTrackDamagedColor();
+    connect(pTableView,
+            &WTrackTableView::trackDamagedColorChanged,
+            this,
+            [this](QColor col) {
+                m_trackDamagedColor = col;
+            });
     if (index == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_RATING)) {
         return new StarDelegate(pTableView);
     } else if (index == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BPM)) {
@@ -525,6 +535,23 @@ QVariant BaseTrackTableModel::data(
             const QString location = getTrackLocation(index);
             if (!location.isEmpty() && m_missingTrackLocations.contains(location)) {
                 return QVariant::fromValue(m_trackMissingColor);
+            }
+        }
+        // Bite DJ: what the rekordbox health check found when the stick was
+        // parsed, so a track that will not load properly is marked before the
+        // set rather than discovered mid-mix. Only the rekordbox track cache
+        // has this column; for every other model the value is null and this
+        // falls through.
+        const auto problemRaw = rawSiblingValue(
+                index,
+                ColumnCache::COLUMN_REKORDBOX_PROBLEM);
+        if (!problemRaw.isNull()) {
+            const int problem = problemRaw.toInt();
+            if (problem == static_cast<int>(mixxx::rekordbox::TrackProblem::AudioMissing)) {
+                return QVariant::fromValue(m_trackMissingColor);
+            }
+            if (problem == static_cast<int>(mixxx::rekordbox::TrackProblem::AnalysisDamaged)) {
+                return QVariant::fromValue(m_trackDamagedColor);
             }
         }
         auto missingRaw = rawSiblingValue(

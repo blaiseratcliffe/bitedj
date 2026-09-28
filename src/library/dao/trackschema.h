@@ -74,6 +74,10 @@ const QString PLAYLISTTRACKSTABLE_PLAYLISTID = QStringLiteral("playlist_id");
 const QString PLAYLISTTRACKSTABLE_DATETIMEADDED = QStringLiteral("pl_datetime_added");
 
 const QString REKORDBOX_ANALYZE_PATH = "analyze_path";
+// Bite DJ: the health check's verdict on a scanned rekordbox track, 0 when
+// nothing is wrong. Only the rekordbox track cache has this column; see
+// mixxx::rekordbox::TrackProblem for the values.
+const QString REKORDBOX_PROBLEM = QStringLiteral("problem");
 
 namespace mixxx {
 namespace trackschema {

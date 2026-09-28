@@ -509,9 +509,13 @@ WEffectSelector QAbstractItemView {
  * Set here rather than left at the C++ default so tuning it is a skin deploy
  * rather than a 524MB rebuild. Green reads against both the #111 and #222
  * alternating rows below, and against the blue played colour. */
+/* trackDamagedColor marks a rekordbox track whose analysis files the health
+ * check found damaged: it loads, but without its cues or grid. Amber, apart
+ * from the red of a track whose audio is missing and will not load at all. */
 #LibraryWrapper WTrackTableView {
   qproperty-trackPlayedColor: #4aa3e0;
   qproperty-keyCompatibleColor: #5fbf6a;
+  qproperty-trackDamagedColor: #f0a030;
 }
 
 #LibraryWrapper QTableView,

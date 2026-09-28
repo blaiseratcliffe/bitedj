@@ -693,6 +693,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/recording/recordingfeature.cpp
   src/library/rekordbox/rekordbox3bandimport.cpp
   src/library/rekordbox/rekordboxfeature.cpp
+  src/library/rekordbox/rekordboxtrackhealth.cpp
   src/library/rhythmbox/rhythmboxfeature.cpp
   src/library/scanner/importfilestask.cpp
   src/library/scanner/libraryscanner.cpp
@@ -1652,6 +1653,7 @@ if(BUILD_TESTING)
     src/test/readaheadmanager_test.cpp
     src/test/rekordbox3band_test.cpp
     src/test/rekordboxanlz_test.cpp
+    src/test/rekordboxtrackhealth_test.cpp
     src/test/replaygaintest.cpp
     src/test/rescalertest.cpp
     src/test/rgbcolor_test.cpp
