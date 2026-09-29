@@ -1,6 +1,7 @@
 #include "preferences/systemsettings.h"
 
 #include <QCoreApplication>
+#include <QDeadlineTimer>
 #include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
@@ -17,7 +18,11 @@
 #include "control/controlpushbutton.h"
 #include "encoder/encodermp3settings.h"
 #include "library/dao/fsanalysiscache.h"
+#include "library/dao/fscueoverridestore.h"
 #include "library/dao/fshistoryworker.h"
+#include "library/dao/fsmetaoverridestore.h"
+#include "library/dao/fssamplerbankstore.h"
+#include "library/dao/fsstorewriter.h"
 #include "library/rekordbox/rekordboxtrackhealth.h"
 #include "mixer/basetrackplayer.h"
 #include "mixer/playermanager.h"
@@ -530,14 +535,27 @@ void SystemSettings::refresh(bool force) {
     QStringList removedMountPoints;
     for (const UsbMount& old : std::as_const(m_usbMounts)) {
         bool stillPresent = false;
+        bool sameDevice = false;
         for (const UsbMount& cur : std::as_const(mounts)) {
             if (cur.mountPoint == old.mountPoint) {
                 stillPresent = true;
+                sameDevice = cur.device == old.device;
                 break;
             }
         }
         if (!stillPresent) {
             removedMountPoints.append(old.mountPoint);
+        }
+        if (!sameDevice) {
+            // The .bitedj stores answer reads from what they loaded off the
+            // drive, and a stick that was yanked (or swapped under the same
+            // mount point) may be edited elsewhere before it is back. The
+            // in-skin eject forgets its drive itself; this covers the rest.
+            // Anything still queued for it is dropped: it is not there to
+            // take it.
+            FsCueOverrideStore::forgetFilesystem(old.mountPoint);
+            FsMetaOverrideStore::forgetFilesystem(old.mountPoint);
+            FsSamplerBankStore::forgetFilesystem(old.mountPoint);
         }
     }
 
@@ -700,6 +718,11 @@ bool SystemSettings::ejectMountPoint(const QString& mountPoint,
         pSamplerDrive->suppressSavesTo(mountPoint);
     }
 
+    // One budget for every wait on the .bitedj store writer below, however
+    // many times the retry loop comes round: a stick that has stopped
+    // answering delays the eject by this much at most, not this much per try.
+    const QDeadlineTimer storeDeadline(FsStoreWriter::kFlushTimeoutMillis);
+
     const int unloaded = unloadTracksOnMount(mountPoint);
     if (pUnloaded) {
         *pUnloaded = unloaded;
@@ -716,12 +739,14 @@ bool SystemSettings::ejectMountPoint(const QString& mountPoint,
     // retry loop below covers the last one closing.
     mixxx::rekordbox::cancelHealthChecksUnderPath(mountPoint);
 
-    // Let any history append that is still queued for this drive reach it
-    // before the filesystem goes away: the write is deliberately off the GUI
-    // thread (see FsHistoryWorker), so unlike every other store here it can
-    // still have work outstanding at this point. Bounded, so a stick that has
-    // stopped answering delays the eject rather than freezing the unit.
+    // Let any history append, cue override, rating or sampler bank that is
+    // still queued for this drive reach it before the filesystem goes away:
+    // those writes are deliberately off the GUI thread (see FsHistoryWorker
+    // and FsStoreWriter), so they can still have work outstanding at this
+    // point. Bounded, so a stick that has stopped answering delays the eject
+    // rather than freezing the unit.
     FsHistoryWorker::flushFilesystem(mountPoint);
+    FsStoreWriter::flushFilesystem(mountPoint, storeDeadline);
 
     // Close any per-filesystem analysis caches open on this drive. A track that
     // was analyzed from the USB leaves the FsAnalysisCache SQLite connection (and
@@ -741,16 +766,36 @@ bool SystemSettings::ejectMountPoint(const QString& mountPoint,
     // i.e. clears the lingering in-memory references to the track) and give the
     // worker thread a moment to close the file, retrying umount until it takes.
     QString error = tr("device is busy");
+    bool unmounted = false;
     for (int attempt = 0; attempt < kUnmountAttempts; ++attempt) {
         // Drain queued track-release / cache-eviction events posted to this thread.
         QCoreApplication::processEvents(QEventLoop::AllEvents, kUnmountRetryMs);
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        // The eviction just pumped saves the track, and a cue or rating edit
+        // made since it was loaded is queued for this drive by that save.
+        // Landing it here gets the DJ's last edit onto the stick and closes
+        // its file before the unmount. Returns at once when nothing is queued,
+        // and once the deadline has passed.
+        FsStoreWriter::flushFilesystem(mountPoint, storeDeadline);
         if (tryUnmount(mountPoint, &error)) {
-            return true;
+            unmounted = true;
+            break;
         }
         // Yield so the reader worker thread can finish closing the audio source.
         QThread::msleep(kUnmountRetryMs);
     }
+    if (unmounted) {
+        // What the stores remember of this drive goes with it: the stick may
+        // be edited on another unit before it comes back, so its next access
+        // reads it again. Anything still queued past the deadline is dropped
+        // here (and logged) rather than written after the eject.
+        FsCueOverrideStore::forgetFilesystem(mountPoint);
+        FsMetaOverrideStore::forgetFilesystem(mountPoint);
+        FsSamplerBankStore::forgetFilesystem(mountPoint);
+        return true;
+    }
+    // Still mounted, so the stores keep what they know of it, and the writes
+    // still queued for it land when the writer gets to them.
     if (pError) {
         *pError = error;
     }

@@ -144,7 +144,10 @@ class SamplerDrive : public QObject {
     /// One row of the grid and what is known about it on the drive.
     struct Bank {
         /// The row as last read from (or written to) the drive. Comparing
-        /// against it is what makes "did this actually change?" cheap.
+        /// against it is what makes "did this actually change?" cheap. A write
+        /// counts from the moment FsSamplerBankStore accepts it; the store
+        /// lands it later, and a row the drive then refuses is written again
+        /// with the next change to the bank.
         QByteArray baseline;
         /// True while the loads issued by a restore are still settling.
         bool restoring = false;
@@ -193,7 +196,7 @@ class SamplerDrive : public QObject {
     void applyBank(int bank, const QStringList& stored);
     /// Empty the whole grid, deferring the slots that are playing.
     void clearAllSlots();
-    /// Write a row to the drive if it differs from the baseline.
+    /// Queue a row for the drive if it differs from the baseline.
     void flushBank(int bank);
     /// Send `location` (empty to unload) to one sampler.
     void loadSlot(int samplerIndex, const QString& location);

@@ -30,7 +30,8 @@ struct FsStoreTarget {
 
     /// Locate the store `dbName` on the removable filesystem holding
     /// `fileLocation`, and record where that file sits inside it. Returns false
-    /// when the filesystem is unavailable or is not a removable one.
+    /// when the file is not there, or its filesystem is unavailable or is not a
+    /// removable one.
     static bool resolveForFile(const QString& fileLocation,
             const QString& dbName,
             FsStoreTarget* pTarget);
@@ -78,6 +79,24 @@ class ScopedFsStore {
     const char* m_logTag;
     QString m_connectionName;
 };
+
+/// How a queued write to one of the stores above came out.
+enum class FsStoreWriteResult {
+    Written,
+    /// The drive refused it, or is gone. The caller keeps it for a retry.
+    Failed,
+    /// The drive's store was cleared, or the drive ejected, after the write
+    /// was queued: it is skipped on purpose and is not a failure.
+    Dropped,
+};
+
+/// How long a store that is there but could not be read (corrupt, written by a
+/// future schema, or locked by a write that will not finish) is left alone
+/// before the next access tries the drive again. Until then every access
+/// answers "nothing read" at once instead of making its caller, often the GUI
+/// thread, wait on the drive again for what is almost certainly the same
+/// failure. Short enough that a store which recovers is back within a track.
+constexpr int kFsStoreLoadRetryMillis = 30000;
 
 /// Delete `dbName` and the journal siblings a crash may have left beside it
 /// from the `.bitedj` directory of the filesystem mounted at `mountPoint`.

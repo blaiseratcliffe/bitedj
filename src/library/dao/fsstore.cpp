@@ -51,6 +51,14 @@ bool FsStoreTarget::resolveForFile(
     if (absPath.isEmpty()) {
         return false;
     }
+    if (!QFileInfo::exists(absPath)) {
+        // QStorageInfo hands a vanished path back as its own root, and
+        // isOnRemovableMedia is only a prefix test, so after an eject a store
+        // write still queued for a track on the drive could otherwise resolve
+        // to the boot volume the mount point is now a plain directory on. See
+        // the matching guard in resolveForMount.
+        return false;
+    }
     const QStorageInfo storage(absPath);
     if (!storage.isValid() || !storage.isReady()) {
         return false;
