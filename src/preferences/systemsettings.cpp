@@ -454,6 +454,35 @@ bool SystemSettings::isOnRemovableMedia(const QString& path) {
     return false;
 }
 
+// static
+QString SystemSettings::absentDrive(const QString& path, const QList<UsbMount>& mounts) {
+    const QString cleaned = QDir::cleanPath(path);
+    for (const UsbMount& mount : mounts) {
+        if (cleaned.startsWith(mount.mountPoint + QLatin1Char('/'))) {
+            return QString();
+        }
+    }
+    // The longest matching root, so that /media/blaise/ESD-USB/... names the
+    // drive ESD-USB rather than blaise.
+    QString root;
+    for (const QString& candidate : removableRoots()) {
+        if (candidate.length() > root.length() &&
+                cleaned.startsWith(candidate + QLatin1Char('/'))) {
+            root = candidate;
+        }
+    }
+    if (root.isEmpty()) {
+        return QString();
+    }
+    const QString belowRoot = cleaned.mid(root.length() + 1);
+    const int slash = belowRoot.indexOf(QLatin1Char('/'));
+    if (slash <= 0) {
+        // A file sitting directly in the root directory is not on a drive.
+        return QString();
+    }
+    return belowRoot.left(slash);
+}
+
 QList<SystemSettings::UsbMount> SystemSettings::enumerateUsbMounts() {
     QList<UsbMount> mounts;
     QSet<QString> seen;

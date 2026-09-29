@@ -16,6 +16,7 @@
 #include "mixer/samplerdrive.h"
 #include "moc_basetrackplayer.cpp"
 #include "notifications/notifications.h"
+#include "preferences/systemsettings.h"
 #include "track/track.h"
 #include "util/sandbox.h"
 #include "vinylcontrol/defs_vinylcontrol.h"
@@ -522,6 +523,18 @@ void BaseTrackPlayerImpl::slotLoadTrack(TrackPointer pNewTrack, bool bPlay) {
         if (!Sandbox::askForAccess(&fileInfo)) {
             // We don't have access.
             return;
+        }
+        // Bite DJ: a track from a stick that is not plugged in (fork issue
+        // #26). Refused before the existence check below so the DJ is told
+        // which stick to fetch rather than that one file is missing. Keeps
+        // the deck's current track, for the same reason as that check.
+        if (const SystemSettings* pSystemSettings = SystemSettings::tryInstance()) {
+            const QString drive = pSystemSettings->absentDrive(fileInfo.location());
+            if (!drive.isEmpty()) {
+                notifyLoadFailed(pNewTrack,
+                        tr("The drive '%1' is not plugged in.").arg(drive));
+                return;
+            }
         }
         // If the file is missing, abort the load *before* unloading whatever is
         // already in the deck. Stock Mixxx unloads first and only discovers the
