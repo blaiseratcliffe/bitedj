@@ -524,18 +524,6 @@ void BaseTrackPlayerImpl::slotLoadTrack(TrackPointer pNewTrack, bool bPlay) {
             // We don't have access.
             return;
         }
-        // Bite DJ: a track from a stick that is not plugged in (fork issue
-        // #26). Refused before the existence check below so the DJ is told
-        // which stick to fetch rather than that one file is missing. Keeps
-        // the deck's current track, for the same reason as that check.
-        if (const SystemSettings* pSystemSettings = SystemSettings::tryInstance()) {
-            const QString drive = pSystemSettings->absentDrive(fileInfo.location());
-            if (!drive.isEmpty()) {
-                notifyLoadFailed(pNewTrack,
-                        tr("The drive '%1' is not plugged in.").arg(drive));
-                return;
-            }
-        }
         // If the file is missing, abort the load *before* unloading whatever is
         // already in the deck. Stock Mixxx unloads first and only discovers the
         // missing file later in the reader worker, which clears a perfectly good
@@ -545,6 +533,20 @@ void BaseTrackPlayerImpl::slotLoadTrack(TrackPointer pNewTrack, bool bPlay) {
             // Note: alert directly rather than via slotLoadFailed(), which would
             // unload m_pLoadedTrack in the case where the DJ re-loads the very
             // track that just went missing — the deck must stay as-is.
+            //
+            // Bite DJ: when the file is on a stick that is not plugged in,
+            // name the stick instead (fork issue #26). Only the wording: the
+            // existence check above still decides, because the mount list can
+            // lag a stick that was mounted a moment ago by up to the 3 s USB
+            // poll, and a load that would work must not be refused.
+            if (const SystemSettings* pSystemSettings = SystemSettings::tryInstance()) {
+                const QString drive = pSystemSettings->absentDrive(fileInfo.location());
+                if (!drive.isEmpty()) {
+                    notifyLoadFailed(pNewTrack,
+                            tr("The drive '%1' is not plugged in.").arg(drive));
+                    return;
+                }
+            }
             // Show only the (truncated) filename rather than the full path:
             // the path is too long to fit the alert on the small appliance
             // screen, so it ends up invisible to the DJ.

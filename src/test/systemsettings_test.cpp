@@ -69,6 +69,25 @@ TEST(SystemSettingsTest, AbsentDriveNamesTheStickThatIsNotMounted) {
                     QStringLiteral("/mnt/Stick/track.mp3"), lexarMounted()));
 }
 
+TEST(SystemSettingsTest, AbsentDriveNamesEveryStickWhenNoneIsMounted) {
+    const ScopedUserEnvironment user("bitedj-test-user");
+
+    // The usual state between sets: no stick plugged in at all.
+    const QList<SystemSettings::UsbMount> noMounts;
+    EXPECT_EQ(QStringLiteral("Lexar"),
+            SystemSettings::absentDrive(
+                    QStringLiteral("/media/bitedj-test-user/Lexar/Music/track.mp3"),
+                    noMounts));
+    EXPECT_EQ(QStringLiteral("ESD-USB"),
+            SystemSettings::absentDrive(
+                    QStringLiteral("/run/media/bitedj-test-user/ESD-USB/track.mp3"),
+                    noMounts));
+    EXPECT_TRUE(SystemSettings::absentDrive(
+            QStringLiteral("/home/bitedj-test-user/Music/track.mp3"),
+            noMounts)
+                    .isEmpty());
+}
+
 TEST(SystemSettingsTest, AbsentDriveIsEmptyForAMountedStick) {
     const ScopedUserEnvironment user("bitedj-test-user");
 
