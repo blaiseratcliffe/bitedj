@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QDeadlineTimer>
 #include <QHash>
 #include <QMutex>
 #include <QSet>
@@ -27,8 +28,10 @@ enum class FsStoreWriteResult;
 ///
 /// Like FsCueOverrideStore, nothing here touches a drive's SQLite on the
 /// calling thread after the first access to it: that access loads every bank
-/// on the drive into an in-memory mirror, reads are answered from the mirror,
-/// and writes update it and are queued on FsStoreWriter. Each write still opens
+/// on the drive into an in-memory mirror, outside the store's mutex, reads are
+/// answered from the mirror, and writes update it and are queued on
+/// FsStoreWriter. A store that cannot be read is left alone for
+/// kFsStoreLoadRetryMillis. Each write still opens
 /// the database and closes it again; see ScopedFsStore for why a lingering file
 /// descriptor would break eject.
 ///
@@ -100,15 +103,16 @@ class FsSamplerBankStore {
         QSet<int> dirty;
         /// False while the drive's store could not be read: the mirror then
         /// holds only this unit's own writes, and every read of a bank it does
-        /// not hold tries the drive again.
+        /// not hold tries the drive again (once the retry backoff is over).
         bool complete = false;
     };
 
-    // The mirror of the drive `target` is on; see
-    // FsCueOverrideStore::loadedMirror(). Requires s_mutex to be held.
-    static Mirror* loadedMirror(const FsStoreTarget& target);
-    // See FsCueOverrideStore::mirrorForWrite(). Requires s_mutex to be held.
-    static Mirror& mirrorForWrite(const FsStoreTarget& target);
+    // Load (or complete) the mirror of the drive `target` is on, reading the
+    // drive with s_mutex let go; see FsCueOverrideStore::ensureLoaded(). Must
+    // be called without the lock.
+    static void ensureLoaded(const FsStoreTarget& target);
+    // See FsCueOverrideStore::dropMirror(). Requires s_mutex to be held.
+    static void dropMirror(const QString& rootKey);
     // Writer thread: take the payload queued for `bankIndex` on the drive
     // keyed `rootKey`, if it is still waiting to be written. False when an
     // earlier task already wrote it, or the drive's mirror has been dropped.
@@ -123,7 +127,10 @@ class FsSamplerBankStore {
 
     static QMutex s_mutex;
     // Maps a drive's cleaned mount root to its mirror. Guarded by s_mutex,
-    // which is never held across disk I/O except for the one read that loads
-    // a mirror.
+    // which is never held across disk I/O, not even the read that loads a
+    // mirror.
     static QHash<QString, Mirror> s_mirrors;
+    // See FsCueOverrideStore::s_loadRetryAfter and s_dropGenerations.
+    static QHash<QString, QDeadlineTimer> s_loadRetryAfter;
+    static QHash<QString, quint64> s_dropGenerations;
 };

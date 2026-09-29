@@ -66,6 +66,8 @@ bool readStoredBanks(const FsStoreTarget& target, QHash<int, QByteArray>* pRows)
 
 QMutex FsSamplerBankStore::s_mutex;
 QHash<QString, FsSamplerBankStore::Mirror> FsSamplerBankStore::s_mirrors;
+QHash<QString, QDeadlineTimer> FsSamplerBankStore::s_loadRetryAfter;
+QHash<QString, quint64> FsSamplerBankStore::s_dropGenerations;
 
 // static
 QByteArray FsSamplerBankStore::serializeBank(
@@ -139,17 +141,18 @@ bool FsSamplerBankStore::readBank(const QString& mountRoot,
         return false;
     }
 
+    ensureLoaded(target);
     QByteArray payload;
     {
         QMutexLocker locker(&s_mutex);
-        const Mirror* pMirror = loadedMirror(target);
-        if (!pMirror) {
-            // A store is there but could not be read; the next read tries the
+        const auto mirror = s_mirrors.constFind(target.rootPath);
+        if (mirror == s_mirrors.constEnd()) {
+            // A store is there but could not be read; a later read tries the
             // drive again.
             return false;
         }
-        const auto it = pMirror->payloads.constFind(bankIndex);
-        if (it == pMirror->payloads.constEnd()) {
+        const auto it = mirror->payloads.constFind(bankIndex);
+        if (it == mirror->payloads.constEnd()) {
             // No bank at this index on this drive (the common case for a stick
             // that has never been used here), or none this unit has written to
             // a store it could not read.
@@ -179,9 +182,12 @@ bool FsSamplerBankStore::writeBank(const QString& mountRoot,
     // the mirror and the writer's pending count go by.
     const QString rootKey = target.rootPath;
     const QByteArray payload = serializeBank(target.rootPath, locations);
+    // Before the lock, since it may read the drive. An unreadable store still
+    // takes the write, into an incomplete mirror.
+    ensureLoaded(target);
     {
         QMutexLocker locker(&s_mutex);
-        Mirror& mirror = mirrorForWrite(target);
+        Mirror& mirror = s_mirrors[rootKey];
         mirror.payloads.insert(bankIndex, payload);
         mirror.dirty.insert(bankIndex);
     }
@@ -209,19 +215,43 @@ bool FsSamplerBankStore::writeBank(const QString& mountRoot,
 }
 
 // static
-FsSamplerBankStore::Mirror* FsSamplerBankStore::loadedMirror(const FsStoreTarget& target) {
+void FsSamplerBankStore::ensureLoaded(const FsStoreTarget& target) {
     const QString rootKey = QDir::cleanPath(target.rootPath);
-    auto it = s_mirrors.find(rootKey);
-    if (it != s_mirrors.end() && it->complete) {
-        return &it.value();
+    quint64 generation = 0;
+    {
+        QMutexLocker locker(&s_mutex);
+        const auto it = s_mirrors.constFind(rootKey);
+        if (it != s_mirrors.constEnd() && it->complete) {
+            return;
+        }
+        const auto retryAfter = s_loadRetryAfter.constFind(rootKey);
+        if (retryAfter != s_loadRetryAfter.constEnd() && !retryAfter->hasExpired()) {
+            // Failed a moment ago; not worth waiting on the drive for again.
+            return;
+        }
+        generation = s_dropGenerations.value(rootKey);
     }
 
-    // The one read this drive gets unless it fails; see
-    // FsCueOverrideStore::loadedMirror().
+    // The one read this drive gets unless it fails, made with the lock let
+    // go; see FsCueOverrideStore::ensureLoaded().
     QHash<int, QByteArray> stored;
-    if (!readStoredBanks(target, &stored)) {
-        return it != s_mirrors.end() ? &it.value() : nullptr;
+    const bool read = readStoredBanks(target, &stored);
+
+    QMutexLocker locker(&s_mutex);
+    if (s_dropGenerations.value(rootKey) != generation) {
+        // Dropped by a clear or an eject while the read ran: not kept.
+        return;
     }
+    auto it = s_mirrors.find(rootKey);
+    if (it != s_mirrors.end() && it->complete) {
+        // Another thread's read got there first.
+        return;
+    }
+    if (!read) {
+        s_loadRetryAfter.insert(rootKey, QDeadlineTimer(kFsStoreLoadRetryMillis));
+        return;
+    }
+    s_loadRetryAfter.remove(rootKey);
     if (it == s_mirrors.end()) {
         it = s_mirrors.insert(rootKey, Mirror());
     }
@@ -232,17 +262,13 @@ FsSamplerBankStore::Mirror* FsSamplerBankStore::loadedMirror(const FsStoreTarget
         }
     }
     it->complete = true;
-    return &it.value();
 }
 
 // static
-FsSamplerBankStore::Mirror& FsSamplerBankStore::mirrorForWrite(const FsStoreTarget& target) {
-    Mirror* pMirror = loadedMirror(target);
-    if (pMirror) {
-        return *pMirror;
-    }
-    // Unreadable right now: the write goes into an incomplete mirror.
-    return s_mirrors[QDir::cleanPath(target.rootPath)];
+void FsSamplerBankStore::dropMirror(const QString& rootKey) {
+    s_mirrors.remove(rootKey);
+    s_loadRetryAfter.remove(rootKey);
+    ++s_dropGenerations[rootKey];
 }
 
 // static
@@ -317,7 +343,7 @@ bool FsSamplerBankStore::clearFilesystemBanks(const QString& mountPoint) {
         // Dropped first, so every write still queued for this drive finds
         // nothing to do instead of recreating the database deleted below.
         QMutexLocker locker(&s_mutex);
-        s_mirrors.remove(rootKey);
+        dropMirror(rootKey);
     }
     // The one the writer may be in the middle of is waited out, so the delete
     // does not land underneath it.
@@ -326,24 +352,31 @@ bool FsSamplerBankStore::clearFilesystemBanks(const QString& mountPoint) {
     const bool removed = fsStoreRemove(mountPoint, kStoreDbName, kLogTag);
     {
         // A read in the meantime may have loaded the mirror again, from the
-        // file that is now gone.
+        // file that is now gone, and one still running is kept out by the
+        // drop.
         QMutexLocker locker(&s_mutex);
-        s_mirrors.remove(rootKey);
+        dropMirror(rootKey);
     }
     return removed;
 }
 
 // static
 void FsSamplerBankStore::forgetFilesystem(const QString& mountPoint) {
+    const QString rootKey = QDir::cleanPath(mountPoint);
     QMutexLocker locker(&s_mutex);
-    const auto it = s_mirrors.find(QDir::cleanPath(mountPoint));
-    if (it == s_mirrors.end()) {
-        return;
-    }
-    if (!it->dirty.isEmpty()) {
+    const auto it = s_mirrors.constFind(rootKey);
+    if (it != s_mirrors.constEnd() && !it->dirty.isEmpty()) {
+        // Nothing to mark for a retry here: SamplerDrive keeps the baselines,
+        // and a drive going away resets them (setMountRoot() and
+        // suppressSavesTo() both do), after which the grid is reloaded from
+        // what the drive really holds when it is back. Should the same stick
+        // be back under the same mount point before SamplerDrive saw it go,
+        // the grid keeps the lost row and the next change to that bank writes
+        // the whole row, as after a failed write.
         qWarning() << kLogTag << ": discarding" << it->dirty.size()
                    << "unsaved sampler bank(s) that never reached" << mountPoint
                    << ":" << it->dirty.values();
     }
-    s_mirrors.erase(it);
+    // Dropped even with no mirror, so a read still in flight is not kept.
+    dropMirror(rootKey);
 }

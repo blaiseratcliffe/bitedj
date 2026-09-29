@@ -5,6 +5,7 @@
 #include <QAtomicInt>
 #include <QCoreApplication>
 #include <QDeadlineTimer>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -74,6 +75,55 @@ QByteArray readStoredCues(const QString& dbPath, const QString& relPath) {
     }
     QSqlDatabase::removeDatabase(connectionName);
     return payload;
+}
+
+/// Create at `dbPath` a cue store that the store cannot read but would still
+/// write to, holding an override for `relPath`. `cue_overrides` is a view
+/// whose every row fails to evaluate (abs() of the smallest integer is an
+/// overflow error), so the store's SELECT fails the way it would on a store
+/// written by a future schema. An INSTEAD OF trigger passes inserts through
+/// to the table underneath, so a blind INSERT OR REPLACE lands and changes
+/// the file, which is what the test watches for.
+bool createUnreadableCueStore(const QString& dbPath, const QString& relPath) {
+    static QAtomicInt counter;
+    const QString connectionName =
+            QStringLiteral("fsstorewriter-unreadable-%1").arg(counter.fetchAndAddRelaxed(1));
+    bool ok = false;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        db.setDatabaseName(dbPath);
+        if (db.open()) {
+            QSqlQuery query(db);
+            ok = query.exec(QStringLiteral(
+                         "CREATE TABLE stored (relpath TEXT PRIMARY KEY NOT NULL, "
+                         "version INTEGER NOT NULL, updated_at TEXT, cues TEXT NOT NULL)")) &&
+                    query.exec(QStringLiteral(
+                            "CREATE VIEW cue_overrides AS SELECT relpath, version, "
+                            "updated_at, cues || abs(-9223372036854775808) AS cues "
+                            "FROM stored")) &&
+                    query.exec(QStringLiteral(
+                            "CREATE TRIGGER cue_overrides_insert INSTEAD OF INSERT "
+                            "ON cue_overrides BEGIN INSERT OR REPLACE INTO stored "
+                            "VALUES (NEW.relpath, NEW.version, NEW.updated_at, "
+                            "NEW.cues); END"));
+            if (ok) {
+                query.prepare(QStringLiteral(
+                        "INSERT INTO stored VALUES (:relpath, 1, NULL, :cues)"));
+                query.bindValue(QStringLiteral(":relpath"), relPath);
+                query.bindValue(QStringLiteral(":cues"),
+                        QStringLiteral("[{\"color\":0,\"pos\":1.5,\"slot\":0,\"type\":1}]"));
+                ok = query.exec();
+            }
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    return ok;
+}
+
+QByteArray fileBytes(const QString& path) {
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
 }
 
 /// Covers what moving the .bitedj store writes onto FsStoreWriter changes: a
@@ -301,6 +351,120 @@ TEST_F(FsStoreWriterTest, ForgottenDriveTakesNoQueuedWrite) {
     EXPECT_FALSE(QFile::exists(cueDbPath()));
 }
 
+// A stick that drops off the bus while a save for it is queued loses that
+// save with its mirror. The save already moved the baseline to the new cues,
+// so unless forgetting the drive undoes that, the next save of the same cues
+// is skipped as unchanged and the stick, remounted at the same path, never
+// gets them.
+TEST_F(FsStoreWriterTest, CuesLostWithForgottenDriveAreSavedAgain) {
+    SKIP_WITHOUT_FAKE_USB();
+    const QString trackPath = placeTrack(QStringLiteral("yanked.wav"));
+    const QString relPath = QStringLiteral("yanked.wav");
+
+    const TrackPointer pTrack = makeTrack(trackPath);
+    FsCueOverrideStore::applyOverrides(pTrack.get());
+
+    blockWriter();
+    addHotcue(pTrack, mixxx::kHotCueBankStart + 3, 9.0);
+    FsCueOverrideStore::flushIfChanged(*pTrack);
+    // What SystemSettings::refresh() does when the stick vanishes.
+    FsCueOverrideStore::forgetFilesystem(kFakeUsb);
+    releaseWriter();
+    ASSERT_TRUE(FsStoreWriter::flushAll(flushDeadline()));
+    ASSERT_TRUE(readStoredCues(cueDbPath(), relPath).isEmpty());
+
+    // The stick is back at the same path. The track is loaded again (a
+    // Rekordbox playlist does this to a track still in a deck), which must
+    // not make the lost cues look stored, and then saved with the cues it
+    // had.
+    FsCueOverrideStore::applyOverrides(pTrack.get());
+    FsCueOverrideStore::flushIfChanged(*pTrack);
+    ASSERT_TRUE(FsStoreWriter::flushAll(flushDeadline()));
+    EXPECT_EQ(FsCueOverrideStore::serializeCues(*pTrack),
+            readStoredCues(cueDbPath(), relPath));
+}
+
+// The same for a save that deleted every cue. It is the case that rules out
+// simply dropping the baseline: a track with no baseline and no cues is not
+// saved at all, so the drive would keep the cues the DJ deleted.
+TEST_F(FsStoreWriterTest, DeletionLostWithForgottenDriveIsSavedAgain) {
+    SKIP_WITHOUT_FAKE_USB();
+    const QString trackPath = placeTrack(QStringLiteral("yanked-deleted.wav"));
+    const QString relPath = QStringLiteral("yanked-deleted.wav");
+
+    const TrackPointer pTrack = makeTrack(trackPath);
+    FsCueOverrideStore::applyOverrides(pTrack.get());
+    addHotcue(pTrack, mixxx::kHotCueBankStart + 4, 12.0);
+    FsCueOverrideStore::flushIfChanged(*pTrack);
+    ASSERT_TRUE(FsStoreWriter::flushAll(flushDeadline()));
+    const QByteArray withCue = FsCueOverrideStore::serializeCues(*pTrack);
+    ASSERT_EQ(withCue, readStoredCues(cueDbPath(), relPath));
+
+    blockWriter();
+    const CuePointer pCue = findHotcue(pTrack, mixxx::kHotCueBankStart + 4);
+    ASSERT_TRUE(pCue);
+    pTrack->removeCue(pCue);
+    const QByteArray noCues = FsCueOverrideStore::serializeCues(*pTrack);
+    FsCueOverrideStore::flushIfChanged(*pTrack);
+    FsCueOverrideStore::forgetFilesystem(kFakeUsb);
+    releaseWriter();
+    ASSERT_TRUE(FsStoreWriter::flushAll(flushDeadline()));
+    ASSERT_EQ(withCue, readStoredCues(cueDbPath(), relPath));
+
+    FsCueOverrideStore::flushIfChanged(*pTrack);
+    ASSERT_TRUE(FsStoreWriter::flushAll(flushDeadline()));
+    EXPECT_EQ(noCues, readStoredCues(cueDbPath(), relPath));
+}
+
+// A track loaded while its drive's store is there but cannot be read came
+// without whatever override the drive holds for it, so an edit to it must not
+// be saved: that would replace the override with the imported cues plus the
+// edit. The store file is left exactly as it was.
+TEST_F(FsStoreWriterTest, UnreadableStorePausesSaves) {
+    SKIP_WITHOUT_FAKE_USB();
+    const QString trackPath = placeTrack(QStringLiteral("unreadable.wav"));
+    ASSERT_TRUE(QDir().mkpath(kFakeUsb + QStringLiteral("/.bitedj")));
+    ASSERT_TRUE(createUnreadableCueStore(cueDbPath(), QStringLiteral("unreadable.wav")));
+    const QByteArray before = fileBytes(cueDbPath());
+    ASSERT_FALSE(before.isEmpty());
+
+    const TrackPointer pTrack = makeTrack(trackPath);
+    FsCueOverrideStore::applyOverrides(pTrack.get());
+    // Nothing could be read, so nothing was applied.
+    EXPECT_TRUE(hotcueIndices(pTrack).isEmpty());
+
+    addHotcue(pTrack, mixxx::kHotCueBankStart + 5, 6.0);
+    FsCueOverrideStore::flushIfChanged(*pTrack);
+    ASSERT_TRUE(FsStoreWriter::flushAll(flushDeadline()));
+    EXPECT_EQ(before, fileBytes(cueDbPath()));
+}
+
+// A rating saved off a deck and lost with its drive's mirror is saved again,
+// as the cues are above, even after the track is loaded again.
+TEST_F(FsStoreWriterTest, RatingLostWithForgottenDriveIsSavedAgain) {
+    SKIP_WITHOUT_FAKE_USB();
+    const QString trackPath = placeTrack(QStringLiteral("yanked-rated.wav"));
+
+    const TrackPointer pTrack = makeTrack(trackPath);
+    FsMetaOverrideStore::applyOverrides(pTrack.get());
+
+    blockWriter();
+    pTrack->setRating(3);
+    FsMetaOverrideStore::flushIfChanged(*pTrack);
+    FsMetaOverrideStore::forgetFilesystem(kFakeUsb);
+    releaseWriter();
+    ASSERT_TRUE(FsStoreWriter::flushAll(flushDeadline()));
+    ASSERT_FALSE(QFile::exists(metaDbPath()));
+
+    // Loaded again before the save, as in the cue case.
+    FsMetaOverrideStore::applyOverrides(pTrack.get());
+    FsMetaOverrideStore::flushIfChanged(*pTrack);
+    ASSERT_TRUE(FsStoreWriter::flushAll(flushDeadline()));
+    // Read with the store's copy forgotten, so only the drive can answer.
+    FsMetaOverrideStore::forgetFilesystem(kFakeUsb);
+    EXPECT_EQ(3, FsMetaOverrideStore::readMountRatings(kFakeUsb).ratingFor(trackPath, 0));
+}
+
 // Clearing a drive while a write for it is queued: the write does not land,
 // before the delete or after it.
 TEST_F(FsStoreWriterTest, ClearDropsQueuedWrite) {
@@ -313,9 +477,8 @@ TEST_F(FsStoreWriterTest, ClearDropsQueuedWrite) {
     blockWriter();
     addHotcue(pTrack, mixxx::kHotCueBankStart, 4.0);
     FsCueOverrideStore::flushIfChanged(*pTrack);
-    // Runs right after the queued write, and before the clear's delete (the
-    // clear waits for everything queued for the drive), so it sees whether
-    // that write was dropped or merely deleted again afterwards.
+    // Runs right after the queued write, so a write that reached the drive
+    // shows here even though the clear's delete would remove it again.
     bool dbExistedAfterQueuedWrite = true;
     FsStoreWriter::submit(kFakeUsb, [&dbExistedAfterQueuedWrite]() {
         dbExistedAfterQueuedWrite = QFile::exists(cueDbPath());
@@ -330,13 +493,13 @@ TEST_F(FsStoreWriterTest, ClearDropsQueuedWrite) {
         cleared = FsCueOverrideStore::clearFilesystemOverrides(kFakeUsb);
     });
     // The writer is released only once the clear has dropped the drive's
-    // mirror, and that is necessarily before its delete: the delete waits for
-    // everything queued for the drive, and the parked writer holds all of it
-    // up. So the queued write runs between the drop and the delete. Honouring
-    // the drop, it writes nothing (the probe sees no database); ignoring it,
-    // it writes, which the probe sees. A clear that did not wait at all would
-    // delete first and leave the late write to recreate the database, which
-    // the check at the end sees.
+    // mirror, so the queued write runs after the drop. Honouring it, the write
+    // does nothing (the probe sees no database); ignoring it, the write
+    // lands, which the probe sees whether the clear's delete has happened yet
+    // or not. What this verifies is that a write queued before a clear does
+    // not reach the drive after it. It cannot tell whether the clear waits
+    // for a write already in progress before deleting: the mirror is dropped
+    // first, so the queued write finds nothing to do either way.
     QElapsedTimer waited;
     waited.start();
     while (FsCueOverrideStore::hasMirrorForTesting(kFakeUsb) && waited.elapsed() < 5000) {

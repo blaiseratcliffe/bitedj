@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDeadlineTimer>
 #include <QHash>
 #include <QMutex>
 #include <QObject>
@@ -63,9 +64,12 @@ class FsMetaOverrideNotifier : public QObject {
 ///
 /// Like FsCueOverrideStore, nothing here touches a drive's SQLite on the
 /// calling thread after the first access to it: that access loads every rating
-/// on the drive into an in-memory mirror, reads are answered from the mirror,
-/// and writes update it and are queued on FsStoreWriter, which stores whatever
-/// the mirror holds when it gets to them. Each write still opens the database,
+/// on the drive into an in-memory mirror, outside the store's mutex, so the
+/// rekordbox scan's first read of a stick does not hold up a rating edit or a
+/// track load on the GUI thread. Reads are answered from the mirror, and
+/// writes update it and are queued on FsStoreWriter, which stores whatever the
+/// mirror holds when it gets to them. A store that cannot be read is left
+/// alone for kFsStoreLoadRetryMillis. Each write still opens the database,
 /// runs one statement and closes it again, so no file descriptor lingers to
 /// make `umount` fail with EBUSY on eject.
 ///
@@ -98,6 +102,11 @@ class FsMetaOverrideStore {
     /// Apply the stored rating for `pTrack`, if the track's filesystem has one,
     /// and remember the resulting rating as the baseline against which a later
     /// flushIfChanged() detects DJ edits.
+    ///
+    /// As in FsCueOverrideStore::applyOverrides(), a baseline marked unsaved
+    /// by forgetFilesystem() is kept, and a track loaded while its drive's
+    /// store is there but cannot be read is baselined as suppressed, so it
+    /// saves nothing until a later load reads the store.
     static void applyOverrides(Track* pTrack);
 
     /// Queue the track's rating to be written to its filesystem if it differs
@@ -108,7 +117,10 @@ class FsMetaOverrideStore {
     /// which is what keeps eject free of EBUSY.
     ///
     /// A track that was never seen by applyOverrides() has no baseline, so its
-    /// rating is stored the first time it is saved with any stars on it.
+    /// rating is stored the first time it is saved with any stars on it. A
+    /// suppressed baseline (after a clear, or a load while the store could not
+    /// be read) queues nothing; an unsaved one queues the track's rating
+    /// whatever it is.
     static void flushIfChanged(const Track& track);
 
     /// Store `rating` for `trackLocation` outright, for an edit made somewhere
@@ -142,7 +154,10 @@ class FsMetaOverrideStore {
     /// Forget what this store knows about the drive mounted at `mountPoint`,
     /// for the eject: a stick that comes back may have been edited elsewhere,
     /// so its next access reads it again. Writes still queued for it become
-    /// no-ops, so call this only once they have been flushed.
+    /// no-ops, so call this only once they have been flushed. As in
+    /// FsCueOverrideStore::forgetFilesystem(), the baseline of every track
+    /// whose write is lost that way is marked unsaved, so its next save
+    /// stores its rating again.
     static void forgetFilesystem(const QString& mountPoint);
 
     /// Stop flushIfChanged() from re-creating an override for a track that is
@@ -173,9 +188,12 @@ class FsMetaOverrideStore {
         /// Relative paths whose rating has been queued but not yet written,
         /// or whose write failed and waits for the next save to retry it.
         QSet<QString> dirty;
+        /// Relative path -> the track location this unit queued its last
+        /// write under, which is the key its baseline has in s_baselines.
+        QHash<QString, QString> locations;
         /// False while the drive's store could not be read: the mirror then
         /// holds only this unit's own writes, and every read of a path it does
-        /// not hold tries the drive again.
+        /// not hold tries the drive again (once the retry backoff is over).
         bool complete = false;
     };
 
@@ -189,19 +207,27 @@ class FsMetaOverrideStore {
         RatingEdit,
     };
 
-    // Returns false if the track's filesystem is unavailable, or its store is
-    // there but could not be read. `pFound` reports whether it holds an
-    // override for the track. Answered from the mirror.
-    static bool readOverride(const QString& trackLocation, int* pRating, bool* pFound);
+    /// What readOverride() found out; see FsCueOverrideStore::StoreRead.
+    enum class StoreRead {
+        Unavailable,
+        Unreadable,
+        Absent,
+        Found,
+    };
+
+    // Answered from the mirror, which is loaded first if need be. `pRating`
+    // is set for Found only.
+    static StoreRead readOverride(const QString& trackLocation, int* pRating);
     // Baseline `rating` for `trackLocation`, put it in the mirror, emit
     // ratingStored() and queue the write. False, changing nothing, when the
     // drive cannot be written to (or, for a TrackSave, nothing needs writing).
     static bool queueWrite(const QString& trackLocation, int rating, WriteOrigin origin);
-    // The mirror of the drive `target` is on; see
-    // FsCueOverrideStore::loadedMirror(). Requires s_baselineMutex to be held.
-    static Mirror* loadedMirror(const FsStoreTarget& target);
-    // See FsCueOverrideStore::mirrorForWrite(). Requires s_baselineMutex.
-    static Mirror& mirrorForWrite(const FsStoreTarget& target);
+    // Load (or complete) the mirror of the drive `target` is on, reading the
+    // drive with s_baselineMutex let go; see
+    // FsCueOverrideStore::ensureLoaded(). Must be called without the lock.
+    static void ensureLoaded(const FsStoreTarget& target);
+    // See FsCueOverrideStore::dropMirror(). Requires s_baselineMutex.
+    static void dropMirror(const QString& rootKey);
     // Writer thread: take the rating queued for `relPath` on the drive keyed
     // `rootKey`, if it is still waiting to be written. False when an earlier
     // task already wrote it, or the drive's mirror has been dropped.
@@ -216,14 +242,18 @@ class FsMetaOverrideStore {
 
     static QMutex s_baselineMutex;
     // Maps a track's location to the rating it was loaded with (or last saved
-    // with), or to a suppression marker set by suppressPendingSaves().
+    // with), to a suppression marker set by suppressPendingSaves(), or to the
+    // unsaved marker forgetFilesystem() sets.
     static QHash<QString, int> s_baselines;
     // Maps a track's location to the rating its source library exported, as it
     // stood just before an override was applied over it. Only holds the tracks
     // that actually got one, which is what restoreImportedRating() keys off.
     static QHash<QString, int> s_importedRatings;
     // Maps a drive's cleaned mount root to its mirror. Guarded by
-    // s_baselineMutex, which is never held across disk I/O except for the
-    // one read that loads a mirror.
+    // s_baselineMutex, which is never held across disk I/O, not even the
+    // read that loads a mirror.
     static QHash<QString, Mirror> s_mirrors;
+    // See FsCueOverrideStore::s_loadRetryAfter and s_dropGenerations.
+    static QHash<QString, QDeadlineTimer> s_loadRetryAfter;
+    static QHash<QString, quint64> s_dropGenerations;
 };

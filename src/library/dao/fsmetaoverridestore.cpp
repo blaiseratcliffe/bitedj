@@ -40,6 +40,12 @@ constexpr int kPayloadVersion = 1;
 // loaded. Outside the valid rating range, so it can never equal a real one.
 constexpr int kSuppressedBaseline = -1;
 
+// Baseline marker for a track whose queued write was lost with its drive's
+// mirror. Outside the valid range too, so the next save stores whatever rating
+// the track has, unrated included; see the cue store's kUnsavedBaseline for
+// why the baseline is not simply removed.
+constexpr int kUnsavedBaseline = -2;
+
 bool isStorableRating(int rating) {
     return mixxx::TrackRecord::isValidRating(rating);
 }
@@ -85,6 +91,8 @@ QMutex FsMetaOverrideStore::s_baselineMutex;
 QHash<QString, int> FsMetaOverrideStore::s_baselines;
 QHash<QString, int> FsMetaOverrideStore::s_importedRatings;
 QHash<QString, FsMetaOverrideStore::Mirror> FsMetaOverrideStore::s_mirrors;
+QHash<QString, QDeadlineTimer> FsMetaOverrideStore::s_loadRetryAfter;
+QHash<QString, quint64> FsMetaOverrideStore::s_dropGenerations;
 
 int FsMetaOverrideStore::MountRatings::ratingFor(
         const QString& trackLocation, int fallback) const {
@@ -108,13 +116,13 @@ void FsMetaOverrideStore::applyOverrides(Track* pTrack) {
     }
 
     int rating = mixxx::TrackRecord::kNoRating;
-    bool found = false;
     // What the source library exported for this track, captured before the
     // override is laid over it. Settings → Clear puts exactly this back, so
     // clearing takes off the DJ's own edit and nothing else.
     const int imported = pTrack->getRating();
     bool hasImported = false;
-    if (readOverride(location, &rating, &found) && found && isStorableRating(rating)) {
+    const StoreRead read = readOverride(location, &rating);
+    if (read == StoreRead::Found && isStorableRating(rating)) {
         hasImported = true;
         pTrack->setRating(rating);
     }
@@ -123,7 +131,17 @@ void FsMetaOverrideStore::applyOverrides(Track* pTrack) {
     // only an edit made from here on counts as a change worth storing.
     const int baseline = pTrack->getRating();
     QMutexLocker locker(&s_baselineMutex);
-    s_baselines.insert(location, baseline);
+    if (read == StoreRead::Unreadable) {
+        // The drive may hold a rating for this track that could not be read,
+        // and a save would write the one it carries now over it. Paused until
+        // a load reads the store, over an unsaved baseline too; see
+        // FsCueOverrideStore::applyOverrides() for why.
+        s_baselines.insert(location, kSuppressedBaseline);
+    } else if (s_baselines.value(location) != kUnsavedBaseline) {
+        s_baselines.insert(location, baseline);
+    }
+    // Otherwise the unsaved baseline stays, so a reload does not make the
+    // rating the drive never got look stored.
     // Only the first override this track gets: a track is applied to more than
     // once (the database load, then every load out of a Rekordbox playlist),
     // and by the second time the rating on it is this unit's own.
@@ -182,15 +200,19 @@ bool FsMetaOverrideStore::queueWrite(
     }
     const QString rootKey = QDir::cleanPath(target.rootPath);
     const QString relPath = target.relPath;
+    // Before the lock, since it may read the drive. An unreadable store still
+    // takes the write, into an incomplete mirror.
+    ensureLoaded(target);
     std::optional<int> previous;
     {
         QMutexLocker locker(&s_baselineMutex);
         const auto it = s_baselines.constFind(trackLocation);
         if (it != s_baselines.constEnd()) {
             // A track save is checked again: the lock was let go while the
-            // target resolved, and a clear may have suppressed the track in
-            // that window. An edit in a Rekordbox view is the DJ asking, so
-            // it is stored whatever the baseline says.
+            // target resolved and the mirror loaded, and a clear may have
+            // suppressed the track in that window. An edit in a Rekordbox
+            // view is the DJ asking, so it is stored whatever the baseline
+            // says.
             if (origin == WriteOrigin::TrackSave &&
                     (*it == kSuppressedBaseline || *it == rating)) {
                 return false;
@@ -201,9 +223,10 @@ bool FsMetaOverrideStore::queueWrite(
         // about to hold, now rather than once the write lands, so its next
         // save does not queue the same rating again.
         s_baselines.insert(trackLocation, rating);
-        Mirror& mirror = mirrorForWrite(target);
+        Mirror& mirror = s_mirrors[rootKey];
         mirror.ratings.insert(relPath, rating);
         mirror.dirty.insert(relPath);
+        mirror.locations.insert(relPath, trackLocation);
     }
     // Announced now, outside the lock, rather than once the write lands: the
     // Rekordbox view repaints its stars off this, and every read of the store
@@ -229,7 +252,21 @@ bool FsMetaOverrideStore::queueWrite(
                 }
                 const FsStoreWriteResult result =
                         writeOverride(trackLocation, rootKey, written);
-                if (result != FsStoreWriteResult::Failed) {
+                if (result == FsStoreWriteResult::Written) {
+                    return;
+                }
+                if (result == FsStoreWriteResult::Dropped) {
+                    // Dropped after takePendingWrite(), too late for
+                    // forgetFilesystem() to mark it unsaved, so marked here
+                    // if the baseline is still this rating. As for the cue
+                    // store, Library::slotClearMetaOverrides() suppresses
+                    // only after clearFilesystemOverrides() has returned, so
+                    // a clear overwrites this mark or is left alone by it.
+                    QMutexLocker locker(&s_baselineMutex);
+                    const auto it = s_baselines.find(trackLocation);
+                    if (it != s_baselines.end() && *it == written) {
+                        *it = kUnsavedBaseline;
+                    }
                     return;
                 }
                 qWarning() << kLogTag << ": could not save the rating of" << trackLocation
@@ -280,16 +317,17 @@ FsMetaOverrideStore::MountRatings FsMetaOverrideStore::readMountRatings(
         return ratings;
     }
 
+    ensureLoaded(target);
     QMutexLocker locker(&s_baselineMutex);
-    const Mirror* pMirror = loadedMirror(target);
-    if (!pMirror) {
+    const auto mirror = s_mirrors.constFind(QDir::cleanPath(target.rootPath));
+    if (mirror == s_mirrors.constEnd()) {
         // A store is there but could not be read: nothing read, which the
-        // scan takes as no opinion. The next access tries the drive again.
+        // scan takes as no opinion. A later access tries the drive again.
         return ratings;
     }
     // An incomplete mirror gives this unit's own ratings only, which is still
     // better than none.
-    for (auto it = pMirror->ratings.constBegin(); it != pMirror->ratings.constEnd(); ++it) {
+    for (auto it = mirror->ratings.constBegin(); it != mirror->ratings.constEnd(); ++it) {
         if (isStorableRating(it.value())) {
             ratings.byRelPath.insert(it.key(), it.value());
         }
@@ -303,46 +341,75 @@ FsMetaOverrideStore::MountRatings FsMetaOverrideStore::readMountRatings(
 }
 
 // static
-bool FsMetaOverrideStore::readOverride(
-        const QString& trackLocation, int* pRating, bool* pFound) {
-    *pFound = false;
+FsMetaOverrideStore::StoreRead FsMetaOverrideStore::readOverride(
+        const QString& trackLocation, int* pRating) {
     FsStoreTarget target;
     if (!FsStoreTarget::resolveForFile(trackLocation, kStoreDbName, &target)) {
-        return false;
+        return StoreRead::Unavailable;
     }
 
+    ensureLoaded(target);
     QMutexLocker locker(&s_baselineMutex);
-    const Mirror* pMirror = loadedMirror(target);
-    if (!pMirror) {
-        // A store is there but could not be read. Not "no override": the next
+    const auto mirror = s_mirrors.constFind(QDir::cleanPath(target.rootPath));
+    if (mirror == s_mirrors.constEnd()) {
+        // A store is there but could not be read. Not "no override": a later
         // load tries the drive again.
-        return false;
+        return StoreRead::Unreadable;
     }
-    const auto it = pMirror->ratings.constFind(target.relPath);
-    if (it != pMirror->ratings.constEnd()) {
+    const auto it = mirror->ratings.constFind(target.relPath);
+    if (it != mirror->ratings.constEnd()) {
         *pRating = *it;
-        *pFound = true;
-        return true;
+        return StoreRead::Found;
     }
     // Absent from a mirror that could not be completed from the drive says
     // nothing about the drive.
-    return pMirror->complete;
+    return mirror->complete ? StoreRead::Absent : StoreRead::Unreadable;
 }
 
 // static
-FsMetaOverrideStore::Mirror* FsMetaOverrideStore::loadedMirror(const FsStoreTarget& target) {
+void FsMetaOverrideStore::ensureLoaded(const FsStoreTarget& target) {
     const QString rootKey = QDir::cleanPath(target.rootPath);
-    auto it = s_mirrors.find(rootKey);
-    if (it != s_mirrors.end() && it->complete) {
-        return &it.value();
+    quint64 generation = 0;
+    {
+        QMutexLocker locker(&s_baselineMutex);
+        const auto it = s_mirrors.constFind(rootKey);
+        if (it != s_mirrors.constEnd() && it->complete) {
+            return;
+        }
+        const auto retryAfter = s_loadRetryAfter.constFind(rootKey);
+        if (retryAfter != s_loadRetryAfter.constEnd() && !retryAfter->hasExpired()) {
+            // Failed a moment ago; not worth waiting on the drive for again.
+            return;
+        }
+        generation = s_dropGenerations.value(rootKey);
     }
 
-    // The one read this drive gets unless it fails; see
-    // FsCueOverrideStore::loadedMirror().
+    // The one read this drive gets unless it fails, made with the lock let
+    // go; see FsCueOverrideStore::ensureLoaded().
     QHash<QString, int> stored;
-    if (!readStoredRatings(target, &stored)) {
-        return it != s_mirrors.end() ? &it.value() : nullptr;
+    const bool read = readStoredRatings(target, &stored);
+
+    QMutexLocker locker(&s_baselineMutex);
+    if (s_dropGenerations.value(rootKey) != generation) {
+        // Dropped by a clear or an eject while the read ran: not kept.
+        return;
     }
+    auto it = s_mirrors.find(rootKey);
+    if (it != s_mirrors.end() && it->complete) {
+        // Another thread's read got there first.
+        return;
+    }
+    if (!read) {
+        // Warned once per drive; see FsCueOverrideStore::ensureLoaded().
+        if (!s_loadRetryAfter.contains(rootKey)) {
+            qWarning() << kLogTag << ": cannot read the ratings on" << target.rootPath
+                       << "; tracks loaded from it will not save their rating to "
+                          "it until it can be read";
+        }
+        s_loadRetryAfter.insert(rootKey, QDeadlineTimer(kFsStoreLoadRetryMillis));
+        return;
+    }
+    s_loadRetryAfter.remove(rootKey);
     if (it == s_mirrors.end()) {
         it = s_mirrors.insert(rootKey, Mirror());
     }
@@ -353,17 +420,13 @@ FsMetaOverrideStore::Mirror* FsMetaOverrideStore::loadedMirror(const FsStoreTarg
         }
     }
     it->complete = true;
-    return &it.value();
 }
 
 // static
-FsMetaOverrideStore::Mirror& FsMetaOverrideStore::mirrorForWrite(const FsStoreTarget& target) {
-    Mirror* pMirror = loadedMirror(target);
-    if (pMirror) {
-        return *pMirror;
-    }
-    // Unreadable right now: the write goes into an incomplete mirror.
-    return s_mirrors[QDir::cleanPath(target.rootPath)];
+void FsMetaOverrideStore::dropMirror(const QString& rootKey) {
+    s_mirrors.remove(rootKey);
+    s_loadRetryAfter.remove(rootKey);
+    ++s_dropGenerations[rootKey];
 }
 
 // static
@@ -444,7 +507,7 @@ bool FsMetaOverrideStore::clearFilesystemOverrides(const QString& mountPoint) {
         // Dropped first, so every write still queued for this drive finds
         // nothing to do instead of recreating the database deleted below.
         QMutexLocker locker(&s_baselineMutex);
-        s_mirrors.remove(rootKey);
+        dropMirror(rootKey);
     }
     // The one the writer may be in the middle of is waited out, so the delete
     // does not land underneath it.
@@ -453,26 +516,35 @@ bool FsMetaOverrideStore::clearFilesystemOverrides(const QString& mountPoint) {
     const bool removed = fsStoreRemove(mountPoint, kStoreDbName, kLogTag);
     {
         // A read in the meantime (the rekordbox scan, say) may have loaded the
-        // mirror again, from the file that is now gone.
+        // mirror again, from the file that is now gone, and one still running
+        // is kept out by the drop.
         QMutexLocker locker(&s_baselineMutex);
-        s_mirrors.remove(rootKey);
+        dropMirror(rootKey);
     }
     return removed;
 }
 
 // static
 void FsMetaOverrideStore::forgetFilesystem(const QString& mountPoint) {
+    const QString rootKey = QDir::cleanPath(mountPoint);
     QMutexLocker locker(&s_baselineMutex);
-    const auto it = s_mirrors.find(QDir::cleanPath(mountPoint));
-    if (it == s_mirrors.end()) {
-        return;
-    }
-    if (!it->dirty.isEmpty()) {
+    const auto it = s_mirrors.constFind(rootKey);
+    if (it != s_mirrors.constEnd() && !it->dirty.isEmpty()) {
         qWarning() << kLogTag << ": discarding" << it->dirty.size()
                    << "unsaved rating(s) that never reached" << mountPoint << ":"
                    << it->dirty.values();
+        // Marked unsaved so the next save of each such track stores its rating
+        // again; see FsCueOverrideStore::forgetFilesystem(). A suppressed
+        // baseline stays suppressed.
+        for (const QString& relPath : std::as_const(it->dirty)) {
+            const auto baseline = s_baselines.find(it->locations.value(relPath));
+            if (baseline != s_baselines.end() && *baseline != kSuppressedBaseline) {
+                *baseline = kUnsavedBaseline;
+            }
+        }
     }
-    s_mirrors.erase(it);
+    // Dropped even with no mirror, so a read still in flight is not kept.
+    dropMirror(rootKey);
 }
 
 // static

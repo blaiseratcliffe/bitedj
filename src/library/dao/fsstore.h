@@ -90,6 +90,14 @@ enum class FsStoreWriteResult {
     Dropped,
 };
 
+/// How long a store that is there but could not be read (corrupt, written by a
+/// future schema, or locked by a write that will not finish) is left alone
+/// before the next access tries the drive again. Until then every access
+/// answers "nothing read" at once instead of making its caller, often the GUI
+/// thread, wait on the drive again for what is almost certainly the same
+/// failure. Short enough that a store which recovers is back within a track.
+constexpr int kFsStoreLoadRetryMillis = 30000;
+
 /// Delete `dbName` and the journal siblings a crash may have left beside it
 /// from the `.bitedj` directory of the filesystem mounted at `mountPoint`.
 /// Returns false only when a file exists but could not be deleted; a drive
