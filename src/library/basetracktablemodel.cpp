@@ -22,6 +22,7 @@
 #include "mixer/playerinfo.h"
 #include "mixer/playermanager.h"
 #include "moc_basetracktablemodel.cpp"
+#include "preferences/systemsettings.h"
 #include "track/keyutils.h"
 #include "track/track.h"
 #include "util/assert.h"
@@ -452,6 +453,15 @@ bool BaseTrackTableModel::verifyTrackFileExists(const QModelIndex& index) {
         // Nothing to check against; let the normal load path handle it.
         return true;
     }
+    // Bite DJ: a stick that is not plugged in is not flagged below, because
+    // the flag outlives the stick coming back. The row is already coloured
+    // from the mount list, and BaseTrackPlayerImpl::slotLoadTrack refuses the
+    // load naming the drive (fork issue #26).
+    if (const SystemSettings* pSystemSettings = SystemSettings::tryInstance()) {
+        if (!pSystemSettings->absentDrive(location).isEmpty()) {
+            return true;
+        }
+    }
     // Already known missing: refuse immediately without touching the
     // filesystem. A stat() on a pulled USB mount can block, and this runs on
     // every re-tap of a dead entry. The flag is cleared on the next model
@@ -534,6 +544,16 @@ QVariant BaseTrackTableModel::data(
         if (!m_missingTrackLocations.isEmpty()) {
             const QString location = getTrackLocation(index);
             if (!location.isEmpty() && m_missingTrackLocations.contains(location)) {
+                return QVariant::fromValue(m_trackMissingColor);
+            }
+        }
+        // Bite DJ: a track from a stick that is not plugged in (fork issue
+        // #26). The library keeps every track ever loaded, from every stick,
+        // and nothing rescans /media, so fs_deleted stays 0 for these. Asked
+        // live of the mount list rather than cached, so the rows come back
+        // the moment the stick does; WTrackTableView repaints on the change.
+        if (const SystemSettings* pSystemSettings = SystemSettings::tryInstance()) {
+            if (!pSystemSettings->absentDrive(getTrackLocation(index)).isEmpty()) {
                 return QVariant::fromValue(m_trackMissingColor);
             }
         }

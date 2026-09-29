@@ -19,6 +19,7 @@
 #include "preferences/colorpalettesettings.h"
 #include "preferences/dialog/dlgprefdeck.h"
 #include "preferences/dialog/dlgpreflibrary.h"
+#include "preferences/systemsettings.h"
 #include "sources/soundsourceproxy.h"
 #include "track/globaltrackcache.h"
 #include "track/track.h"
@@ -77,6 +78,18 @@ WTrackTableView::WTrackTableView(QWidget* pParent,
             &WTrackTableView::scrollValueChanged,
             this,
             &WTrackTableView::slotScrollValueChanged);
+
+    // Bite DJ: rows from a stick that is not plugged in are coloured from the
+    // mount list (BaseTrackTableModel::data, fork issue #26), so repaint when
+    // it changes. Connected here rather than in the model because the library
+    // and its models are built before SystemSettings; the skin, and so this
+    // view, after it.
+    if (SystemSettings* pSystemSettings = SystemSettings::tryInstance()) {
+        connect(pSystemSettings,
+                &SystemSettings::usbRowsChanged,
+                this,
+                [this]() { viewport()->update(); });
+    }
 }
 
 WTrackTableView::~WTrackTableView() {

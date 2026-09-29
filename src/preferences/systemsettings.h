@@ -81,6 +81,20 @@ class SystemSettings : public QObject {
     // there is also reachable by the settings actions that clear it again.
     static bool isOnRemovableMedia(const QString& path);
 
+    // The name of the drive `path` would be on ("ESD-USB" for
+    // /media/blaise/ESD-USB/...) when it lies under a removable root but under
+    // none of `mounts`: a track from a stick that is not plugged in. Empty when
+    // the drive is mounted, or when the path is not on removable media at all.
+    // String compares only, no filesystem access, so a table model can ask it
+    // for every row it paints (fork issue #26).
+    static QString absentDrive(const QString& path, const QList<UsbMount>& mounts);
+
+    // absentDrive() against the drives refresh() last enumerated. GUI thread,
+    // like everything else that reads m_usbMounts.
+    QString absentDrive(const QString& path) const {
+        return absentDrive(path, m_usbMounts);
+    }
+
     // Unloads every track loaded from the indexed mount, then unmounts it and
     // re-enumerates. Idempotent on out-of-range. Safe to call from the GUI
     // thread.
