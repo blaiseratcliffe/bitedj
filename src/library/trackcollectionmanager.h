@@ -12,6 +12,7 @@
 #include "util/parented_ptr.h"
 #include "util/thread_affinity.h"
 
+class FsStoreWriter;
 class LibraryScanner;
 class TrackCollection;
 class ExternalTrackCollection;
@@ -125,6 +126,13 @@ class TrackCollectionManager: public QObject,
             TrackMetadataExportMode mode) const;
 
     const UserSettingsPointer m_pConfig;
+
+    // Bite DJ: the thread the per-drive .bitedj stores write on. Declared
+    // ahead of the collection so it exists before anything can save a track,
+    // and destroyed after the destructor body, i.e. after deactivateCache()
+    // has run the shutdown saves: those drain into it (bounded) rather than
+    // being written on the GUI thread or lost.
+    const std::unique_ptr<FsStoreWriter> m_pFsStoreWriter;
 
     const parented_ptr<TrackCollection> m_pInternalCollection;
 

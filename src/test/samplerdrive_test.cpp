@@ -4,6 +4,7 @@
 #include <sys/mount.h>
 
 #include <QCoreApplication>
+#include <QDeadlineTimer>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -17,6 +18,7 @@
 #include "engine/enginemixer.h"
 #include "library/coverartcache.h"
 #include "library/dao/fssamplerbankstore.h"
+#include "library/dao/fsstorewriter.h"
 #include "library/library.h"
 #include "library/trackcollectionmanager.h"
 #include "mixer/deck.h"
@@ -273,13 +275,35 @@ class SamplerDriveTest : public MixxxDbTest, SoundSourceProviderRegistration {
         return pTrack ? pTrack->getLocation() : QString();
     }
 
+    /// Land every store write queued so far. The TrackCollectionManager owns
+    /// an FsStoreWriter, so a bank is written on that thread some time after
+    /// SamplerDrive hands it over; a test that looks at the drive, or pulls
+    /// it, waits for the writer first.
+    static void flushStoreWrites() {
+        ASSERT_TRUE(FsStoreWriter::flushAll(
+                QDeadlineTimer(FsStoreWriter::kFlushTimeoutMillis)));
+    }
+
+    /// Read bank `bankIndex` as it is on the drive itself, not as the store
+    /// remembers it: queued writes are landed, and the store's copy of the
+    /// drive is dropped so the read goes to the file.
+    static bool readBankFromDrive(
+            const QString& mountRoot, int bankIndex, QStringList* pStored) {
+        if (!FsStoreWriter::flushAll(QDeadlineTimer(FsStoreWriter::kFlushTimeoutMillis))) {
+            return false;
+        }
+        FsSamplerBankStore::forgetFilesystem(mountRoot);
+        return FsSamplerBankStore::readBank(mountRoot, bankIndex, kSlots, pStored);
+    }
+
     /// Wait for the drive to hold `expected` as bank `bankIndex`. The write
-    /// happens as the sampler settles, which is an engine round away.
+    /// happens as the sampler settles, which is an engine round away, and then
+    /// on the store writer's thread.
     bool waitForStoredBank(
             const QString& mountRoot, int bankIndex, const QStringList& expected) {
         return pumpUntil([&] {
             QStringList stored;
-            return FsSamplerBankStore::readBank(mountRoot, bankIndex, kSlots, &stored) &&
+            return readBankFromDrive(mountRoot, bankIndex, &stored) &&
                     stored == expected;
         });
     }
@@ -407,7 +431,7 @@ TEST_F(SamplerDriveTest, SwitchingDrivesReplacesTheGrid) {
     EXPECT_TRUE(pumpUntil([this, &sampleB] { return samplerLocation(0) == sampleB; }));
 
     QStringList stored;
-    ASSERT_TRUE(FsSamplerBankStore::readBank(kUsbA, 1, kSlots, &stored));
+    ASSERT_TRUE(readBankFromDrive(kUsbA, 1, &stored));
     EXPECT_EQ(bankOf({sampleA}), stored);
 }
 
@@ -438,6 +462,7 @@ TEST_F(SamplerDriveTest, UnpluggingClearsTheGridAndReplugRestoresIt) {
     loadSampler(0, sampleA);
     ASSERT_TRUE(waitForStoredBank(kUsbA, 1, bankOf({sampleA})));
 
+    flushStoreWrites();
     ASSERT_TRUE(unmountDrive(kUsbA));
     ASSERT_FALSE(isMounted(kUsbA));
     refreshMounts();
@@ -462,6 +487,7 @@ TEST_F(SamplerDriveTest, UnpluggingDoesNotWipeTheBankOnTheDrive) {
     loadSampler(0, sampleA);
     ASSERT_TRUE(waitForStoredBank(kUsbA, 1, bankOf({sampleA})));
 
+    flushStoreWrites();
     ASSERT_TRUE(unmountDrive(kUsbA));
     refreshMounts();
     ASSERT_TRUE(pumpUntil([this] { return samplerLocation(0).isEmpty(); }));
@@ -469,7 +495,7 @@ TEST_F(SamplerDriveTest, UnpluggingDoesNotWipeTheBankOnTheDrive) {
 
     ASSERT_TRUE(bindMount(kBackingA, kUsbA));
     QStringList stored;
-    ASSERT_TRUE(FsSamplerBankStore::readBank(kUsbA, 1, kSlots, &stored));
+    ASSERT_TRUE(readBankFromDrive(kUsbA, 1, &stored));
     EXPECT_EQ(bankOf({sampleA}), stored);
 }
 
@@ -494,7 +520,7 @@ TEST_F(SamplerDriveTest, EjectDoesNotWipeTheBankItIsPreserving) {
     pumpFor(300);
 
     QStringList stored;
-    ASSERT_TRUE(FsSamplerBankStore::readBank(kUsbA, 1, kSlots, &stored));
+    ASSERT_TRUE(readBankFromDrive(kUsbA, 1, &stored));
     EXPECT_EQ(bankOf({sampleA}), stored);
 }
 
@@ -524,7 +550,7 @@ TEST_F(SamplerDriveTest, APlayingSlotKeepsItsSampleUntilItStops) {
     // ...and B is never told it owns a sample that is not on it: the row it is
     // given is the one the slot has been promised, empty.
     QStringList storedB;
-    if (FsSamplerBankStore::readBank(kUsbB, 1, kSlots, &storedB)) {
+    if (readBankFromDrive(kUsbB, 1, &storedB)) {
         EXPECT_EQ(QStringList(kSlots, QString()), storedB);
     }
 
@@ -533,7 +559,7 @@ TEST_F(SamplerDriveTest, APlayingSlotKeepsItsSampleUntilItStops) {
 
     // Drive A kept the bank it had all along.
     QStringList stored;
-    ASSERT_TRUE(FsSamplerBankStore::readBank(kUsbA, 1, kSlots, &stored));
+    ASSERT_TRUE(readBankFromDrive(kUsbA, 1, &stored));
     EXPECT_EQ(bankOf({sampleA}), stored);
     // Going back to A brings its row back, and the slot that was playing takes
     // part in it again like any other.
@@ -571,6 +597,7 @@ TEST_F(SamplerDriveTest, ASingleDriveSelectsItself) {
     const QString sampleA = placeOnDrive(kUsbA, QStringLiteral("Samples/a.mp3"), kSourceSample);
     ASSERT_TRUE(FsSamplerBankStore::writeBank(kUsbA, 1, bankOf({sampleA})));
 
+    flushStoreWrites();
     ASSERT_TRUE(unmountDrive(kUsbB));
     refreshMounts();
     if (m_pSamplerDrive->driveLabels().size() != 1) {

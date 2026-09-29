@@ -1713,6 +1713,8 @@ bool RekordboxPlaylistModel::setRatingOverride(
     // The drive is the only place a rekordbox track's rating can live: the
     // stars in this view come from the device's exported database, which this
     // unit does not write to. A stick that refuses the write keeps its rating.
+    // This branch is the drive that cannot be written to at all; the write
+    // itself happens later, and RekordboxFeature reports it failing.
     if (!FsMetaOverrideStore::storeRating(location, rating)) {
         if (Notifications* pNotifications = Notifications::tryInstance()) {
             pNotifications->publish(
@@ -1814,6 +1816,21 @@ RekordboxFeature::RekordboxFeature(
             &FsMetaOverrideNotifier::ratingStored,
             this,
             &RekordboxFeature::onRatingOverrideStored);
+    // A rating edited in this view is accepted straight away and written to
+    // the drive in the background (see FsMetaOverrideStore::storeRating), so
+    // a stick that refuses it only says so once the view has moved on. The
+    // warning is the one setRatingOverride() gives when it cannot even try.
+    connect(&FsMetaOverrideNotifier::instance(),
+            &FsMetaOverrideNotifier::ratingStoreFailed,
+            this,
+            [](const QString& /*trackLocation*/) {
+                if (Notifications* pNotifications = Notifications::tryInstance()) {
+                    pNotifications->publish(
+                            RekordboxPlaylistModel::tr(
+                                    "Could not save the rating to the USB drive"),
+                            Notifications::Severity::Warning);
+                }
+            });
     connect(pLibrary,
             &Library::metaOverridesCleared,
             this,

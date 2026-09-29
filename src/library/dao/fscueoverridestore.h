@@ -3,10 +3,13 @@
 #include <QByteArray>
 #include <QHash>
 #include <QMutex>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
 class Track;
+struct FsStoreTarget;
+enum class FsStoreWriteResult;
 
 /// Portable, per-filesystem store for the cues a DJ sets on this unit.
 ///
@@ -22,16 +25,31 @@ class Track;
 /// with no cues in it is meaningful — that is a track whose cues the DJ deleted
 /// — which is why the store distinguishes "no entry" from "an empty entry".
 ///
-/// Unlike FsAnalysisCache this store does not keep its connections open: every
-/// operation opens the database, runs one statement and closes it again. The
-/// writes are a few hundred bytes each and rare (only when the cues actually
-/// changed), while a lingering file descriptor on a USB stick makes `umount`
-/// fail with EBUSY on eject — the eject path closes the analysis caches *before*
-/// pumping the event loop that evicts (and thereby saves) the track, so a store
-/// that held connections could be reopened behind the eject's back.
+/// After the first access to a drive nothing here touches that drive's SQLite
+/// on the calling thread, which is usually the GUI thread (a track load reads
+/// the store twice, and every save of a track off a stick comes through here).
+/// A slow stick can take seconds to accept one write, and SQLite locks the file
+/// while it does, so a read made then would wait behind it just the same:
+/// - The first access to a drive, read or write, loads every override stored
+///   on it into an in-memory mirror with one SELECT. Every later read is
+///   answered from the mirror.
+/// - A save updates the mirror, marks the entry dirty and queues the write on
+///   FsStoreWriter. The queued write stores whatever the mirror holds for that
+///   track when it runs, so saves that pile up behind a slow write coalesce.
+/// - Clearing a drive, and ejecting it, drop its mirror, which turns the
+///   writes still queued for it into no-ops.
 ///
-/// All members are static: the baselines below are process-wide state guarded
-/// by an internal mutex, and every entry point is safe to call from any thread.
+/// Unlike FsAnalysisCache this store still does not keep its connections open:
+/// every write opens the database, runs one statement and closes it again, now
+/// on the writer thread. A lingering file descriptor on a USB stick makes
+/// `umount` fail with EBUSY on eject, and the eject path closes the analysis
+/// caches *before* pumping the event loop that evicts (and thereby saves) the
+/// track; it flushes the writer after that pump, so the save lands and closes
+/// its file before the unmount.
+///
+/// All members are static: the baselines and mirrors below are process-wide
+/// state guarded by an internal mutex, and every entry point is safe to call
+/// from any thread.
 class FsCueOverrideStore {
   public:
     /// Apply the stored cue override for `pTrack`, if the track's filesystem
@@ -46,20 +64,52 @@ class FsCueOverrideStore {
     /// the track has no valid sample rate to convert stored seconds with.
     static void applyOverrides(Track* pTrack);
 
-    /// Write the track's cues to its filesystem if they differ from the
-    /// baseline remembered by applyOverrides(), i.e. if the DJ added, moved or
-    /// deleted a cue since the track was loaded. Touches no database at all
-    /// when nothing changed, which is what keeps eject free of EBUSY.
+    /// Queue the track's cues to be written to its filesystem if they differ
+    /// from the baseline remembered by applyOverrides(), i.e. if the DJ added,
+    /// moved or deleted a cue since the track was loaded. Returns without
+    /// waiting for the drive: the baseline moves to the new cues at once, and
+    /// goes back if the write fails so that a later save tries again. Queues
+    /// nothing at all when nothing changed, which is what keeps eject free of
+    /// EBUSY.
     ///
-    /// A track that was never seen by applyOverrides() has an empty baseline,
-    /// so its cues are stored the first time it is saved with any cue set.
+    /// A track that was never baselined by applyOverrides() has an empty
+    /// baseline, so its cues are stored the first time it is saved with any
+    /// cue set. TrackDAO baselines every track it fetches or adds, so this is
+    /// left to a track applyOverrides() skipped because it had no sample rate
+    /// yet, and to one built outside the library.
     static void flushIfChanged(const Track& track);
 
+    /// Move the main cue in the baseline of `track` to the one the track
+    /// carries now, inserting or removing it as needed, and leave every other
+    /// entry of the baseline exactly as it was. For a main cue that is not the
+    /// DJ's: the silence analyzer's first-sound position, which every unit
+    /// works out for itself, or a main cue object CueControl creates for a
+    /// position the track already had. Without this the next save would see
+    /// the cue set differ from the baseline and store all of the imported
+    /// cues as a DJ override.
+    ///
+    /// Only the baseline moves: nothing is written, and the mirror is not
+    /// touched. Does nothing for a track with no baseline or a suppressed one,
+    /// one off removable media, or one without a valid sample rate. Safe to
+    /// call from any thread; the analyzer calls it from its own.
+    static void rebaselineMainCue(const Track& track);
+
     /// Delete the cue override database of the filesystem mounted at
-    /// `mountPoint` (`<mountPoint>/.bitedj/cues.sqlite`). Returns false only
-    /// when a database exists but could not be deleted; a drive without one
-    /// counts as success.
+    /// `mountPoint` (`<mountPoint>/.bitedj/cues.sqlite`). Writes still queued
+    /// for the drive are dropped, and one in progress is waited for (bounded)
+    /// before the delete. Returns false only when a database exists but could
+    /// not be deleted; a drive without one counts as success.
     static bool clearFilesystemOverrides(const QString& mountPoint);
+
+    /// Forget what this store knows about the drive mounted at `mountPoint`,
+    /// for the eject: a stick that comes back may have been edited elsewhere,
+    /// so its next access reads it again. Writes still queued for it become
+    /// no-ops, so call this only once they have been flushed.
+    static void forgetFilesystem(const QString& mountPoint);
+
+    /// For tests only: whether this store currently holds a mirror of the drive
+    /// mounted at `mountPoint`. Never loads one.
+    static bool hasMirrorForTesting(const QString& mountPoint);
 
     /// Stop flushIfChanged() from re-creating an override for a track that is
     /// still loaded (typically one in a deck) after the overrides were cleared.
@@ -105,11 +155,50 @@ class FsCueOverrideStore {
     static void applyPayload(Track* pTrack, const QByteArray& payload);
 
   private:
-    // Returns false if the track's filesystem is unavailable. `pFound` reports
-    // whether it holds an override for the track.
+    /// Every override stored on one drive, as loaded from it and updated by
+    /// this unit's saves since.
+    struct Mirror {
+        /// Relative path -> stored payload.
+        QHash<QString, QByteArray> payloads;
+        /// Relative paths whose payload has been queued but not yet written,
+        /// or whose write failed and waits for the next save to retry it.
+        QSet<QString> dirty;
+        /// False while the drive's store could not be read: the mirror then
+        /// holds only this unit's own writes, and every read of a path it does
+        /// not hold tries the drive again.
+        bool complete = false;
+    };
+
+    // Returns false if the track's filesystem is unavailable, or its store is
+    // there but could not be read. `pFound` reports whether it holds an
+    // override for the track. Answered from the mirror.
     static bool readOverride(
             const QString& trackLocation, QByteArray* pPayload, bool* pFound);
-    static bool writeOverride(const QString& trackLocation, const QByteArray& payload);
+    // The mirror of the drive `target` is on, loaded (or completed) from the
+    // drive if need be. When the store is there but cannot be read, returns
+    // the incomplete mirror of this unit's own writes if there is one and
+    // nullptr otherwise; nothing unreadable is cached, so the next access
+    // tries again. Requires s_baselineMutex to be held.
+    static Mirror* loadedMirror(const FsStoreTarget& target);
+    // loadedMirror() for a write, which needs somewhere to go even when the
+    // store cannot be read: an incomplete mirror is created for it then.
+    // Requires s_baselineMutex to be held.
+    static Mirror& mirrorForWrite(const FsStoreTarget& target);
+    // Writer thread: take the payload queued for `relPath` on the drive keyed
+    // `rootKey`, if it is still waiting to be written. False when an earlier
+    // task already wrote it, or the drive's mirror has been dropped.
+    static bool takePendingWrite(
+            const QString& rootKey, const QString& relPath, QByteArray* pPayload);
+    // Writer thread: after a failed write, mark `relPath` unsaved again so the
+    // drive's mirror keeps showing it and forgetFilesystem() reports losing
+    // it. Leaves the payload alone, which a newer save may have replaced.
+    static void markUnsaved(const QString& rootKey, const QString& relPath);
+    // Writer thread: store `payload` for the track at `trackLocation`, provided
+    // it still resolves to the drive keyed `rootKey` and that drive's mirror
+    // has not been dropped (by a clear or an eject) in the meantime.
+    static FsStoreWriteResult writeOverride(const QString& trackLocation,
+            const QString& rootKey,
+            const QByteArray& payload);
 
     static QMutex s_baselineMutex;
     // Maps a track's location to the cue set it was loaded with (or last saved
@@ -119,4 +208,8 @@ class FsCueOverrideStore {
     // stood just before an override was applied over it. Only holds the tracks
     // that actually got one, which is what restoreImportedCues() keys off.
     static QHash<QString, QByteArray> s_importedCues;
+    // Maps a drive's cleaned mount root to its mirror. Guarded by
+    // s_baselineMutex, which is never held across disk I/O except for the
+    // one read that loads a mirror.
+    static QHash<QString, Mirror> s_mirrors;
 };

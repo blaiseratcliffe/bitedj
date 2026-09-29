@@ -642,6 +642,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/dao/fsmetaoverridestore.cpp
   src/library/dao/fssamplerbankstore.cpp
   src/library/dao/fsstore.cpp
+  src/library/dao/fsstorewriter.cpp
   src/library/dao/libraryhashdao.cpp
   src/library/dao/playlistdao.cpp
   src/library/dao/settingsdao.cpp
@@ -1615,6 +1616,7 @@ if(BUILD_TESTING)
     src/test/fshistoryworker_test.cpp
     src/test/fsmetaoverridestore_test.cpp
     src/test/fssamplerbankstore_test.cpp
+    src/test/fsstorewriter_test.cpp
     src/test/samplerdrive_test.cpp
     src/test/globaltrackcache_test.cpp
     src/test/highcontrast_test.cpp

@@ -924,6 +924,18 @@ TrackPointer TrackDAO::addTracksAddFile(
         // if parsing the metadata from file succeeded or failed.
     }
 
+    // A track new to this library still gets the overrides its stick carries,
+    // which may have been set on another unit, and a baseline, as
+    // getTrackById() gives every track it loads. Without the baseline a
+    // change that is not the DJ's, such as the analyzer's main cue, is stored
+    // as an edit on the first save. Applied before the track is inserted, so
+    // the library row holds the cues and rating the track really has and a
+    // newly inserted track can still be marked clean below. The file's
+    // metadata has just been read, so the sample rate the stored seconds
+    // need is known.
+    FsCueOverrideStore::applyOverrides(pTrack.get());
+    FsMetaOverrideStore::applyOverrides(pTrack.get());
+
     const TrackId newTrackId = addTracksAddTrack(pTrack, unremove);
     if (!newTrackId.isValid()) {
         kLogger.warning() << "addTracksAddTrack:"

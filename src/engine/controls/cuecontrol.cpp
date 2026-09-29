@@ -4,6 +4,7 @@
 #include "control/controlobject.h"
 #include "control/controlpushbutton.h"
 #include "engine/enginebuffer.h"
+#include "library/dao/fscueoverridestore.h"
 #include "moc_cuecontrol.cpp"
 #include "preferences/colorpalettesettings.h"
 #include "track/track.h"
@@ -752,6 +753,9 @@ void CueControl::loadCuesFromTrack() {
                     Cue::kNoHotCue,
                     mainCuePosition,
                     mixxx::audio::kInvalidFramePos);
+            // Not a DJ edit, only a position the track already had, so it must
+            // not be stored on the stick as a cue override.
+            FsCueOverrideStore::rebaselineMainCue(*m_pLoadedTrack);
         }
     }
 

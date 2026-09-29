@@ -6,7 +6,11 @@
 #include <QFile>
 #include <QStorageInfo>
 #include <algorithm>
+#include <vector>
 
+#include "analyzer/analyzersilence.h"
+#include "analyzer/analyzertrack.h"
+#include "analyzer/constants.h"
 #include "test/mixxxtest.h"
 #include "track/cue.h"
 #include "track/cueinfo.h"
@@ -437,6 +441,97 @@ TEST_F(FsCueOverrideStoreTest, ClearRestoresImportedCuesInsteadOfBlankingThem) {
     EXPECT_EQ(mixxx::RgbColor(0x112233),
             findHotcue(pLoaded, mixxx::kHotCueBankStart)->getColor());
     EXPECT_DOUBLE_EQ(2.0 * kSampleRate, pLoaded->getMainCuePosition().value());
+
+    QFile::remove(trackPath);
+    ASSERT_TRUE(FsCueOverrideStore::clearFilesystemOverrides(kFakeUsb));
+}
+
+// The main cue the silence analyzer puts on a track that had none is an
+// analysis result, which every unit works out for itself. It must not turn the
+// track's imported cues into a DJ override on the next save: that write is
+// what froze the GUI for seconds on a slow stick (issue #24), and it pinned
+// rekordbox's cues against any later export. A real edit afterwards is still
+// stored, and takes the analyzer's main cue with it.
+TEST_F(FsCueOverrideStoreTest, AnalyzerMainCueIsNotStoredAsAnOverride) {
+    const QStorageInfo usb(kFakeUsb);
+    if (!usb.isValid() || !usb.isReady() || usb.rootPath() != kFakeUsb) {
+        GTEST_SKIP() << "needs a filesystem mounted at " << qPrintable(kFakeUsb);
+    }
+
+    const QString trackPath = kFakeUsb + QStringLiteral("/analyzed.wav");
+    QFile::remove(trackPath);
+    ASSERT_TRUE(FsCueOverrideStore::clearFilesystemOverrides(kFakeUsb));
+    ASSERT_TRUE(QFile::copy(getTestDir().filePath(QStringLiteral("sine-30.wav")), trackPath));
+    const QString dbPath = kFakeUsb + QStringLiteral("/.bitedj/cues.sqlite");
+
+    const auto makeTrack = [&] {
+        auto pTrack = Track::newTemporary(mixxx::FileAccess(mixxx::FileInfo(trackPath)));
+        pTrack->setAudioProperties(mixxx::audio::ChannelCount(2),
+                kSampleRate,
+                mixxx::audio::Bitrate(),
+                mixxx::Duration::fromSeconds(180));
+        // The hot cues a rekordbox export carries, and no main cue.
+        pTrack->createAndAddCue(mixxx::CueType::HotCue,
+                mixxx::kHotCueBankStart,
+                framesForSeconds(8.0),
+                mixxx::audio::kInvalidFramePos,
+                mixxx::RgbColor(0x112233));
+        pTrack->createAndAddCue(mixxx::CueType::HotCue,
+                mixxx::kHotCueBankStart + 1,
+                framesForSeconds(16.0),
+                mixxx::audio::kInvalidFramePos,
+                mixxx::RgbColor(0x445566));
+        return pTrack;
+    };
+
+    const TrackPointer pTrack = makeTrack();
+    ASSERT_FALSE(pTrack->findCueByType(mixxx::CueType::MainCue));
+    FsCueOverrideStore::applyOverrides(pTrack.get());
+
+    // One second of silence, then a square wave at half the sample rate: the
+    // first sound is at 1 s. The analyzer only looks at how loud each sample
+    // is, so any signal above -60 dB will do.
+    constexpr SINT kFrames = 2 * 44100;
+    constexpr SINT kSilentFrames = 44100;
+    const SINT channels = mixxx::kAnalysisChannels;
+    std::vector<CSAMPLE> samples(kFrames * channels, 0.0f);
+    for (SINT i = kSilentFrames * channels; i < kFrames * channels; ++i) {
+        samples[i] = (i / channels) % 2 == 0 ? 0.5f : -0.5f;
+    }
+    AnalyzerSilence analyzer(config());
+    ASSERT_TRUE(analyzer.initialize(AnalyzerTrack(pTrack), kSampleRate, kFrames));
+    ASSERT_TRUE(analyzer.processSamples(samples.data(), static_cast<SINT>(samples.size())));
+    analyzer.storeResults(pTrack);
+    analyzer.cleanup();
+
+    // The premise: the analyzer really did give the track a main cue.
+    ASSERT_TRUE(pTrack->findCueByType(mixxx::CueType::MainCue));
+    const mixxx::audio::FramePos analyzedMainCue = pTrack->getMainCuePosition();
+    EXPECT_EQ(framesForSeconds(1.0), analyzedMainCue);
+
+    // Saving the analyzed track stores nothing.
+    FsCueOverrideStore::flushIfChanged(*pTrack);
+    EXPECT_FALSE(QFile::exists(dbPath));
+
+    // The DJ sets a pad: now there is an override, and it carries the main cue
+    // the track was playing with.
+    pTrack->createAndAddCue(mixxx::CueType::HotCue,
+            mixxx::kHotCueBankStart + 5,
+            framesForSeconds(42.0),
+            mixxx::audio::kInvalidFramePos);
+    FsCueOverrideStore::flushIfChanged(*pTrack);
+    ASSERT_TRUE(QFile::exists(dbPath));
+
+    const TrackPointer pReloaded = makeTrack();
+    FsCueOverrideStore::applyOverrides(pReloaded.get());
+    EXPECT_EQ(QList<int>({mixxx::kHotCueBankStart,
+                      mixxx::kHotCueBankStart + 1,
+                      mixxx::kHotCueBankStart + 5}),
+            hotcueIndices(pReloaded));
+    const CuePointer pDjCue = findHotcue(pReloaded, mixxx::kHotCueBankStart + 5);
+    ASSERT_TRUE(pDjCue);
+    EXPECT_DOUBLE_EQ(42.0 * kSampleRate, pDjCue->getPosition().value());
+    EXPECT_DOUBLE_EQ(analyzedMainCue.value(), pReloaded->getMainCuePosition().value());
 
     QFile::remove(trackPath);
     ASSERT_TRUE(FsCueOverrideStore::clearFilesystemOverrides(kFakeUsb));

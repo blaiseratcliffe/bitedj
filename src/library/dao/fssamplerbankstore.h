@@ -1,8 +1,14 @@
 #pragma once
 
 #include <QByteArray>
+#include <QHash>
+#include <QMutex>
+#include <QSet>
 #include <QString>
 #include <QStringList>
+
+struct FsStoreTarget;
+enum class FsStoreWriteResult;
 
 /// Portable, per-filesystem store for the sampler banks a DJ builds on this
 /// unit.
@@ -19,15 +25,22 @@
 /// emptied — which is why the store distinguishes "no bank" from "an empty
 /// bank": a drive that has never held a bank is not one whose owner cleared it.
 ///
-/// Like FsCueOverrideStore this store does not keep its connections open; see
-/// ScopedFsStore for why a lingering file descriptor would break eject.
+/// Like FsCueOverrideStore, nothing here touches a drive's SQLite on the
+/// calling thread after the first access to it: that access loads every bank
+/// on the drive into an in-memory mirror, reads are answered from the mirror,
+/// and writes update it and are queued on FsStoreWriter. Each write still opens
+/// the database and closes it again; see ScopedFsStore for why a lingering file
+/// descriptor would break eject.
+///
+/// All members are static, and the mirrors are guarded by an internal mutex,
+/// so every entry point is safe to call from any thread.
 class FsSamplerBankStore {
   public:
     /// Read bank `bankIndex` stored on the drive mounted at `mountRoot` into
     /// `pLocations`, as absolute paths with an empty string for every empty
     /// slot. The list is always resized to `slotCount`: a bank stored by a
     /// build with a different bank size is truncated or padded rather than
-    /// rejected.
+    /// rejected. A bank still queued for the drive reads as stored.
     ///
     /// Returns false when the drive is unavailable or holds no bank at that
     /// index, leaving `pLocations` untouched.
@@ -36,16 +49,29 @@ class FsSamplerBankStore {
             int slotCount,
             QStringList* pLocations);
 
-    /// Store `locations` (absolute paths, empty string for an empty slot) as
-    /// bank `bankIndex` on the drive mounted at `mountRoot`.
+    /// Queue `locations` (absolute paths, empty string for an empty slot) to
+    /// be stored as bank `bankIndex` on the drive mounted at `mountRoot`.
+    /// Returns whether the write was accepted, i.e. the drive is there and
+    /// writable; it lands later. A write the drive then refuses is logged and
+    /// kept in the store's copy for this session: SamplerDrive has already
+    /// taken the row as its baseline, so the next change to that bank writes
+    /// it again.
     static bool writeBank(const QString& mountRoot,
             int bankIndex,
             const QStringList& locations);
 
     /// Delete the sampler bank database of the filesystem mounted at
-    /// `mountPoint`. Returns false only when one exists but could not be
-    /// deleted; a drive without banks counts as success.
+    /// `mountPoint`. Writes still queued for the drive are dropped, and one in
+    /// progress is waited for (bounded) before the delete. Returns false only
+    /// when one exists but could not be deleted; a drive without banks counts
+    /// as success.
     static bool clearFilesystemBanks(const QString& mountPoint);
+
+    /// Forget what this store knows about the drive mounted at `mountPoint`,
+    /// for the eject: a stick that comes back may have been edited elsewhere,
+    /// so its next access reads it again. Writes still queued for it become
+    /// no-ops, so call this only once they have been flushed.
+    static void forgetFilesystem(const QString& mountPoint);
 
     /// The stored payload: one JSON array of slot paths, relative to
     /// `mountRoot` for the samples that live on that drive and absolute for the
@@ -62,4 +88,42 @@ class FsSamplerBankStore {
     static QStringList parseBank(const QString& mountRoot,
             const QByteArray& payload,
             int slotCount);
+
+  private:
+    /// Every bank stored on one drive, as loaded from it and updated by this
+    /// unit's writes since.
+    struct Mirror {
+        /// Bank index -> stored payload (see serializeBank()).
+        QHash<int, QByteArray> payloads;
+        /// Banks whose payload has been queued but not yet written, or whose
+        /// write failed and waits for the next change to the bank.
+        QSet<int> dirty;
+        /// False while the drive's store could not be read: the mirror then
+        /// holds only this unit's own writes, and every read of a bank it does
+        /// not hold tries the drive again.
+        bool complete = false;
+    };
+
+    // The mirror of the drive `target` is on; see
+    // FsCueOverrideStore::loadedMirror(). Requires s_mutex to be held.
+    static Mirror* loadedMirror(const FsStoreTarget& target);
+    // See FsCueOverrideStore::mirrorForWrite(). Requires s_mutex to be held.
+    static Mirror& mirrorForWrite(const FsStoreTarget& target);
+    // Writer thread: take the payload queued for `bankIndex` on the drive
+    // keyed `rootKey`, if it is still waiting to be written. False when an
+    // earlier task already wrote it, or the drive's mirror has been dropped.
+    static bool takePendingWrite(const QString& rootKey, int bankIndex, QByteArray* pPayload);
+    // Writer thread: after a failed write, mark `bankIndex` unsaved again.
+    static void markUnsaved(const QString& rootKey, int bankIndex);
+    // Writer thread: store `payload` as bank `bankIndex` on the drive mounted
+    // at `rootKey`, provided it is still mounted there and its mirror has not
+    // been dropped in the meantime.
+    static FsStoreWriteResult writePayload(
+            const QString& rootKey, int bankIndex, const QByteArray& payload);
+
+    static QMutex s_mutex;
+    // Maps a drive's cleaned mount root to its mirror. Guarded by s_mutex,
+    // which is never held across disk I/O except for the one read that loads
+    // a mirror.
+    static QHash<QString, Mirror> s_mirrors;
 };

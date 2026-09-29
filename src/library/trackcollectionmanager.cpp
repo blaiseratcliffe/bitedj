@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "library/dao/fsstorewriter.h"
 #include "library/externaltrackcollection.h"
 #include "library/library_prefs.h"
 #include "library/scanner/libraryscanner.h"
@@ -41,6 +42,7 @@ TrackCollectionManager::TrackCollectionManager(
         deleteTrackFn_t /*only-needed-for-testing*/ deleteTrackForTestingFn)
     : QObject(parent),
       m_pConfig(pConfig),
+      m_pFsStoreWriter(std::make_unique<FsStoreWriter>()),
       m_pInternalCollection(createInternalTrackCollection(this, pConfig, deleteTrackForTestingFn)) {
     const QSqlDatabase dbConnection = mixxx::DbConnectionPooled(pDbConnectionPool);
 

@@ -2,6 +2,7 @@
 
 #include "analyzer/analyzertrack.h"
 #include "analyzer/constants.h"
+#include "library/dao/fscueoverridestore.h"
 #include "track/track.h"
 
 namespace {
@@ -129,7 +130,33 @@ void AnalyzerSilence::storeResults(TrackPointer pTrack) {
         pN60dBSound->setStartAndEndPosition(firstSoundPosition, lastSoundPosition);
     }
 
+    const mixxx::audio::FramePos mainCueBefore = pTrack->getMainCuePosition();
+    const bool hadMainCueBefore =
+            pTrack->findCueByType(mixxx::CueType::MainCue) != nullptr;
     setupMainAndIntroCue(pTrack.get(), firstSoundPosition, m_pConfig.data());
+    const bool hasMainCueAfter =
+            pTrack->findCueByType(mixxx::CueType::MainCue) != nullptr;
+    if (pTrack->getMainCuePosition() != mainCueBefore ||
+            hasMainCueAfter != hadMainCueBefore) {
+        // A main cue placed here is an analysis result, recomputed by every
+        // unit that analyzes the track, never a DJ override. Move the stick's
+        // cue store baseline along with it, or the next save of a stick track
+        // sees its cues differ from what it was loaded with and stores every
+        // imported cue on the drive as the DJ's own. That write takes seconds
+        // on a slow stick, and the stored row outranks a later rekordbox
+        // export of the same track.
+        //
+        // Done here rather than in setupMainAndIntroCue(), which the track
+        // menu also calls for the DJ, and that one is a real edit.
+        //
+        // Two residuals are accepted. A save on the GUI thread that lands
+        // between setMainCuePosition() and this call still stores the
+        // override; the window is microseconds. And a main cue the DJ set at
+        // 0 on a track with no intro cue is moved to the first sound by the
+        // upgrade branch in setupMainAndIntroCue(), and rebaselining hides
+        // that move from the store.
+        FsCueOverrideStore::rebaselineMainCue(*pTrack);
+    }
     setupOutroCue(pTrack.get(), lastSoundPosition);
 }
 
