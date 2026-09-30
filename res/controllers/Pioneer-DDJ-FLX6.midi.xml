@@ -3587,8 +3587,8 @@
             </control>
             <control>
                 <group>[Channel1]</group>
-                <key>slip_enabled</key>
-                <description>Memory Button (Slip) [Deck 1]</description>
+                <key>beatloop_16_toggle</key>
+                <description>Memory Button (4 bar loop) [Deck 1]</description>
                 <status>0x90</status>
                 <midino>0x3D</midino>
                 <options>
@@ -3597,8 +3597,8 @@
             </control>
             <control>
                 <group>[Channel2]</group>
-                <key>slip_enabled</key>
-                <description>Memory Button (Slip) [Deck 2]</description>
+                <key>beatloop_16_toggle</key>
+                <description>Memory Button (4 bar loop) [Deck 2]</description>
                 <status>0x91</status>
                 <midino>0x3D</midino>
                 <options>
@@ -3607,8 +3607,8 @@
             </control>
             <control>
                 <group>[Channel3]</group>
-                <key>slip_enabled</key>
-                <description>Memory Button (Slip) [Deck 3]</description>
+                <key>beatloop_16_toggle</key>
+                <description>Memory Button (4 bar loop) [Deck 3]</description>
                 <status>0x92</status>
                 <midino>0x3D</midino>
                 <options>
@@ -3617,8 +3617,8 @@
             </control>
             <control>
                 <group>[Channel4]</group>
-                <key>slip_enabled</key>
-                <description>Memory Button (Slip) [Deck 4]</description>
+                <key>beatloop_16_toggle</key>
+                <description>Memory Button (4 bar loop) [Deck 4]</description>
                 <status>0x93</status>
                 <midino>0x3D</midino>
                 <options>
@@ -4743,8 +4743,8 @@
             </control>
             <control>
                 <group>[Channel1]</group>
-                <key>keylock</key>
-                <description>Shift + Memory (Keylock) [Deck 1]</description>
+                <key>slip_enabled</key>
+                <description>Shift + Memory (Slip) [Deck 1]</description>
                 <status>0x90</status>
                 <midino>0x3E</midino>
                 <options>
@@ -4753,8 +4753,8 @@
             </control>
             <control>
                 <group>[Channel2]</group>
-                <key>keylock</key>
-                <description>Shift + Memory (Keylock) [Deck 2]</description>
+                <key>slip_enabled</key>
+                <description>Shift + Memory (Slip) [Deck 2]</description>
                 <status>0x91</status>
                 <midino>0x3E</midino>
                 <options>
@@ -4763,8 +4763,8 @@
             </control>
             <control>
                 <group>[Channel3]</group>
-                <key>keylock</key>
-                <description>Shift + Memory (Keylock) [Deck 3]</description>
+                <key>slip_enabled</key>
+                <description>Shift + Memory (Slip) [Deck 3]</description>
                 <status>0x92</status>
                 <midino>0x3E</midino>
                 <options>
@@ -4773,8 +4773,8 @@
             </control>
             <control>
                 <group>[Channel4]</group>
-                <key>keylock</key>
-                <description>Shift + Memory (Keylock) [Deck 4]</description>
+                <key>slip_enabled</key>
+                <description>Shift + Memory (Slip) [Deck 4]</description>
                 <status>0x93</status>
                 <midino>0x3E</midino>
                 <options>
